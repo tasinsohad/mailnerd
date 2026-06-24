@@ -14,12 +14,15 @@ export default defineConfig({
     tanstackStart(),
     nitro({
       preset: "vercel",
+      externals: {
+        external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features"],
+      }
     }),
     react(),
     tailwindcss(),
   ],
   ssr: {
-    external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis"],
+    external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features"],
   },
   server: {
     hmr: {
