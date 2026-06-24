@@ -32,5 +32,8 @@ export default defineConfig({
   build: {
     target: "esnext",
     minify: "esbuild",
+    rollupOptions: {
+      external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features"],
+    },
   },
 });
