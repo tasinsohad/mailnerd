@@ -17,7 +17,7 @@ function SettingsPage() {
   const [form, setForm] = useState({ cfApiToken: "", cfAccountId: "" });
   const [verifyStatus, setVerifyStatus] = useState<{ valid: boolean; error?: string } | null>(null);
 
-  const { data: secrets, isLoading } = useQuery({
+  const { data: secrets, isLoading, error, isError } = useQuery({
     queryKey: ["secrets"],
     queryFn: () => getSecrets(),
   });
@@ -67,6 +67,21 @@ function SettingsPage() {
       {isLoading ? (
         <div className="flex justify-center py-20">
           <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+        </div>
+      ) : isError ? (
+        <div className="rounded-3xl bg-red-50/50 p-8 ring-1 ring-red-200/50 flex flex-col gap-3">
+          <h2 className="text-lg font-semibold text-red-900">Database Connection Failed</h2>
+          <p className="text-sm text-red-700/80 leading-relaxed">
+            {error instanceof Error ? error.message : String(error)}
+          </p>
+          <div className="pt-2">
+            <Button
+              onClick={() => qc.invalidateQueries({ queryKey: ["secrets"] })}
+              className="bg-red-600 hover:bg-red-700 text-white rounded-xl px-6"
+            >
+              Retry Connection
+            </Button>
+          </div>
         </div>
       ) : (
         <div className="flex flex-col gap-6">

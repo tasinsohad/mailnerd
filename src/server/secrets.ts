@@ -27,7 +27,10 @@ const verifyCfTokenSchema = z.object({
 export const getSecrets = createServerFn({ method: "GET" })
   .middleware([requireAuth])
   .handler(async ({ context }) => {
-    const { db, userId } = (context as any) as { db: any; userId: string };
+    const { db, userId, dbError } = (context as any) as { db: any; userId: string; dbError?: string };
+    if (!db) {
+      throw new Error(`Database connection failed. Please check your DATABASE_URL environment variable. Details: ${dbError || "Unknown connection error"}`);
+    }
     const row = await db.query.userSecrets.findFirst({
       where: eq(userSecrets.userId, userId),
     });
