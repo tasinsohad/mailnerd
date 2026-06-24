@@ -1,0 +1,51 @@
+name: Deploy to Vercel + Supabase
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy to Vercel
+
+    steps:
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Setup Node.js with caching
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      # Install dependencies
+      - name: Install dependencies
+        run: pnpm install
+
+      # Run type checking
+      - name: Type check
+        run: pnpm run typecheck
+
+      # Build application
+      - name: Build application
+        run: pnpm run build
+
+      # Deploy to Vercel
+      - name: Deploy to Vercel
+        uses: amondtech/vercel-action@v2
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: "--prod"
