@@ -116,13 +116,7 @@ function SettingsPage() {
                 <Label className="flex items-center gap-2">
                   <KeyRound className="h-4 w-4 text-gray-400" /> API Token
                 </Label>
-                <Input
-                  type="password"
-                  placeholder="Cloudflare API Token with DNS Edit permissions"
-                  value={form.cfApiToken}
-                  onChange={(e) => setForm((f) => ({ ...f, cfApiToken: e.target.value }))}
-                  className="rounded-xl font-mono"
-                />
+
                 <div className="flex gap-2">
                   <Input
                     type="password"
