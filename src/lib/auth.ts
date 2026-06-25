@@ -39,7 +39,7 @@ export const requireAuth = createMiddleware().server(async ({ next }: any) => {
         user,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("CRITICAL: Database connection error:", error);
     user = { id: "dev-user", email: DEFAULT_USER_EMAIL };
     userId = "dev-user";
@@ -49,7 +49,7 @@ export const requireAuth = createMiddleware().server(async ({ next }: any) => {
         db: null,
         userId: "dev-user",
         user: { id: "dev-user", email: DEFAULT_USER_EMAIL },
-        dbError: String(error),
+        dbError: error?.message || String(error),
       },
     });
   }
