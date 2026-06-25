@@ -7,7 +7,7 @@ import * as schema from "./schema";
 // Check if Database is properly configured
 function hasDbConfig(customUrl?: string): boolean {
   if (customUrl) return true;
-  const url = process.env.DATABASE_URL;
+  const url = process.env.DATABASE_URL || process.env.SUPABASE_URL;
 
   // Check for presence and not placeholder values
   return !!(
