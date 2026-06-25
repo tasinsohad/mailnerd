@@ -5,8 +5,7 @@ import postgres from "postgres";
 import * as schema from "./schema";
 
 // Check if Database is properly configured
-function hasDbConfig(customUrl?: string): boolean {
-  if (customUrl) return true;
+function hasDbConfig(): boolean {
   const url = process.env.DATABASE_URL || process.env.SUPABASE_URL;
 
   // Check for presence and not placeholder values
@@ -21,12 +20,11 @@ function hasDbConfig(customUrl?: string): boolean {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const dbInstances = new Map<string, any>();
 
-export function getDb(customDbUrl?: string): any {
-  const isCustom = !!customDbUrl;
-  let dbUrl = customDbUrl || process.env.DATABASE_URL || process.env.SUPABASE_URL!;
+export function getDb(): any {
+  let dbUrl = process.env.DATABASE_URL || process.env.SUPABASE_URL!;
 
   // Check for valid configuration
-  if (!isCustom && !hasDbConfig()) {
+  if (!hasDbConfig()) {
     throw new Error(
       "❌ Database connection string not found!\n" +
         "Please set DATABASE_URL in your environment variables.\n" +

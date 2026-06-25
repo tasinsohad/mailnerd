@@ -12,12 +12,9 @@ export const requireAuth = createMiddleware().server(async ({ next }: any) => {
   let userId: string = "dev-user";
 
   try {
-    // Read custom db url from cookie if user configured it manually in UI
-    const customDbUrl = getCookie("smtpforge_custom_db");
-
     // Dynamically import to avoid errors at module load time
     const { getDb } = await import("./db");
-    db = getDb(customDbUrl);
+    db = getDb();
 
     user = await db.query.users.findFirst({
       where: eq(users.email, DEFAULT_USER_EMAIL),
@@ -80,9 +77,8 @@ export const optionalAuth = createMiddleware().server(async ({ next }: any) => {
   let userId: string | null = null;
 
   try {
-    const customDbUrl = getCookie("smtpforge_custom_db");
     const { getDb } = await import("./db");
-    db = getDb(customDbUrl);
+    db = getDb();
     user = await db.query.users.findFirst({
       where: eq(users.email, DEFAULT_USER_EMAIL),
     });
