@@ -41,6 +41,18 @@ export const requireAuth = createMiddleware().server(async ({ next }: any) => {
     });
   } catch (error: any) {
     console.error("CRITICAL: Database connection error:", error);
+    
+    // Extract postgres-js detailed error fields if present
+    const details = [];
+    if (error?.severity) details.push(`[${error.severity}]`);
+    if (error?.code) details.push(`Code: ${error.code}`);
+    if (error?.detail) details.push(`Detail: ${error.detail}`);
+    if (error?.hint) details.push(`Hint: ${error.hint}`);
+    
+    const dbErrorMessage = details.length > 0 
+      ? `${error?.message || "Query failed"} (${details.join(", ")})`
+      : error?.message || String(error);
+
     user = { id: "dev-user", email: DEFAULT_USER_EMAIL };
     userId = "dev-user";
     db = null;
@@ -49,7 +61,7 @@ export const requireAuth = createMiddleware().server(async ({ next }: any) => {
         db: null,
         userId: "dev-user",
         user: { id: "dev-user", email: DEFAULT_USER_EMAIL },
-        dbError: error?.message || String(error),
+        dbError: dbErrorMessage,
       },
     });
   }
