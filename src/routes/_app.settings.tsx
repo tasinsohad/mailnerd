@@ -24,7 +24,7 @@ function SettingsPage() {
       if (res && (res as any).__error) {
         throw new Error((res as any).__error);
       }
-      return res;
+      return res || {};
     },
   });
 
