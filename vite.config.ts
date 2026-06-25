@@ -22,6 +22,9 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  optimizeDeps: {
+    exclude: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features", "postgres", "drizzle-orm"],
+  },
   ssr: {
     external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features", "postgres", "drizzle-orm"],
   },
