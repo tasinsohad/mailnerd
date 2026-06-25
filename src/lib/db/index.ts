@@ -56,7 +56,7 @@ export function getDb(customDbUrl?: string): any {
       max: 1,
     });
 
-    dbInstances.set(dbUrl, drizzle(sql, { schema }));
+    dbInstances.set(dbUrl, drizzle({ client: sql, schema }));
   }
 
   return dbInstances.get(dbUrl);
