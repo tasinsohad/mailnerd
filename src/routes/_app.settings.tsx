@@ -19,7 +19,13 @@ function SettingsPage() {
 
   const { data: secrets, isLoading, error, isError } = useQuery({
     queryKey: ["secrets"],
-    queryFn: () => getSecrets(),
+    queryFn: async () => {
+      const res = await getSecrets();
+      if (res && (res as any).__error) {
+        throw new Error((res as any).__error);
+      }
+      return res;
+    },
   });
 
   useEffect(() => {

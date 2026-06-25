@@ -29,12 +29,19 @@ export const getSecrets = createServerFn({ method: "GET" })
   .handler(async ({ context }) => {
     const { db, userId, dbError } = (context as any) as { db: any; userId: string; dbError?: string };
     if (!db) {
-      throw new Error(`Database connection failed. Please check your DATABASE_URL environment variable. Details: ${dbError || "Unknown connection error"}`);
+      return { __error: `Database connection failed. Please check your DATABASE_URL environment variable. Details: ${dbError || "Unknown connection error"}` } as any;
     }
-    const row = await db.query.userSecrets.findFirst({
-      where: eq(userSecrets.userId, userId),
-    });
-    return row ?? null;
+    try {
+      const row = await db.query.userSecrets.findFirst({
+        where: eq(userSecrets.userId, userId),
+      });
+      return row ?? {};
+    } catch (error: any) {
+      if (error.message?.includes("does not exist")) {
+        return { __error: "The database connected successfully, but the tables are missing. Please run `npm run db:push` to create your database schema." } as any;
+      }
+      return { __error: `Database query failed: ${error.message}` } as any;
+    }
   });
 
 export const saveSecrets = createServerFn({ method: "POST" })
