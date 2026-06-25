@@ -43,7 +43,7 @@ function SettingsPage() {
       qc.invalidateQueries({ queryKey: ["secrets"] });
       toast.success("Settings saved successfully");
     },
-    onError: () => toast.error("Failed to save settings"),
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to save settings"),
   });
 
   const verifyMutation = useMutation({
@@ -53,6 +53,7 @@ function SettingsPage() {
       if (res.valid) toast.success("Token is valid");
       else toast.error(res.error || "Invalid token");
     },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Verification failed"),
   });
 
   const syncMutation = useMutation({
