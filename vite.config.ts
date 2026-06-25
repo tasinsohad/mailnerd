@@ -14,6 +14,7 @@ export default defineConfig({
     tanstackStart(),
     nitro({
       preset: "vercel",
+      minify: false, // Drizzle ORM crashes if the server build is minified
       externals: {
         external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features", "postgres", "drizzle-orm"],
       }
@@ -31,7 +32,7 @@ export default defineConfig({
   },
   build: {
     target: "esnext",
-    minify: "esbuild",
+    minify: false, // Drizzle ORM crashes if the build is minified
     rollupOptions: {
       external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features", "postgres", "drizzle-orm"],
     },
