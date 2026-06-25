@@ -15,14 +15,14 @@ export default defineConfig({
     nitro({
       preset: "vercel",
       externals: {
-        external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features"],
+        external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features", "postgres", "drizzle-orm"],
       }
     }),
     react(),
     tailwindcss(),
   ],
   ssr: {
-    external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features"],
+    external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features", "postgres", "drizzle-orm"],
   },
   server: {
     hmr: {
@@ -33,7 +33,7 @@ export default defineConfig({
     target: "esnext",
     minify: "esbuild",
     rollupOptions: {
-      external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features"],
+      external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features", "postgres", "drizzle-orm"],
     },
   },
 });
