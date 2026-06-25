@@ -48,6 +48,8 @@ export const requireAuth = createMiddleware().server(async ({ next }: any) => {
     if (error?.code) details.push(`Code: ${error.code}`);
     if (error?.detail) details.push(`Detail: ${error.detail}`);
     if (error?.hint) details.push(`Hint: ${error.hint}`);
+    if (error?.cause) details.push(`Cause: ${error.cause?.message || String(error.cause)}`);
+    if (error?.originalError) details.push(`OriginalError: ${error.originalError?.message || String(error.originalError)}`);
     
     const dbErrorMessage = details.length > 0 
       ? `${error?.message || "Query failed"} (${details.join(", ")})`
