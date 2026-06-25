@@ -8,20 +8,22 @@ import { eq } from "drizzle-orm";
 const saveSecretsSchema = z.object({
   cfApiToken: z
     .string()
-    .min(1, "API token cannot be empty")
+    .trim()
     .max(255, "API token too long")
     .optional()
-    .nullable(),
+    .nullable()
+    .or(z.literal("")),
   cfAccountId: z
     .string()
-    .min(1, "Account ID cannot be empty")
+    .trim()
     .max(255, "Account ID too long")
     .optional()
-    .nullable(),
+    .nullable()
+    .or(z.literal("")),
 });
 
 const verifyCfTokenSchema = z.object({
-  token: z.string().min(1, "Token cannot be empty").max(255, "Token too long"),
+  token: z.string().trim().min(1, "Token cannot be empty").max(255, "Token too long"),
 });
 
 export const getSecrets = createServerFn({ method: "GET" })
@@ -49,13 +51,16 @@ export const saveSecrets = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => saveSecretsSchema.parse(d))
   .handler(async ({ data, context }) => {
     const { db, userId } = (context as any) as { db: any; userId: string };
+    if (!db) {
+      throw new Error("Database not connected. Please check your connection.");
+    }
     const existing = await db.query.userSecrets.findFirst({
       where: eq(userSecrets.userId, userId),
     });
     if (existing) {
-      await db.update(userSecrets).set(data).where(eq(userSecrets.userId, userId));
+      await db.update(userSecrets).set(data as any).where(eq(userSecrets.userId, userId));
     } else {
-      await db.insert(userSecrets).values({ userId, ...data });
+      await db.insert(userSecrets).values({ userId, ...(data as any) });
     }
     return { ok: true };
   });

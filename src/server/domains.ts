@@ -31,14 +31,14 @@ const getDomainSchema = z.object({
 
 const updateDomainSchema = z.object({
   id: z.string().uuid(),
-  name: z.string().min(1).max(255).optional(),
-  ipAddress: z.string().min(1).max(45).optional(),
-  sshUser: z.string().min(1).max(50).optional(),
-  sshPassword: z.string().optional().nullable(),
-  cfZoneId: z.string().uuid().optional().nullable(),
-  cfAccountId: z.string().uuid().optional().nullable(),
-  mailcowHostname: z.string().url().optional().nullable(),
-  mailcowApiKey: z.string().min(1).max(255).optional().nullable(),
+  name: z.string().max(255).optional().nullable().or(z.literal("")),
+  ipAddress: z.string().max(45).optional().nullable().or(z.literal("")),
+  sshUser: z.string().max(50).optional().nullable().or(z.literal("")),
+  sshPassword: z.string().optional().nullable().or(z.literal("")),
+  cfZoneId: z.string().uuid().optional().nullable().or(z.literal("")),
+  cfAccountId: z.string().uuid().optional().nullable().or(z.literal("")),
+  mailcowHostname: z.string().url().optional().nullable().or(z.literal("")),
+  mailcowApiKey: z.string().max(255).optional().nullable().or(z.literal("")),
   status: z.enum(["pending", "configuring", "provisioning", "ready", "error"]).optional(),
   plannedInboxCount: z.number().int().min(0).optional().nullable(),
 });
