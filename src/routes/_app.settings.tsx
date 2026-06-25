@@ -57,6 +57,15 @@ function SettingsPage() {
     },
   });
 
+  const [customDbUrl, setCustomDbUrl] = useState("");
+
+  const handleSaveCustomDb = () => {
+    if (!customDbUrl) return;
+    document.cookie = `smtpforge_custom_db=${customDbUrl}; path=/; max-age=31536000`;
+    qc.invalidateQueries({ queryKey: ["secrets"] });
+    toast.success("Database connection string updated locally. Retrying...");
+  };
+
   return (
     <div className="flex flex-col gap-8 p-8 max-w-4xl">
       <div>
@@ -69,18 +78,43 @@ function SettingsPage() {
           <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
         </div>
       ) : isError ? (
-        <div className="rounded-3xl bg-red-50/50 p-8 ring-1 ring-red-200/50 flex flex-col gap-3">
-          <h2 className="text-lg font-semibold text-red-900">Database Connection Failed</h2>
-          <p className="text-sm text-red-700/80 leading-relaxed">
-            {error instanceof Error ? error.message : String(error)}
-          </p>
-          <div className="pt-2">
-            <Button
-              onClick={() => qc.invalidateQueries({ queryKey: ["secrets"] })}
-              className="bg-red-600 hover:bg-red-700 text-white rounded-xl px-6"
-            >
-              Retry Connection
-            </Button>
+        <div className="rounded-3xl bg-red-50/50 p-8 ring-1 ring-red-200/50 flex flex-col gap-5">
+          <div>
+            <h2 className="text-lg font-semibold text-red-900">Database Connection Failed</h2>
+            <p className="text-sm text-red-700/80 leading-relaxed mt-1">
+              {error instanceof Error ? error.message : String(error)}
+            </p>
+          </div>
+          
+          <div className="flex flex-col gap-3 pt-4 border-t border-red-200/50">
+            <h3 className="text-sm font-semibold text-red-900">Configure Database Connection Manually</h3>
+            <p className="text-xs text-red-700/80">
+              Provide your Supabase connection string (Transaction Pooler URL) to override the Vercel environment variables. This is saved securely in your browser.
+            </p>
+            <div className="flex gap-3">
+              <Input
+                type="password"
+                placeholder="postgresql://postgres.[project]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres"
+                value={customDbUrl}
+                onChange={(e) => setCustomDbUrl(e.target.value)}
+                className="rounded-xl font-mono bg-white flex-1 border-red-200 focus-visible:ring-red-500"
+              />
+              <Button
+                onClick={handleSaveCustomDb}
+                className="bg-red-600 hover:bg-red-700 text-white rounded-xl px-6"
+              >
+                Save & Retry
+              </Button>
+            </div>
+            <div className="pt-2">
+              <Button
+                variant="ghost"
+                onClick={() => qc.invalidateQueries({ queryKey: ["secrets"] })}
+                className="text-red-700 hover:text-red-800 hover:bg-red-100/50 rounded-xl px-4 text-xs"
+              >
+                Just Retry Connection
+              </Button>
+            </div>
           </div>
         </div>
       ) : (

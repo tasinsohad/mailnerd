@@ -5,7 +5,8 @@ import postgres from "postgres";
 import * as schema from "./schema";
 
 // Check if Database is properly configured
-function hasDbConfig(): boolean {
+function hasDbConfig(customUrl?: string): boolean {
+  if (customUrl) return true;
   const url = process.env.DATABASE_URL;
 
   // Check for presence and not placeholder values
@@ -16,37 +17,30 @@ function hasDbConfig(): boolean {
   );
 }
 
-// Singleton DB instance for serverless
+// Map to hold connection pools per URL
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let dbInstance: any = null;
+const dbInstances = new Map<string, any>();
 
-export function getDb(): any {
+export function getDb(customDbUrl?: string): any {
+  const isCustom = !!customDbUrl;
+  let dbUrl = customDbUrl || process.env.DATABASE_URL || process.env.SUPABASE_URL!;
+
   // Check for valid configuration
-  if (!hasDbConfig()) {
-    // If DATABASE_URL is missing, we try to use SUPABASE_URL if it looks like a connection string
-    const fallbackUrl = process.env.SUPABASE_URL;
-    if (
-      !fallbackUrl ||
-      (!fallbackUrl.startsWith("postgres://") && !fallbackUrl.startsWith("postgresql://"))
-    ) {
-      throw new Error(
-        "❌ Database connection string not found!\n" +
-          "Please set DATABASE_URL in your environment variables.\n" +
-          "Format: postgresql://postgres.[project-id]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres",
-      );
-    }
+  if (!isCustom && !hasDbConfig()) {
+    throw new Error(
+      "❌ Database connection string not found!\n" +
+        "Please set DATABASE_URL in your environment variables.\n" +
+        "Format: postgresql://postgres.[project-id]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres",
+    );
   }
 
-  // Reuse singleton connection (postgres pools connections automatically)
-  if (!dbInstance) {
-    let dbUrl = process.env.DATABASE_URL || process.env.SUPABASE_URL!;
+  // Fix: If the password contains '#' it must be encoded as '%23' for the URL to be valid
+  if (dbUrl.includes("#") && !dbUrl.includes("%23")) {
+    dbUrl = dbUrl.replace(/#/, "%23");
+  }
 
-    // Fix: If the password contains '#' it must be encoded as '%23' for the URL to be valid
-    // This is a common issue with Supabase pooler passwords.
-    if (dbUrl.includes("#") && !dbUrl.includes("%23")) {
-      dbUrl = dbUrl.replace(/#/, "%23");
-    }
-
+  // Reuse connection per URL (postgres pools connections automatically)
+  if (!dbInstances.has(dbUrl)) {
     // Use SSL for production, disable for local development
     const isLocal = dbUrl.includes("localhost") || dbUrl.includes("127.0.0.1");
 
@@ -62,10 +56,10 @@ export function getDb(): any {
       max: 1,
     });
 
-    dbInstance = drizzle(sql, { schema });
+    dbInstances.set(dbUrl, drizzle(sql, { schema }));
   }
 
-  return dbInstance;
+  return dbInstances.get(dbUrl);
 }
 
 // Export types
