@@ -614,64 +614,71 @@ function ServerSetupStep({ domains }: { domains: any[] }) {
 }
 
 function TerminalWindow({ domain }: { domain: any }) {
-  const [logs, setLogs] = useState<string[]>(domain.terminalLogs ? [domain.terminalLogs] : []);
-  const [status, setStatus] = useState("Queued");
+  const [logs, setLogs] = useState<string[]>(domain.terminalLogs && domain.status !== "failed" ? [domain.terminalLogs] : []);
+  const [status, setStatus] = useState(
+    domain.status === "ready" ? "Ready" :
+    domain.status === "failed" ? "Failed" :
+    domain.status === "provisioning" ? "Provisioning" :
+    domain.status === "configuring" ? "Configuring" :
+    "Queued"
+  );
   const bottomRef = useRef<HTMLDivElement>(null);
   const provMutation = useMutation({
     mutationFn: (args: { data: { domainId: string } }) => provisionServer(args),
   });
-  const [started, setStarted] = useState(false);
+  const [startTrigger, setStartTrigger] = useState<number>(0);
 
-  useEffect(() => {
-    if (started) return;
-    setStarted(true);
-
-    const connectSse = () => {
-      const eventSource = new EventSource(`/api/sse?domainId=${domain.id}`);
-      eventSource.onmessage = (event) => {
-        const parsed = JSON.parse(event.data);
-        if (parsed.status) setStatus(parsed.status);
-        if (parsed.chunk) {
-          setLogs((prev) => {
-            if (prev.length > 0 && parsed.chunk.startsWith(prev.join(""))) {
-              return [parsed.chunk];
-            }
-            if (prev.includes(parsed.chunk)) return prev;
-            return [...prev, parsed.chunk];
-          });
-        } else if (parsed.msg) {
-          setLogs((prev) => {
-            const systemMsg = `[System] ${parsed.msg}\n`;
-            if (prev.includes(systemMsg)) return prev;
-            return [...prev, systemMsg];
-          });
-        }
-      };
-      eventSource.onerror = () => eventSource.close();
-      return () => eventSource.close();
+  const connectSse = () => {
+    const eventSource = new EventSource(`/api/sse?domainId=${domain.id}`);
+    eventSource.onmessage = (event) => {
+      const parsed = JSON.parse(event.data);
+      if (parsed.status) setStatus(parsed.status);
+      if (parsed.chunk) {
+        setLogs((prev) => {
+          if (prev.length > 0 && parsed.chunk.startsWith(prev.join(""))) {
+            return [parsed.chunk];
+          }
+          if (prev.includes(parsed.chunk)) return prev;
+          return [...prev, parsed.chunk];
+        });
+      } else if (parsed.msg) {
+        setLogs((prev) => {
+          const systemMsg = `[System] ${parsed.msg}\n`;
+          if (prev.includes(systemMsg)) return prev;
+          return [...prev, systemMsg];
+        });
+      }
     };
+    eventSource.onerror = () => eventSource.close();
+    return () => eventSource.close();
+  };
 
-    if (domain.status === "ready") {
-      setStatus("Ready");
-      return;
-    }
-
+  // Auto-connect SSE for in-progress domains on first mount (no new job needed)
+  useEffect(() => {
     if (domain.status === "provisioning" || domain.status === "configuring") {
-      setStatus(domain.status === "configuring" ? "Configuring" : "Provisioning");
       return connectSse();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // Trigger provisioning when startTrigger increments (0 = skip initial)
+  useEffect(() => {
+    if (startTrigger === 0) return;
+
+    setStatus("Connecting");
     provMutation.mutateAsync({ data: { domainId: domain.id } }).then((res) => {
       if (res.jobId) {
-        setStatus("Connecting");
-        return connectSse();
+        connectSse();
       } else {
         setStatus("Failed");
         setLogs([`Error starting job: ${res.error}`]);
       }
+    }).catch((err) => {
+      setStatus("Failed");
+      setLogs([`Error starting job: ${err.message}`]);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [startTrigger]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -685,7 +692,8 @@ function TerminalWindow({ domain }: { domain: any }) {
     status.includes("Docker") ||
     status === "Configuring" ||
     status === "Cloning Mailcow" ||
-    status === "Starting Containers"
+    status === "Starting Containers" ||
+    status === "Provisioning"
   )
     statusColor = "bg-blue-500";
   if (status === "Failed") statusColor = "bg-red-500";
@@ -714,8 +722,7 @@ function TerminalWindow({ domain }: { domain: any }) {
           domain={domain}
           onRetry={() => {
             setLogs([]);
-            setStatus("Queued");
-            setStarted(false);
+            setStartTrigger((n) => n + 1);
           }}
         />
       )}
