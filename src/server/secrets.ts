@@ -70,6 +70,7 @@ export const verifyCfToken = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => verifyCfTokenSchema.parse(d))
   .handler(async ({ data }) => {
     try {
+      // 1. Try standard user tokens verify
       const res = await fetch("https://api.cloudflare.com/client/v4/user/tokens/verify", {
         headers: {
           Authorization: `Bearer ${data.token}`,
@@ -77,14 +78,32 @@ export const verifyCfToken = createServerFn({ method: "POST" })
         },
       });
       const json = (await res.json()) as any;
+      if (json.success && json.result?.status === "active") {
+        return { valid: true };
+      }
+
+      // 2. Fallback: Test if token can list zones (which is the actual capability required by the app)
+      const zonesRes = await fetch("https://api.cloudflare.com/client/v4/zones?per_page=1", {
+        headers: {
+          Authorization: `Bearer ${data.token}`,
+          "Content-Type": "application/json",
+        },
+      });
+      const zonesJson = (await zonesRes.json()) as any;
+      if (zonesJson.success) {
+        return { valid: true };
+      }
+
+      // If both fail, return the error
       return {
-        valid: json.success && json.result?.status === "active",
-        error: json.errors?.[0]?.message,
+        valid: false,
+        error: zonesJson.errors?.[0]?.message || json.errors?.[0]?.message || "Invalid API token",
       };
     } catch (error) {
       return { valid: false, error: String(error) };
     }
   });
+
 
 export const syncCfZones = createServerFn({ method: "POST" })
   .middleware([requireAuth])

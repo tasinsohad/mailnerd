@@ -1,20 +1,17 @@
+import "dotenv/config";
 import postgres from "postgres";
 
-async function test() {
-  console.log("Connecting...");
-  const sql = postgres(
-    "postgresql://postgres.zwiyljbvkshihrxkkxdm:lcSGMDWWWLYseZux@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres",
-    { ssl: "require" }
-  );
-  
-  try {
-    const res = await sql`SELECT 1`;
-    console.log("Success:", res);
-  } catch (e: any) {
-    console.error("Connection failed:", e.message);
-  } finally {
-    process.exit(0);
-  }
-}
+const url = process.env.DATABASE_URL!;
+console.log("Testing:", url.replace(/:([^:@]+)@/, ":***@"));
 
-test();
+const sql = postgres(url, { ssl: "require", prepare: false, max: 1, connect_timeout: 5 });
+
+try {
+  const rows = await sql`SELECT 1 as ok`;
+  console.log("✅ DB connection OK:", rows);
+} catch (e: any) {
+  console.error("❌ DB FAIL:", e.message);
+} finally {
+  await sql.end();
+  process.exit(0);
+}
