@@ -5,6 +5,11 @@ import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { nitro } from "nitro/vite";
 
+// These are native/optional packages that should NOT be bundled.
+// CRITICAL: postgres and drizzle-orm MUST be bundled (NOT in this list)
+// otherwise Vercel functions crash with ERR_MODULE_NOT_FOUND.
+const nativeExternals = ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features"];
+
 export default defineConfig({
   plugins: [
     tsConfigPaths(),
@@ -16,17 +21,17 @@ export default defineConfig({
       preset: "vercel",
       minify: false, // Drizzle ORM crashes if the server build is minified
       externals: {
-        external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features", "postgres", "drizzle-orm"],
+        external: nativeExternals,
       }
     }),
     react(),
     tailwindcss(),
   ],
   optimizeDeps: {
-    exclude: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features", "postgres", "drizzle-orm"],
+    exclude: nativeExternals,
   },
   ssr: {
-    external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features", "postgres", "drizzle-orm"],
+    external: nativeExternals,
   },
   server: {
     hmr: {
@@ -37,7 +42,7 @@ export default defineConfig({
     target: "esnext",
     minify: false, // Drizzle ORM crashes if the build is minified
     rollupOptions: {
-      external: ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", "cpu-features", "postgres", "drizzle-orm"],
+      external: nativeExternals,
     },
   },
 });
