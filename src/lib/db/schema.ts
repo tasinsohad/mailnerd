@@ -89,6 +89,7 @@ export const domains = pgTable("domains", {
   status: text("status").notNull().default("pending"),
   ipAddress: text("ip_address"),
   sshUser: text("ssh_user"),
+  sshPassword: text("ssh_password"),
   cfZoneId: text("cf_zone_id"),
   cfAccountId: text("cf_account_id"),
   mailcowHostname: text("mailcow_hostname"),

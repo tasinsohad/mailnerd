@@ -19,14 +19,22 @@ export const testSshConnection = createServerFn({ method: "POST" })
       with: { server: true },
     });
 
-    if (!domain || !domain.server) return { success: false, error: "Domain or Server not found" };
+    if (!domain) return { success: false, error: "Domain not found" };
+
+    const ipAddress = domain.server?.ipAddress || domain.ipAddress;
+    const sshUser = domain.server?.sshUser || domain.sshUser;
+    const sshPassword = domain.server?.sshPassword || domain.sshPassword;
+
+    if (!ipAddress || !sshUser) {
+      return { success: false, error: "SSH credentials not configured for this domain" };
+    }
 
     const ssh = new NodeSSH();
     try {
       await ssh.connect({
-        host: domain.server.ipAddress,
-        username: domain.server.sshUser,
-        password: domain.server.sshPassword || undefined,
+        host: ipAddress,
+        username: sshUser,
+        password: sshPassword || undefined,
         readyTimeout: 10000,
       });
       return { success: true };
@@ -50,15 +58,23 @@ export const provisionServer = createServerFn({ method: "POST" })
       with: { server: true },
     });
 
-    if (!domain || !domain.server) return { error: "Domain or Server not found" };
+    if (!domain) return { error: "Domain not found" };
+
+    const ipAddress = domain.server?.ipAddress || domain.ipAddress;
+    const sshUser = domain.server?.sshUser || domain.sshUser;
+    const sshPassword = domain.server?.sshPassword || domain.sshPassword;
+
+    if (!ipAddress || !sshUser) {
+      return { error: "Server credentials not configured for this domain" };
+    }
 
     try {
       // Enqueue job via BullMQ
       const job = await addServerSetupJob(
         domain.id,
-        domain.server.ipAddress,
-        domain.server.sshUser,
-        domain.server.sshPassword,
+        ipAddress,
+        sshUser,
+        sshPassword,
         domain.name,
       );
 
