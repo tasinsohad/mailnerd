@@ -3,6 +3,7 @@ import { requireAuth } from "@/lib/auth";
 import { z } from "zod";
 import { domains, dnsRecords, plannedInboxes, userSecrets, cloudflareZones } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
+import { resolveAndSaveCfZoneId } from "./domains";
 
 export const setupMailcowDomain = createServerFn({ method: "POST" })
   .middleware([requireAuth])
@@ -105,21 +106,7 @@ export const fetchDkimAndSync = createServerFn({ method: "POST" })
     if (!domain) return { error: "Domain not found" };
 
     // Automatically associate and populate the Cloudflare Zone ID if missing
-    if (!domain.cfZoneId) {
-      const matchedZone = await db.query.cloudflareZones.findFirst({
-        where: and(
-          eq(cloudflareZones.userId, userId),
-          eq(cloudflareZones.name, domain.name.toLowerCase())
-        )
-      });
-      if (matchedZone) {
-        await db
-          .update(domains)
-          .set({ cfZoneId: matchedZone.zoneId })
-          .where(eq(domains.id, domain.id));
-        domain.cfZoneId = matchedZone.zoneId;
-      }
-    }
+    await resolveAndSaveCfZoneId(db, domain, userId);
 
     if (!domain.mailcowHostname || !domain.mailcowApiKey) {
       return { error: "Mailcow credentials missing" };
