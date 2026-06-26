@@ -96,10 +96,41 @@ function DomainDetailsPage() {
         throw new Error(resDns.error);
       }
 
-      toast.loading("Step 2: Provisioning VPS...", { id: "auto" });
+      toast.loading("Step 2: Provisioning VPS (this takes 2-3 minutes)...", { id: "auto" });
       const resProv = await provisionMutation.mutateAsync();
       if (resProv?.error) {
         throw new Error(resProv.error);
+      }
+
+      // Poll until the domain status is "ready"
+      let isReady = false;
+      const startTime = Date.now();
+      const timeoutMs = 15 * 60 * 1000; // 15 minutes timeout
+
+      while (!isReady) {
+        // Wait 5 seconds
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+
+        if (Date.now() - startTime > timeoutMs) {
+          throw new Error("VPS provisioning timed out after 15 minutes");
+        }
+
+        // Fetch fresh domain details and update react-query cache/UI
+        const details = await qc.fetchQuery({
+          queryKey: ["domain", id],
+          queryFn: () => getDomainDetails({ data: { id } }),
+        });
+
+        if (!details?.domain) {
+          throw new Error("Failed to load domain details during polling");
+        }
+
+        const currentStatus = details.domain.status;
+        if (currentStatus === "ready") {
+          isReady = true;
+        } else if (currentStatus === "failed" || currentStatus === "error") {
+          throw new Error("VPS provisioning failed. Check SSH details or server logs.");
+        }
       }
 
       toast.loading("Step 3: Setting up Mailcow...", { id: "auto" });
