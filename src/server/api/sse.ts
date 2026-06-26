@@ -126,17 +126,56 @@ export default defineEventHandler(async (event) => {
       });
     }
   } else {
-    // Fall back to in-memory events listener
+    // In-memory fallback: listen to jobEvents AND poll DB every 3s as a safety net
+    // This ensures logs are never lost even if the browser connected after events fired
+    let lastSentLength = domain?.terminalLogs?.length ?? 0;
+    let closed = false;
+
     const listener = (data: any) => {
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      if (!closed) res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
     jobEvents.on(channel, listener);
+
+    // Poll DB every 3 seconds for new log content (catches anything jobEvents missed)
+    const pollInterval = setInterval(async () => {
+      if (closed) return;
+      try {
+        const db = getDb();
+        const fresh = await db.query.domains.findFirst({
+          where: eq(domains.id, domainId),
+        });
+        if (!fresh) return;
+
+        // If domain finished or failed, notify client and stop polling
+        if (fresh.status === "ready" || fresh.status === "failed") {
+          if (fresh.terminalLogs && fresh.terminalLogs.length > lastSentLength) {
+            const newChunk = fresh.terminalLogs.slice(lastSentLength);
+            res.write(`data: ${JSON.stringify({ chunk: newChunk })}\n\n`);
+            lastSentLength = fresh.terminalLogs.length;
+          }
+          res.write(`data: ${JSON.stringify({ status: fresh.status === "ready" ? "Ready" : "Failed" })}\n\n`);
+          clearInterval(pollInterval);
+          return;
+        }
+
+        // Send any new log content that wasn't delivered via jobEvents
+        if (fresh.terminalLogs && fresh.terminalLogs.length > lastSentLength) {
+          const newChunk = fresh.terminalLogs.slice(lastSentLength);
+          lastSentLength = fresh.terminalLogs.length;
+          res.write(`data: ${JSON.stringify({ chunk: newChunk })}\n\n`);
+        }
+      } catch (err) {
+        console.error("SSE poll error:", err);
+      }
+    }, 3000);
 
     // Handle client disconnect
     const req = (event as any).node?.req;
     if (req) {
       req.on("close", () => {
+        closed = true;
+        clearInterval(pollInterval);
         jobEvents.off(channel, listener);
       });
     }

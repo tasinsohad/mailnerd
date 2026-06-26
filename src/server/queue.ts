@@ -118,6 +118,7 @@ export async function addServerSetupJob(
       .set({ status: "configuring" })
       .where(eq(domains.id, domainId));
 
+    // Delay by 2s so the browser has time to open the SSE connection before logs start firing
     setTimeout(async () => {
       const channel = `server-log:${domainId}`;
       const logFn = (msg: string, status?: string) => {
@@ -129,7 +130,7 @@ export async function addServerSetupJob(
       } catch (err) {
         console.error(`In-memory setup error for domain ${domainId}:`, err);
       }
-    }, 0);
+    }, 2000);
 
     return { jobId };
   }
@@ -146,10 +147,9 @@ async function executeProvisionJob(
   const db = getDb();
   let accumulatedLogs = "";
 
-  // Flush accumulated logs to DB so SSE reconnects can show them
-  const flushLogsToDB = async () => {
-    await db
-      .update(domains)
+  // Flush ALL logs to DB on every write so SSE reconnects always have full history
+  const flushLogsToDB = () => {
+    db.update(domains)
       .set({ terminalLogs: accumulatedLogs })
       .where(eq(domains.id, domainId))
       .catch((err: any) => console.error("Failed to flush logs to DB:", err));
@@ -158,18 +158,18 @@ async function executeProvisionJob(
   const log = (msg: string, status?: string) => {
     accumulatedLogs += msg;
     if (logFn) logFn(msg, status);
-    // Flush to DB every ~2KB so reconnects see fresh data
-    if (accumulatedLogs.length % 2048 < msg.length) {
-      flushLogsToDB().catch(() => {});
-    }
+    // Write every log line to DB immediately so SSE clients that connect mid-run see all output
+    flushLogsToDB();
   };
 
-  // Clear existing terminal logs in database
-  await db
-    .update(domains)
-    .set({ terminalLogs: "" })
-    .where(eq(domains.id, domainId))
-    .catch((err: any) => console.error("Failed to clear terminal logs:", err));
+  // Append a run separator so previous logs are preserved during retry
+  const separator = `\n\n=== New run started at ${new Date().toISOString()} ===\n\n`;
+  try {
+    const existing = await db.query.domains.findFirst({ where: eq(domains.id, domainId) });
+    accumulatedLogs = (existing?.terminalLogs || "") + separator;
+  } catch {
+    accumulatedLogs = separator;
+  }
 
   log(`Connecting to ${ipAddress} via SSH...`, "Connecting");
 
