@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getDomainDetails, pushDnsToCloudflare } from "@/server/domains";
+import { getDomainDetails, pushDnsToCloudflare, updateDomain } from "@/server/domains";
 import { provisionServer } from "@/server/provisioning";
 import { setupMailcowDomain, fetchDkimAndSync } from "@/server/mailcow";
 import {
@@ -22,6 +22,7 @@ import {
   Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
 
@@ -56,6 +57,19 @@ function DomainDetailsPage() {
   const [logs, setLogs] = useState<string[]>([]);
   const [terminalStatus, setTerminalStatus] = useState<string>("");
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const [isEditingServer, setIsEditingServer] = useState(false);
+  const [ipAddress, setIpAddress] = useState("");
+  const [sshUser, setSshUser] = useState("root");
+  const [sshPassword, setSshPassword] = useState("");
+
+  useEffect(() => {
+    if (domain) {
+      setIpAddress(domain.ipAddress || "");
+      setSshUser(domain.sshUser || "root");
+      setSshPassword(domain.sshPassword || "");
+    }
+  }, [domain]);
 
   useEffect(() => {
     if (domain?.terminalLogs && logs.length === 0) {
@@ -93,6 +107,20 @@ function DomainDetailsPage() {
       if (res?.error) toast.error(res.error);
       else toast.success("DNS records pushed successfully");
       qc.invalidateQueries({ queryKey: ["domain", id] });
+    },
+  });
+
+  const updateDomainMutation = useMutation({
+    mutationFn: (args: { id: string; ipAddress: string; sshUser: string; sshPassword?: string }) =>
+      updateDomain({ data: args }),
+    onSuccess: (res: any) => {
+      if (res.ok) {
+        toast.success("Deployment target updated successfully");
+        setIsEditingServer(false);
+        qc.invalidateQueries({ queryKey: ["domain", id] });
+      } else {
+        toast.error(res.error || "Failed to update deployment target");
+      }
     },
   });
 
@@ -372,28 +400,110 @@ function DomainDetailsPage() {
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
-        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-4">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Server className="h-5 w-5 text-gray-500" /> Deployment Target
-          </h2>
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-purple-100">
-              <Server className="h-5 w-5 text-purple-600" />
-            </div>
-            <div>
-              <div className="font-medium">{domain.name}</div>
-              <div className="text-sm text-gray-500 flex items-center gap-3">
-                <span className="flex items-center gap-1">
-                  <Network className="h-3 w-3" />
-                  {domain.ipAddress || "No IP configured"}
-                </span>
-                <span className="flex items-center gap-1">
-                  <Key className="h-3 w-3" />
-                  {domain.sshUser || "root"}
-                </span>
+        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-4 relative">
+          <div className="flex justify-between items-center">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Server className="h-5 w-5 text-gray-500" /> Deployment Target
+            </h2>
+            {!isEditingServer && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsEditingServer(true)}
+                className="h-8 text-xs rounded-xl text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+              >
+                Edit
+              </Button>
+            )}
+          </div>
+
+          {isEditingServer ? (
+            <div className="flex flex-col gap-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase">IP Address</label>
+                  <Input
+                    value={ipAddress}
+                    onChange={(e) => setIpAddress(e.target.value)}
+                    placeholder="e.g. 192.168.1.1"
+                    className="h-9 text-xs rounded-xl"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase">SSH User</label>
+                  <Input
+                    value={sshUser}
+                    onChange={(e) => setSshUser(e.target.value)}
+                    placeholder="e.g. root"
+                    className="h-9 text-xs rounded-xl"
+                  />
+                </div>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold text-gray-400 uppercase">SSH Password</label>
+                <Input
+                  type="password"
+                  value={sshPassword}
+                  onChange={(e) => setSshPassword(e.target.value)}
+                  placeholder="SSH Password"
+                  className="h-9 text-xs rounded-xl"
+                />
+              </div>
+              <div className="flex justify-end gap-2 mt-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setIsEditingServer(false);
+                    setIpAddress(domain.ipAddress || "");
+                    setSshUser(domain.sshUser || "root");
+                    setSshPassword(domain.sshPassword || "");
+                  }}
+                  className="h-8 text-xs rounded-xl"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    updateDomainMutation.mutate({
+                      id: domain.id,
+                      ipAddress,
+                      sshUser,
+                      sshPassword,
+                    });
+                  }}
+                  disabled={updateDomainMutation.isPending}
+                  className="h-8 text-xs rounded-xl bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {updateDomainMutation.isPending ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    "Save"
+                  )}
+                </Button>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-purple-100">
+                <Server className="h-5 w-5 text-purple-600" />
+              </div>
+              <div>
+                <div className="font-medium">{domain.name}</div>
+                <div className="text-sm text-gray-500 flex items-center gap-3 mt-0.5">
+                  <span className="flex items-center gap-1">
+                    <Network className="h-3 w-3" />
+                    {domain.ipAddress || "No IP configured"}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Key className="h-3 w-3" />
+                    {domain.sshUser || "root"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-4">

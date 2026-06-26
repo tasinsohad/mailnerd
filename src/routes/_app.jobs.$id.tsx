@@ -686,17 +686,86 @@ function TerminalWindow({ domain }: { domain: any }) {
         <div ref={bottomRef} />
       </div>
       {status === "Failed" && (
-        <div className="bg-gray-900 p-2 flex justify-end">
+        <TerminalWindowFailedFooter
+          domain={domain}
+          onRetry={() => {
+            setLogs([]);
+            setStatus("Queued");
+            setStarted(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function TerminalWindowFailedFooter({ domain, onRetry }: { domain: any; onRetry: () => void }) {
+  const [editPassword, setEditPassword] = useState(domain.sshPassword || "");
+  const [showEdit, setShowEdit] = useState(false);
+  const updatePasswordMutation = useMutation({
+    mutationFn: (newPassword: string) =>
+      updateDomain({ data: { id: domain.id, sshPassword: newPassword } }),
+    onSuccess: (res: any) => {
+      if (res.ok) {
+        toast.success("SSH Password updated successfully");
+        setShowEdit(false);
+      } else {
+        toast.error(res.error || "Failed to update SSH Password");
+      }
+    },
+  });
+
+  return (
+    <div className="bg-gray-900 p-3 flex flex-col gap-3 border-t border-gray-800">
+      {showEdit ? (
+        <div className="flex gap-2 items-center">
+          <Input
+            type="password"
+            placeholder="Enter correct SSH Password"
+            value={editPassword}
+            onChange={(e) => setEditPassword(e.target.value)}
+            className="h-9 text-xs font-mono bg-black border-gray-800 text-gray-200 placeholder-gray-500 rounded-xl"
+          />
+          <Button
+            size="sm"
+            onClick={async () => {
+              await updatePasswordMutation.mutateAsync(editPassword);
+            }}
+            disabled={updatePasswordMutation.isPending}
+            className="h-9 text-xs rounded-xl bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            {updatePasswordMutation.isPending ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              "Save"
+            )}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setShowEdit(false)}
+            className="h-9 text-xs rounded-xl text-gray-400 hover:text-gray-200"
+          >
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <div className="flex justify-between items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setShowEdit(true)}
+            className="h-9 text-xs rounded-xl border-gray-800 bg-gray-950 text-gray-300 hover:bg-gray-800 hover:text-white"
+          >
+            Change SSH Password
+          </Button>
           <Button
             size="sm"
             variant="destructive"
-            onClick={() => {
-              setLogs([]);
-              setStatus("Queued");
-              setStarted(false);
-            }}
+            onClick={onRetry}
+            className="h-9 text-xs rounded-xl"
           >
-            Retry
+            Retry Setup
           </Button>
         </div>
       )}
