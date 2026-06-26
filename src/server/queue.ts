@@ -100,6 +100,7 @@ export async function addServerSetupJob(
   const sanitizedDomain = sanitizeShellInput(domainName);
 
   if (serverSetupQueue) {
+    console.log(`[addServerSetupJob] Using BullMQ`);
     const job = await serverSetupQueue.add("setup", {
       domainId,
       ipAddress: sanitizedIp,
@@ -109,17 +110,21 @@ export async function addServerSetupJob(
     });
     return { jobId: job.id };
   } else {
+    console.log(`[addServerSetupJob] Using in-memory fallback`);
     // In-memory queue fallback
     const jobId = crypto.randomUUID();
     const db = getDb();
     
+    console.log(`[addServerSetupJob] Updating DB status to configuring`);
     await db
       .update(domains)
       .set({ status: "configuring" })
       .where(eq(domains.id, domainId));
 
+    console.log(`[addServerSetupJob] Setting 2000ms timeout`);
     // Delay by 2s so the browser has time to open the SSE connection before logs start firing
     setTimeout(async () => {
+      console.log(`[addServerSetupJob] Inside setTimeout, calling executeProvisionJob`);
       const channel = `server-log:${domainId}`;
       const logFn = (msg: string, status?: string) => {
         jobEvents.emit(channel, { msg, status, chunk: msg });
@@ -127,11 +132,13 @@ export async function addServerSetupJob(
 
       try {
         await executeProvisionJob(domainId, sanitizedIp, sanitizedUser, sshPassword, sanitizedDomain, logFn);
+        console.log(`[addServerSetupJob] executeProvisionJob completed successfully`);
       } catch (err) {
         console.error(`In-memory setup error for domain ${domainId}:`, err);
       }
     }, 2000);
 
+    console.log(`[addServerSetupJob] Returning jobId: ${jobId}`);
     return { jobId };
   }
 }

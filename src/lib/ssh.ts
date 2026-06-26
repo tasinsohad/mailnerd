@@ -46,7 +46,11 @@ export class SSHManager {
 
           client.on('error', (err: Error) => {
             clearTimeout(timeout)
-            reject(new SSHConnectionError(`SSH connection failed to ${this.host}:${this.port}: ${err.message}`))
+            if (err.message.includes('All configured authentication methods failed')) {
+              reject(new SSHConnectionError(`Authentication failed for ${this.username}@${this.host}`))
+            } else {
+              reject(new SSHConnectionError(`SSH connection failed to ${this.host}:${this.port}: ${err.message}`))
+            }
           })
 
           const config: import('ssh2').ConnectConfig = {
@@ -78,6 +82,10 @@ export class SSHManager {
             error: err instanceof Error ? err.message : String(err),
           })
         },
+        retryOn: (err) => {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          return !errMsg.includes('Authentication failed');
+        }
       }
     )
   }

@@ -1,21 +1,19 @@
 import "dotenv/config";
-import postgres from "postgres";
+import { getDb } from "../src/lib/db";
+import { domains } from "../src/lib/db/schema";
+import { eq } from "drizzle-orm";
 
-const url = process.env.DATABASE_URL!;
-const sql = postgres(url, { ssl: "require", prepare: false, max: 1, connect_timeout: 10 });
-
-try {
-  const result = await sql`
-    SELECT id, name, status, ip_address, ssh_user,
-           LEFT(terminal_logs, 500) as log_preview
-    FROM domains
-    ORDER BY created_at DESC
-  `;
-  console.log("=== DOMAINS ===");
-  console.dir(result, { depth: null });
-} catch (err: any) {
-  console.error("Error:", err.message);
-} finally {
-  await sql.end();
+async function run() {
+  const db = getDb();
+  const domain = await db.query.domains.findFirst({
+    where: eq(domains.id, "4ea95b91-4a17-49c8-945d-e0d31c09b6e1"),
+  });
+  console.log("Domain credentials:");
+  console.log("IP:", domain?.ipAddress);
+  console.log("User:", domain?.sshUser);
+  console.log("Password length:", domain?.sshPassword?.length);
+  console.log("Status:", domain?.status);
   process.exit(0);
 }
+
+run();

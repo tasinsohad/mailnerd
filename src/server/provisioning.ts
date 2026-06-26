@@ -53,22 +53,28 @@ export const provisionServer = createServerFn({ method: "POST" })
     const { db, userId } = context as any;
     if (!db) return { error: "Database not connected" };
 
+    console.log(`[provisionServer] Processing domainId: ${data.domainId} for userId: ${userId}`);
+
     const domain = await db.query.domains.findFirst({
       where: and(eq(domains.id, data.domainId), eq(domains.userId, userId)),
       with: { server: true },
     });
 
-    if (!domain) return { error: "Domain not found" };
+    if (!domain) {
+      console.log(`[provisionServer] Domain not found!`);
+      return { error: "Domain not found" };
+    }
 
-    const ipAddress = domain.server?.ipAddress || domain.ipAddress;
-    const sshUser = domain.server?.sshUser || domain.sshUser;
-    const sshPassword = domain.server?.sshPassword || domain.sshPassword;
+    const ipAddress = domain.ipAddress || domain.server?.ipAddress;
+    const sshUser = domain.sshUser || domain.server?.sshUser;
+    const sshPassword = domain.sshPassword || domain.server?.sshPassword;
 
     if (!ipAddress || !sshUser) {
       return { error: "Server credentials not configured for this domain" };
     }
 
     try {
+      console.log(`[provisionServer] Enqueuing job for IP: ${ipAddress}`);
       // Enqueue job via BullMQ
       const job = await addServerSetupJob(
         domain.id,
@@ -78,8 +84,10 @@ export const provisionServer = createServerFn({ method: "POST" })
         domain.name,
       );
 
+      console.log(`[provisionServer] Job enqueued: ${job.jobId}, updating DB status to provisioning`);
       await db.update(domains).set({ status: "provisioning" }).where(eq(domains.id, domain.id));
 
+      console.log(`[provisionServer] Done, returning to client.`);
       return { success: true, jobId: job.jobId };
     } catch (error) {
       await db.update(domains).set({ status: "error" }).where(eq(domains.id, domain.id));
