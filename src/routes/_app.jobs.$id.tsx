@@ -37,6 +37,7 @@ type Step = "VIEW" | "PRE_FLIGHT" | "DNS_PUSH" | "SERVER_SETUP";
 function JobPipelinePage() {
   const { id } = Route.useParams();
   const [step, setStep] = useState<Step>("VIEW");
+  const [autoStepped, setAutoStepped] = useState(false);
 
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -97,6 +98,18 @@ function JobPipelinePage() {
   const inboxes = (data as any)?.inboxes ?? [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const records = (data as any)?.records ?? [];
+
+  // Auto-jump to SERVER_SETUP if any domain is already in provisioning or failed state
+  useEffect(() => {
+    if (autoStepped || !domains.length) return;
+    const needsSetup = domains.some((d: any) =>
+      d.status === "failed" || d.status === "provisioning" || d.status === "configuring"
+    );
+    if (needsSetup) {
+      setStep("SERVER_SETUP");
+      setAutoStepped(true);
+    }
+  }, [domains, autoStepped]);
 
   if (isLoading) {
     return (
@@ -176,6 +189,16 @@ function JobPipelinePage() {
               )}
               Delete Job
             </Button>
+            {domains.some((d: any) => d.status === "failed" || d.status === "provisioning" || d.status === "configuring") && (
+              <Button
+                variant="outline"
+                onClick={() => setStep("SERVER_SETUP")}
+                className="h-11 px-4 rounded-2xl border-orange-200 text-orange-600 hover:bg-orange-50"
+              >
+                <Server className="h-4 w-4 mr-2" />
+                Go to Server Setup
+              </Button>
+            )}
             <Button
               onClick={() => setStep("PRE_FLIGHT")}
               className="h-11 px-8 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white shadow-lg"

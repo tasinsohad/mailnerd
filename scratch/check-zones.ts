@@ -5,13 +5,14 @@ const url = process.env.DATABASE_URL!;
 const sql = postgres(url, { ssl: "require", prepare: false, max: 1, connect_timeout: 10 });
 
 try {
-  const columns = await sql`
-    SELECT column_name, data_type 
-    FROM information_schema.columns 
-    WHERE table_name = 'domains'
+  const result = await sql`
+    SELECT id, name, status, ip_address, ssh_user,
+           LEFT(terminal_logs, 500) as log_preview
+    FROM domains
+    ORDER BY created_at DESC
   `;
-  console.log("=== DOMAINS COLUMNS ===");
-  console.dir(columns, { depth: null });
+  console.log("=== DOMAINS ===");
+  console.dir(result, { depth: null });
 } catch (err: any) {
   console.error("Error:", err.message);
 } finally {
