@@ -19,10 +19,11 @@ import {
   Key,
   Eye,
   EyeOff,
+  Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 
 export const Route = createFileRoute("/_app/domains/$id")({
   component: DomainDetailsPage,
@@ -52,6 +53,34 @@ function DomainDetailsPage() {
     return acc;
   }, {});
 
+  const [logs, setLogs] = useState<string[]>([]);
+  const [terminalStatus, setTerminalStatus] = useState<string>("");
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (domain?.status === "configuring" || domain?.status === "provisioning") {
+      setTerminalStatus(domain.status === "configuring" ? "Configuring" : "Provisioning");
+      const eventSource = new EventSource(`/api/sse?domainId=${domain.id}`);
+      
+      eventSource.onmessage = (event) => {
+        const parsed = JSON.parse(event.data);
+        if (parsed.status) setTerminalStatus(parsed.status);
+        if (parsed.chunk) {
+          setLogs((prev) => [...prev, parsed.chunk]);
+        } else if (parsed.msg) {
+          setLogs((prev) => [...prev, `[System] ${parsed.msg}\n`]);
+        }
+      };
+
+      eventSource.onerror = () => eventSource.close();
+      return () => eventSource.close();
+    }
+  }, [domain?.status, domain?.id]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logs]);
+
   const pushDnsMutation = useMutation({
     mutationFn: () => pushDnsToCloudflare({ data: { domainId: id } }),
     onSuccess: (res: any) => {
@@ -62,7 +91,11 @@ function DomainDetailsPage() {
   });
 
   const provisionMutation = useMutation({
-    mutationFn: () => provisionServer({ data: { domainId: id } }),
+    mutationFn: () => {
+      setLogs([]);
+      setTerminalStatus("");
+      return provisionServer({ data: { domainId: id } });
+    },
     onSuccess: (res: any) => {
       if (res?.error) toast.error(res.error);
       else toast.success("Server provisioned successfully");
@@ -88,6 +121,8 @@ function DomainDetailsPage() {
 
   const runFullAutomation = async () => {
     try {
+      setLogs([]);
+      setTerminalStatus("");
       toast.info("Starting full automation sequence...");
 
       toast.loading("Step 1: Pushing DNS...", { id: "auto" });
@@ -416,6 +451,37 @@ function DomainDetailsPage() {
           )}
         </div>
       </div>
+
+      {(domain.status === "configuring" || domain.status === "provisioning" || logs.length > 0) && (
+        <div className="rounded-3xl bg-black overflow-hidden shadow-xl border border-gray-800 flex flex-col">
+          <div className="bg-gray-900 px-6 py-4 flex justify-between items-center border-b border-gray-800">
+            <div className="flex items-center gap-3">
+              <Terminal className="w-5 h-5 text-gray-400" />
+              <span className="text-gray-200 font-mono text-sm font-semibold">VPS Setup Terminal Logs</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-400 text-xs font-mono">{terminalStatus || domain.status.toUpperCase()}</span>
+              <div
+                className={`w-2.5 h-2.5 rounded-full ${
+                  domain.status === "ready" 
+                    ? "bg-green-500" 
+                    : domain.status === "failed" || domain.status === "error" 
+                    ? "bg-red-500" 
+                    : "bg-blue-500 animate-pulse"
+                }`}
+              />
+            </div>
+          </div>
+          <div className="p-6 h-96 overflow-y-auto font-mono text-xs text-green-400 leading-relaxed custom-scrollbar bg-black/95">
+            {logs.length > 0 ? (
+              <pre className="whitespace-pre-wrap font-inherit break-all">{logs.join("")}</pre>
+            ) : (
+              <div className="text-gray-500 italic">Waiting for setup logs stream...</div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+        </div>
+      )}
 
       <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-4">
         <div className="flex items-center justify-between">
