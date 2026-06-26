@@ -86,9 +86,19 @@ function DomainDetailsPage() {
         const parsed = JSON.parse(event.data);
         if (parsed.status) setTerminalStatus(parsed.status);
         if (parsed.chunk) {
-          setLogs((prev) => [...prev, parsed.chunk]);
+          setLogs((prev) => {
+            if (prev.length > 0 && parsed.chunk.startsWith(prev.join(""))) {
+              return [parsed.chunk];
+            }
+            if (prev.includes(parsed.chunk)) return prev;
+            return [...prev, parsed.chunk];
+          });
         } else if (parsed.msg) {
-          setLogs((prev) => [...prev, `[System] ${parsed.msg}\n`]);
+          setLogs((prev) => {
+            const systemMsg = `[System] ${parsed.msg}\n`;
+            if (prev.includes(systemMsg)) return prev;
+            return [...prev, systemMsg];
+          });
         }
       };
 

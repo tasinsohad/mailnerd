@@ -626,21 +626,45 @@ function TerminalWindow({ domain }: { domain: any }) {
     if (started) return;
     setStarted(true);
 
+    const connectSse = () => {
+      const eventSource = new EventSource(`/api/sse?domainId=${domain.id}`);
+      eventSource.onmessage = (event) => {
+        const parsed = JSON.parse(event.data);
+        if (parsed.status) setStatus(parsed.status);
+        if (parsed.chunk) {
+          setLogs((prev) => {
+            if (prev.length > 0 && parsed.chunk.startsWith(prev.join(""))) {
+              return [parsed.chunk];
+            }
+            if (prev.includes(parsed.chunk)) return prev;
+            return [...prev, parsed.chunk];
+          });
+        } else if (parsed.msg) {
+          setLogs((prev) => {
+            const systemMsg = `[System] ${parsed.msg}\n`;
+            if (prev.includes(systemMsg)) return prev;
+            return [...prev, systemMsg];
+          });
+        }
+      };
+      eventSource.onerror = () => eventSource.close();
+      return () => eventSource.close();
+    };
+
+    if (domain.status === "ready") {
+      setStatus("Ready");
+      return;
+    }
+
+    if (domain.status === "provisioning" || domain.status === "configuring") {
+      setStatus(domain.status === "configuring" ? "Configuring" : "Provisioning");
+      return connectSse();
+    }
+
     provMutation.mutateAsync({ data: { domainId: domain.id } }).then((res) => {
       if (res.jobId) {
         setStatus("Connecting");
-        const eventSource = new EventSource(`/api/sse?domainId=${domain.id}`);
-        eventSource.onmessage = (event) => {
-          const parsed = JSON.parse(event.data);
-          if (parsed.status) setStatus(parsed.status);
-          if (parsed.chunk) {
-            setLogs((prev) => [...prev, parsed.chunk]);
-          } else if (parsed.msg) {
-            setLogs((prev) => [...prev, `[System] ${parsed.msg}\n`]);
-          }
-        };
-        eventSource.onerror = () => eventSource.close();
-        return () => eventSource.close();
+        return connectSse();
       } else {
         setStatus("Failed");
         setLogs([`Error starting job: ${res.error}`]);

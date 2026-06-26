@@ -92,7 +92,12 @@ export default defineEventHandler(async (event) => {
   const channel = `server-log:${domainId}`;
 
   // Send initial connection message
-  res.write(`data: ${JSON.stringify({ msg: "Connected to terminal stream" })}\n\n`);
+  res.write(`data: ${JSON.stringify({ msg: "Connected to terminal stream", status: domain?.status })}\n\n`);
+
+  // Send existing terminal logs if any
+  if (domain && domain.terminalLogs) {
+    res.write(`data: ${JSON.stringify({ chunk: domain.terminalLogs })}\n\n`);
+  }
 
   if (redis) {
     const subscriber = redis.duplicate();
