@@ -144,9 +144,18 @@ async function executeProvisionJob(
   logFn?: (msg: string, status?: string) => void
 ) {
   const db = getDb();
+  let accumulatedLogs = "";
   const log = (msg: string, status?: string) => {
+    accumulatedLogs += msg;
     if (logFn) logFn(msg, status);
   };
+
+  // Clear existing terminal logs in database
+  await db
+    .update(domains)
+    .set({ terminalLogs: "" })
+    .where(eq(domains.id, domainId))
+    .catch((err: any) => console.error("Failed to clear terminal logs:", err));
 
   log(`Connecting to ${ipAddress} via SSH...`, "Connecting");
 
@@ -252,6 +261,7 @@ async function executeProvisionJob(
         status: "ready",
         mailcowHostname,
         mailcowApiKey: apiKey,
+        terminalLogs: accumulatedLogs,
       })
       .where(eq(domains.id, domainId));
 
@@ -261,7 +271,10 @@ async function executeProvisionJob(
     try {
       await db
         .update(domains)
-        .set({ status: "failed" })
+        .set({ 
+          status: "failed",
+          terminalLogs: accumulatedLogs,
+        })
         .where(eq(domains.id, domainId));
     } catch (dbErr) {
       console.error("Failed to update domain status to failed:", dbErr);

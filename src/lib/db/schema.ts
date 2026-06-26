@@ -95,6 +95,7 @@ export const domains = pgTable("domains", {
   mailcowHostname: text("mailcow_hostname"),
   mailcowApiKey: text("mailcow_api_key"),
   plannedInboxCount: integer("planned_inbox_count"),
+  terminalLogs: text("terminal_logs"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

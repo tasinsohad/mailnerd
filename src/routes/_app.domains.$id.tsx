@@ -58,6 +58,12 @@ function DomainDetailsPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (domain?.terminalLogs && logs.length === 0) {
+      setLogs([domain.terminalLogs]);
+    }
+  }, [domain?.terminalLogs, logs.length]);
+
+  useEffect(() => {
     if (domain?.status === "configuring" || domain?.status === "provisioning") {
       setTerminalStatus(domain.status === "configuring" ? "Configuring" : "Provisioning");
       const eventSource = new EventSource(`/api/sse?domainId=${domain.id}`);
@@ -452,7 +458,7 @@ function DomainDetailsPage() {
         </div>
       </div>
 
-      {(domain.status === "configuring" || domain.status === "provisioning" || logs.length > 0) && (
+      {(domain.status === "configuring" || domain.status === "provisioning" || domain.status === "failed" || domain.status === "error" || logs.length > 0) && (
         <div className="rounded-3xl bg-black overflow-hidden shadow-xl border border-gray-800 flex flex-col">
           <div className="bg-gray-900 px-6 py-4 flex justify-between items-center border-b border-gray-800">
             <div className="flex items-center gap-3">

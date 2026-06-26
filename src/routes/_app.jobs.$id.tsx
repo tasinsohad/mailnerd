@@ -614,7 +614,7 @@ function ServerSetupStep({ domains }: { domains: any[] }) {
 }
 
 function TerminalWindow({ domain }: { domain: any }) {
-  const [logs, setLogs] = useState<string[]>([]);
+  const [logs, setLogs] = useState<string[]>(domain.terminalLogs ? [domain.terminalLogs] : []);
   const [status, setStatus] = useState("Queued");
   const bottomRef = useRef<HTMLDivElement>(null);
   const provMutation = useMutation({
