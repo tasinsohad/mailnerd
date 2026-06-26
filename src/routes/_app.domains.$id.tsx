@@ -17,6 +17,8 @@ import {
   ChevronRight,
   Network,
   Key,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
@@ -118,6 +120,7 @@ function DomainDetailsPage() {
       "First Name",
       "Last Name",
       "Format",
+      "Password",
       "IP Address",
       "SSH User",
     ];
@@ -131,6 +134,7 @@ function DomainDetailsPage() {
       ib.firstName || "",
       ib.lastName || "",
       ib.format,
+      ib.password || "",
       domain.ipAddress || "",
       domain.sshUser || "",
     ]);
@@ -419,6 +423,11 @@ function SubdomainInboxSection({
   inboxes: any[];
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
+
+  const togglePassword = (id: string) => {
+    setShowPasswords((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
 
   return (
     <div className="rounded-xl border border-gray-200 overflow-hidden bg-white">
@@ -467,6 +476,7 @@ function SubdomainInboxSection({
                 <th className="px-4 py-2">Email Address</th>
                 <th className="px-4 py-2">Display Name</th>
                 <th className="px-4 py-2">Format</th>
+                <th className="px-4 py-2">Password</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -478,6 +488,25 @@ function SubdomainInboxSection({
                     <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase">
                       {ib.format}
                     </span>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs">
+                    {ib.password ? (
+                      <div className="flex items-center gap-2">
+                        <span>{showPasswords[ib.id] ? ib.password : "••••••••••••"}</span>
+                        <button
+                          onClick={() => togglePassword(ib.id)}
+                          className="text-gray-400 hover:text-gray-600 focus:outline-none"
+                        >
+                          {showPasswords[ib.id] ? (
+                            <EyeOff className="h-3.5 w-3.5" />
+                          ) : (
+                            <Eye className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-gray-400 italic">Not created yet</span>
+                    )}
                   </td>
                 </tr>
               ))}

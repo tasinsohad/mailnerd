@@ -54,6 +54,7 @@ export const setupMailcowDomain = createServerFn({ method: "POST" })
     // 6.2 Create Mailboxes
     for (const ib of inboxes) {
       try {
+        const mailboxPassword = Math.random().toString(36).slice(-10) + "1!A";
         const res = await fetch(`https://${domain.mailcowHostname}/api/v1/add/mailbox`, {
           method: "POST",
           headers: {
@@ -64,12 +65,23 @@ export const setupMailcowDomain = createServerFn({ method: "POST" })
             local_part: ib.localPart,
             domain: ib.subdomainFqdn,
             name: ib.personName,
-            password: Math.random().toString(36).slice(-10) + "1!A", // Placeholder password rule
+            password: mailboxPassword,
             quota: 3072,
             active: 1,
           }),
         });
         const json = await res.json();
+
+        if (res.ok) {
+          await db
+            .update(plannedInboxes)
+            .set({
+              password: mailboxPassword,
+              status: "active",
+            })
+            .where(eq(plannedInboxes.id, ib.id));
+        }
+
         results.push({ type: "mailbox", name: ib.email, success: res.ok, data: json });
       } catch (err) {
         results.push({ type: "mailbox", name: ib.email, success: false, error: String(err) });

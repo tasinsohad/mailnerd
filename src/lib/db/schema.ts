@@ -158,6 +158,7 @@ export const plannedInboxes = pgTable("planned_inboxes", {
   firstName: text("first_name"),
   lastName: text("last_name"),
   format: text("format"),
+  password: text("password"),
   status: text("status").notNull().default("planned"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
