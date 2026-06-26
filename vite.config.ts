@@ -23,7 +23,7 @@ export default defineConfig({
       externals: {
         external: nativeExternals,
       }
-    }),
+    } as any),
     react(),
     tailwindcss(),
   ],

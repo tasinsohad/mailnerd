@@ -339,6 +339,23 @@ export const getDomainDetails = createServerFn({ method: "GET" })
 
       if (!domain) return null;
 
+      // Automatically associate and populate the Cloudflare Zone ID if missing
+      if (!domain.cfZoneId) {
+        const matchedZone = await db.query.cloudflareZones.findFirst({
+          where: and(
+            eq(cloudflareZones.userId, userId),
+            eq(cloudflareZones.name, domain.name.toLowerCase())
+          )
+        });
+        if (matchedZone) {
+          await db
+            .update(domains)
+            .set({ cfZoneId: matchedZone.zoneId })
+            .where(eq(domains.id, domain.id));
+          domain.cfZoneId = matchedZone.zoneId;
+        }
+      }
+
       const records = await db.select().from(dnsRecords).where(eq(dnsRecords.domainId, domain.id));
       const inboxes = await db
         .select()
@@ -368,7 +385,26 @@ export const pushDnsToCloudflare = createServerFn({ method: "POST" })
     const domain = await db.query.domains.findFirst({
       where: and(eq(domains.id, data.domainId), eq(domains.userId, userId)),
     });
-    if (!domain || !domain.cfZoneId) return { error: "Domain or Zone ID missing" };
+    if (!domain) return { error: "Domain not found" };
+
+    // Automatically associate and populate the Cloudflare Zone ID if missing
+    if (!domain.cfZoneId) {
+      const matchedZone = await db.query.cloudflareZones.findFirst({
+        where: and(
+          eq(cloudflareZones.userId, userId),
+          eq(cloudflareZones.name, domain.name.toLowerCase())
+        )
+      });
+      if (matchedZone) {
+        await db
+          .update(domains)
+          .set({ cfZoneId: matchedZone.zoneId })
+          .where(eq(domains.id, domain.id));
+        domain.cfZoneId = matchedZone.zoneId;
+      }
+    }
+
+    if (!domain.cfZoneId) return { error: "Domain or Zone ID missing" };
 
     const secrets = await db.query.userSecrets.findFirst({
       where: eq(userSecrets.userId, userId),

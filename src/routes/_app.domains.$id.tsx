@@ -55,7 +55,7 @@ function DomainDetailsPage() {
   const pushDnsMutation = useMutation({
     mutationFn: () => pushDnsToCloudflare({ data: { domainId: id } }),
     onSuccess: (res: any) => {
-      if (res.error) toast.error(res.error);
+      if (res?.error) toast.error(res.error);
       else toast.success("DNS records pushed successfully");
       qc.invalidateQueries({ queryKey: ["domain", id] });
     },
@@ -64,7 +64,7 @@ function DomainDetailsPage() {
   const provisionMutation = useMutation({
     mutationFn: () => provisionServer({ data: { domainId: id } }),
     onSuccess: (res: any) => {
-      if (res.error) toast.error(res.error);
+      if (res?.error) toast.error(res.error);
       else toast.success("Server provisioned successfully");
       qc.invalidateQueries({ queryKey: ["domain", id] });
     },
@@ -73,7 +73,7 @@ function DomainDetailsPage() {
   const setupMailcowMutation = useMutation({
     mutationFn: () => setupMailcowDomain({ data: { domainId: id } }),
     onSuccess: (res: any) => {
-      if (res.error) toast.error(res.error);
+      if (res?.error) toast.error(res.error);
       else toast.success("Mailcow domain and mailboxes created");
     },
   });
@@ -81,7 +81,7 @@ function DomainDetailsPage() {
   const syncDkimMutation = useMutation({
     mutationFn: () => fetchDkimAndSync({ data: { domainId: id } }),
     onSuccess: (res: any) => {
-      if (res.error) toast.error(res.error);
+      if (res?.error) toast.error(res.error);
       else toast.success("DKIM keys synced to Cloudflare");
     },
   });
@@ -91,20 +91,32 @@ function DomainDetailsPage() {
       toast.info("Starting full automation sequence...");
 
       toast.loading("Step 1: Pushing DNS...", { id: "auto" });
-      await pushDnsMutation.mutateAsync();
+      const resDns = await pushDnsMutation.mutateAsync();
+      if (resDns?.error) {
+        throw new Error(resDns.error);
+      }
 
       toast.loading("Step 2: Provisioning VPS...", { id: "auto" });
-      await provisionMutation.mutateAsync();
+      const resProv = await provisionMutation.mutateAsync();
+      if (resProv?.error) {
+        throw new Error(resProv.error);
+      }
 
       toast.loading("Step 3: Setting up Mailcow...", { id: "auto" });
-      await setupMailcowMutation.mutateAsync();
+      const resMail = await setupMailcowMutation.mutateAsync();
+      if (resMail?.error) {
+        throw new Error(resMail.error);
+      }
 
       toast.loading("Step 4: Syncing DKIM...", { id: "auto" });
-      await syncDkimMutation.mutateAsync();
+      const resDkim = await syncDkimMutation.mutateAsync();
+      if (resDkim?.error) {
+        throw new Error(resDkim.error);
+      }
 
       toast.success("Full automation completed successfully!", { id: "auto" });
-    } catch (err) {
-      toast.error("Automation failed: " + String(err), { id: "auto" });
+    } catch (err: any) {
+      toast.error("Automation failed: " + (err.message || String(err)), { id: "auto" });
     }
   };
 
