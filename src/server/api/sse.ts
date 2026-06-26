@@ -91,11 +91,12 @@ export default defineEventHandler(async (event) => {
 
   const channel = `server-log:${domainId}`;
 
-  // Send initial connection message
-  res.write(`data: ${JSON.stringify({ msg: "Connected to terminal stream", status: domain?.status })}\n\n`);
+  // Send initial connection message — only relay status if it's an active provisioning state
+  const activeStatus = domain?.status === "provisioning" || domain?.status === "configuring" ? domain.status : undefined;
+  res.write(`data: ${JSON.stringify({ msg: "Connected to terminal stream", ...(activeStatus ? { status: activeStatus } : {}) })}\n\n`);
 
-  // Send existing terminal logs if any
-  if (domain && domain.terminalLogs) {
+  // Send existing terminal logs if any (only for active or completed runs, not failed retries)
+  if (domain && domain.terminalLogs && domain.status !== "failed") {
     res.write(`data: ${JSON.stringify({ chunk: domain.terminalLogs })}\n\n`);
   }
 
