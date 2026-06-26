@@ -49,6 +49,10 @@ function SettingsPage() {
   const verifyMutation = useMutation({
     mutationFn: (token: string) => verifyCfToken({ data: { token } }),
     onSuccess: (res) => {
+      if (!res) {
+        toast.error("Verification failed: no response from server");
+        return;
+      }
       setVerifyStatus(res);
       if (res.valid) toast.success("Token is valid");
       else toast.error(res.error || "Invalid token");
@@ -59,6 +63,10 @@ function SettingsPage() {
   const syncMutation = useMutation({
     mutationFn: () => syncCfZones(),
     onSuccess: (res) => {
+      if (!res) {
+        toast.error("Sync failed: no response from server");
+        return;
+      }
       if (res.error) toast.error(res.error);
       else toast.success(`Synced ${res.count} zones`);
     },
