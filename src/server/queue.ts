@@ -145,9 +145,23 @@ async function executeProvisionJob(
 ) {
   const db = getDb();
   let accumulatedLogs = "";
+
+  // Flush accumulated logs to DB so SSE reconnects can show them
+  const flushLogsToDB = async () => {
+    await db
+      .update(domains)
+      .set({ terminalLogs: accumulatedLogs })
+      .where(eq(domains.id, domainId))
+      .catch((err: any) => console.error("Failed to flush logs to DB:", err));
+  };
+
   const log = (msg: string, status?: string) => {
     accumulatedLogs += msg;
     if (logFn) logFn(msg, status);
+    // Flush to DB every ~2KB so reconnects see fresh data
+    if (accumulatedLogs.length % 2048 < msg.length) {
+      flushLogsToDB().catch(() => {});
+    }
   };
 
   // Clear existing terminal logs in database
@@ -169,7 +183,7 @@ async function executeProvisionJob(
 
   try {
     await ssh.connect({ timeoutMs: 30000, maxRetries: 5 });
-    log("Connected successfully. Preparing environment and system packages...", "Updating System");
+    log("Connected successfully. Preparing environment and system packages...\n", "Updating System");
 
     const mailcowHostname = `mail.${domainName}`;
 
@@ -189,16 +203,12 @@ async function executeProvisionJob(
       '',
       'echo "=== Installing Docker ==="',
       'if ! command -v docker >/dev/null 2>&1; then',
-      '  DOCKER_INSTALLER=""',
-      '  if [ -x "$(which curl 2>/dev/null)" ]; then',
-      '    DOCKER_INSTALLER="curl"',
-      '  elif [ -x "$(which wget 2>/dev/null)" ]; then',
-      '    DOCKER_INSTALLER="wget"',
-      '  fi',
-      '  if [ "$DOCKER_INSTALLER" = "curl" ]; then',
-      '    curl -fsSL https://get.docker.com -o /tmp/get-docker.sh',
-      '  elif [ "$DOCKER_INSTALLER" = "wget" ]; then',
-      '    wget -qO /tmp/get-docker.sh https://get.docker.com',
+      '  CURL_BIN=$(command -v curl 2>/dev/null || echo "")',
+      '  WGET_BIN=$(command -v wget 2>/dev/null || echo "")',
+      '  if [ -n "$CURL_BIN" ]; then',
+      '    "$CURL_BIN" -fsSL https://get.docker.com -o /tmp/get-docker.sh',
+      '  elif [ -n "$WGET_BIN" ]; then',
+      '    "$WGET_BIN" -qO /tmp/get-docker.sh https://get.docker.com',
       '  else',
       '    echo "FATAL: curl and wget both unavailable, cannot install Docker."',
       '    exit 1',

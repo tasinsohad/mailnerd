@@ -95,8 +95,9 @@ export default defineEventHandler(async (event) => {
   const activeStatus = domain?.status === "provisioning" || domain?.status === "configuring" ? domain.status : undefined;
   res.write(`data: ${JSON.stringify({ msg: "Connected to terminal stream", ...(activeStatus ? { status: activeStatus } : {}) })}\n\n`);
 
-  // Send existing terminal logs if any (only for active or completed runs, not failed retries)
-  if (domain && domain.terminalLogs && domain.status !== "failed") {
+  // Send existing terminal logs so late-connecting clients (page refresh, retry) see full history
+  // Only skip for 'failed' status when there are no logs (clean retry scenario)
+  if (domain && domain.terminalLogs) {
     res.write(`data: ${JSON.stringify({ chunk: domain.terminalLogs })}\n\n`);
   }
 
