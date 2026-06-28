@@ -8,6 +8,7 @@ import {
   updateDomain,
 } from "@/server/domains";
 import { testSshConnection, provisionServer } from "@/server/provisioning";
+import { setupMailcowDomain } from "@/server/mailcow";
 import {
   Globe,
   FolderGit2,
@@ -21,6 +22,7 @@ import {
   Terminal,
   Trash2,
   Download,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,12 +40,22 @@ function JobPipelinePage() {
   const { id } = Route.useParams();
   const [step, setStep] = useState<Step>("VIEW");
   const [autoStepped, setAutoStepped] = useState(false);
+  const [batchBusy, setBatchBusy] = useState(false);
 
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { data, isLoading } = useQuery({
     queryKey: ["batch", id],
     queryFn: () => getBatchDetails({ data: { id } }),
+    // Live-poll every 3s while any domain is still being provisioned/configured, so the
+    // batch view reflects the queue (3 at a time, rest queued) without a manual refresh.
+    refetchInterval: (query) => {
+      const d = query.state.data as { domains?: { status?: string }[] } | undefined;
+      const inProgress = (d?.domains ?? []).some((x) =>
+        ["queued", "provisioning", "configuring"].includes(x.status ?? ""),
+      );
+      return inProgress ? 3000 : false;
+    },
   });
 
   const deleteMutation = useMutation({
@@ -66,28 +78,67 @@ function JobPipelinePage() {
   };
 
   const handleExportCsv = () => {
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += "Domain,Subdomain,Email,Full Name,Server IP,Webmail URL,Mailcow Hostname,Mailcow API URL\n";
+    // Wrap a field in quotes if it contains a comma, quote, or newline (RFC 4180).
+    const esc = (v: any) => {
+      const s = String(v ?? "");
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
 
+    const headers = [
+      "Name",
+      "Email",
+      "Password",
+      "IMAP Server",
+      "IMAP Port",
+      "SMTP Server",
+      "SMTP Port",
+      "Daily Limit",
+      "SMTP Secure",
+      "IMAP Secure",
+    ];
+
+    const rows: string[][] = [];
     domains.forEach((d: any) => {
-      const dInboxes = inboxes.filter((i: any) => i.domainId === d.id);
-      dInboxes.forEach((ib: any) => {
-        const name = ib.fullName || ib.personName || `${ib.firstName || ""} ${ib.lastName || ""}`.trim() || "";
-        const ip = d.ipAddress || "";
-        const mailcowHost = d.mailcowHostname || `mail.${d.name}`;
-        const webmailUrl = `https://${mailcowHost}`;
-        const apiUrl = `https://${mailcowHost}/api/v1/`;
-        csvContent += `${d.name},${ib.subdomainFqdn},${ib.email},${name},${ip},${webmailUrl},${mailcowHost},${apiUrl}\n`;
-      });
+      const mailServer = d.mailcowHostname || `mail.${d.name}`;
+      inboxes
+        .filter((i: any) => i.domainId === d.id && i.password) // only created mailboxes
+        .forEach((ib: any) => {
+          const name =
+            ib.fullName ||
+            ib.personName ||
+            [ib.firstName, ib.lastName].filter(Boolean).join(" ") ||
+            ib.localPart ||
+            "";
+          rows.push([
+            name,
+            ib.email,
+            ib.password || "",
+            mailServer, // IMAP Server
+            "993", // IMAP Port
+            mailServer, // SMTP Server
+            "587", // SMTP Port (STARTTLS)
+            "15", // Daily Limit
+            "TLS", // SMTP Secure (STARTTLS on 587)
+            "SSL", // IMAP Secure (implicit TLS on 993)
+          ]);
+        });
     });
 
-    const encodedUri = encodeURI(csvContent);
+    if (!rows.length) {
+      alert("No created mailboxes to export yet. Create the mailboxes first.");
+      return;
+    }
+
+    const csvContent = [headers, ...rows].map((r) => r.map(esc).join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", url);
     link.setAttribute("download", `job_${batch.name}_export.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -96,6 +147,69 @@ function JobPipelinePage() {
   const domains = (data as any)?.domains ?? [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const inboxes = (data as any)?.inboxes ?? [];
+
+  // Batch: delete & recreate mailboxes (clean slate) across every domain in the job.
+  const handleBatchRecreateMailboxes = async () => {
+    if (!domains.length) return;
+    if (
+      !confirm(
+        `Recreate mailboxes for ALL ${domains.length} domains (clean slate)?\n\nThis DELETES every mailbox in Mailcow and recreates them with NEW passwords. Old passwords will stop working. Mail domains and DKIM are kept.\n\nContinue?`,
+      )
+    )
+      return;
+    setBatchBusy(true);
+    let created = 0;
+    let failed = 0;
+    for (const d of domains) {
+      if (!d.mailcowHostname) continue; // server not provisioned yet
+      try {
+        const res: any = await setupMailcowDomain({ data: { domainId: d.id, recreate: true } });
+        if (res?.summary) {
+          created += res.summary.created;
+          failed += res.summary.failed;
+        } else if (res?.error) {
+          failed += 1;
+        }
+      } catch {
+        failed += 1;
+      }
+    }
+    setBatchBusy(false);
+    qc.invalidateQueries({ queryKey: ["batch", id] });
+    if (failed > 0)
+      toast.error(`Recreated ${created} mailboxes; ${failed} failed. Open a domain to see why.`, {
+        duration: 10000,
+      });
+    else toast.success(`Recreated ${created} mailboxes across ${domains.length} domains.`);
+  };
+
+  // Batch: wipe Docker/Mailcow and re-provision every server from scratch.
+  const handleBatchWipeReprovision = async () => {
+    if (!domains.length) return;
+    if (
+      !confirm(
+        `Wipe & re-provision ALL ${domains.length} servers from scratch?\n\nThis reinstalls Docker/Mailcow on each server (20-40 min each) and regenerates everything. Continue?`,
+      )
+    )
+      return;
+    setBatchBusy(true);
+    let startedOk = 0;
+    let startFailed = 0;
+    for (const d of domains) {
+      try {
+        const res: any = await provisionServer({ data: { domainId: d.id } });
+        if (res?.error) startFailed += 1;
+        else startedOk += 1;
+      } catch {
+        startFailed += 1;
+      }
+    }
+    setBatchBusy(false);
+    qc.invalidateQueries({ queryKey: ["batch", id] });
+    toast[startFailed ? "error" : "success"](
+      `Re-provision started for ${startedOk} server(s)${startFailed ? `, ${startFailed} failed to start` : ""}. Open "Server Setup" to watch progress.`,
+    );
+  };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const records = (data as any)?.records ?? [];
 
@@ -175,6 +289,30 @@ function JobPipelinePage() {
             >
               <Download className="h-4 w-4 mr-2" />
               Export CSV
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleBatchRecreateMailboxes}
+              disabled={batchBusy}
+              className="h-11 px-4 rounded-2xl border-orange-200 text-orange-600 hover:bg-orange-50"
+              title="Delete & recreate every mailbox in this job with fresh passwords"
+            >
+              {batchBusy ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-2" />
+              )}
+              Recreate Mailboxes
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleBatchWipeReprovision}
+              disabled={batchBusy}
+              className="h-11 px-4 rounded-2xl border-red-200 text-red-600 hover:bg-red-50"
+              title="Wipe Docker/Mailcow and re-provision every server in this job from scratch"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Wipe &amp; Re-provision
             </Button>
             <Button
               variant="outline"
@@ -651,7 +789,12 @@ function TerminalWindow({ domain }: { domain: any }) {
   });
   const [startTrigger, setStartTrigger] = useState<number>(0);
 
+  const sseRef = useRef<(() => void) | null>(null);
+
   const connectSse = () => {
+    if (sseRef.current) {
+      sseRef.current();
+    }
     const eventSource = new EventSource(`/api/sse?domainId=${domain.id}`);
     eventSource.onmessage = (event) => {
       const parsed = JSON.parse(event.data);
@@ -673,13 +816,24 @@ function TerminalWindow({ domain }: { domain: any }) {
       }
     };
     eventSource.onerror = () => eventSource.close();
-    return () => eventSource.close();
+    sseRef.current = () => eventSource.close();
+    return sseRef.current;
   };
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (sseRef.current) sseRef.current();
+    };
+  }, []);
+
   // Auto-connect SSE for in-progress domains on first mount (no new job needed)
+  // Auto-start for pending domains
   useEffect(() => {
     if (domain.status === "provisioning" || domain.status === "configuring") {
       return connectSse();
+    } else if (domain.status === "pending" || !domain.status) {
+      setStartTrigger(1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
