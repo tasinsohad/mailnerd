@@ -69,6 +69,24 @@ export async function ensureMailDomains(
 ): Promise<{ existingDomains: Set<string>; results: MailcowResultRow[] }> {
   const mc = (path: string, body?: unknown) =>
     mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, path, body);
+
+  // Fail fast if the Mailcow API isn't reachable. A Cloudflare-PROXIED mail host (orange
+  // cloud) intercepts the API and returns HTML / hangs, which would otherwise make us hang
+  // on dozens of add/* calls. The mail host MUST be DNS-only. A valid empty Mailcow returns
+  // {} (object) or [] with HTTP 200; HTML (string) or non-200/timeout means unreachable.
+  const probe = await mailcowRequest(
+    domain.mailcowHostname,
+    domain.mailcowApiKey,
+    "get/domain/all",
+    undefined,
+    { timeoutMs: 12000 },
+  ).catch((e) => ({ ok: false, status: 0, json: String(e) }));
+  if (probe.status !== 200 || typeof probe.json === "string") {
+    throw new Error(
+      `Mailcow API not reachable at ${domain.mailcowHostname} (status ${probe.status}). ` +
+        `Is the mail host Cloudflare-proxied? mail.<domain> must be DNS-only (grey cloud).`,
+    );
+  }
   const inboxes = await db.select().from(plannedInboxes).where(eq(plannedInboxes.domainId, domain.id));
   const uniqueSubdomains = Array.from(new Set(inboxes.map((i: any) => String(i.subdomainFqdn))));
   const { DOMAIN_MAX_MAILBOXES, DOMAIN_QUOTA_MB, MAILBOX_MAX_QUOTA_MB, MAILBOX_QUOTA_MB } = QUOTA;

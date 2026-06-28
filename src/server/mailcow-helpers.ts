@@ -47,9 +47,12 @@ export function mailcowRequest(
   apiKey: string,
   path: string,
   body?: unknown,
+  opts?: { timeoutMs?: number },
 ): Promise<{ ok: boolean; status: number; json: unknown }> {
+  const timeoutMs = opts?.timeoutMs ?? 20000;
   return new Promise((resolve, reject) => {
     const payload = body !== undefined ? JSON.stringify(body) : undefined;
+    let settled = false;
     const req = https.request(
       {
         host,
@@ -62,12 +65,15 @@ export function mailcowRequest(
           ...(payload ? { "Content-Length": Buffer.byteLength(payload) } : {}),
         },
         rejectUnauthorized: false, // Mailcow self-signed cert — own server
-        timeout: 30000,
+        timeout: timeoutMs,
       },
       (res) => {
         let data = "";
         res.on("data", (chunk) => (data += chunk));
         res.on("end", () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(hardTimer);
           let json: unknown;
           try {
             json = JSON.parse(data);
@@ -79,7 +85,19 @@ export function mailcowRequest(
         });
       },
     );
-    req.on("error", reject);
+    // Hard backstop: a Cloudflare-proxied host can keep a socket alive so the inactivity
+    // `timeout` never fires. This timer destroys the request no matter what.
+    const hardTimer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      req.destroy(new Error(`Mailcow request to ${host} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    req.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardTimer);
+      reject(err);
+    });
     req.on("timeout", () => req.destroy(new Error("Mailcow request timed out")));
     if (payload) req.write(payload);
     req.end();
