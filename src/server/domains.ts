@@ -13,8 +13,10 @@ import {
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { planDomain, randInt, DomainPlan, generateDnsRecords } from "@/lib/planning";
 import dns from "dns/promises";
+import { cfTxtContent } from "./mailcow-helpers";
 
-
+// Re-exported for any existing importers of this module.
+export { cfTxtContent };
 
 // Validation schemas
 const validateDomainsSchema = z.object({
@@ -492,7 +494,7 @@ export const pushDnsToCloudflare = createServerFn({ method: "POST" })
             body: JSON.stringify({
               type: record.type,
               name,
-              content: record.content,
+              content: cfTxtContent(record.type, record.content),
               ttl: record.ttl || 1,
               priority: record.priority,
               proxied: record.proxied || false,
@@ -614,7 +616,7 @@ export const batchPushDnsToCloudflare = createServerFn({ method: "POST" })
               body: JSON.stringify({
                 type: record.type,
                 name,
-                content: record.content,
+                content: cfTxtContent(record.type, record.content),
                 ttl: record.ttl || 1,
                 priority: record.priority,
                 proxied: record.proxied || false,
