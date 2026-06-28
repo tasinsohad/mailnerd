@@ -15,7 +15,7 @@ import { planDomain, randInt, DomainPlan, generateDnsRecords } from "@/lib/plann
 import dns from "dns/promises";
 import { cfTxtContent } from "./mailcow-helpers";
 import { resolveAndSaveCfZoneId } from "./cloudflare";
-import { pushDns as pipelinePushDns } from "./pipeline";
+import { pushDns as pipelinePushDns, unproxyDns } from "./pipeline";
 
 // Re-exported for any existing importers of these modules.
 export { cfTxtContent };
@@ -385,6 +385,29 @@ export const pushDnsToCloudflare = createServerFn({ method: "POST" })
     try {
       const { results } = await pipelinePushDns(db, domain, userId);
       return { results };
+    } catch (err) {
+      return { error: String(err) };
+    }
+  });
+
+// Fix Cloudflare DNS for a domain: remove the proxied/duplicate `mail` A record and
+// un-proxy the rest, so the Mailcow API/mail host (mail.<domain>) is reachable. Safe to
+// run any time; also runs automatically during provisioning / wipe & re-provision.
+export const repairDomainDns = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .inputValidator((d: unknown) => z.object({ domainId: z.string() }).parse(d))
+  .handler(async ({ data, context }) => {
+    const { db, userId } = (context as any) as { db: any; userId: string };
+    if (!db) return { error: "Database not connected" };
+
+    const domain = await db.query.domains.findFirst({
+      where: and(eq(domains.id, data.domainId), eq(domains.userId, userId)),
+    });
+    if (!domain) return { error: "Domain not found" };
+
+    try {
+      const r = await unproxyDns(db, domain, userId);
+      return { success: true, ...r };
     } catch (err) {
       return { error: String(err) };
     }

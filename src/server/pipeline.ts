@@ -389,3 +389,56 @@ export async function syncDkim(
   }
   return { results };
 }
+
+// --- Repair: ensure Cloudflare DNS won't break the Mailcow API/mail. Removes any
+// duplicate/placeholder/proxied `mail.<domain>` A record (the collision that intermittently
+// broke the API), ensures a single DNS-only mail A -> server IP, and un-proxies the other
+// A/CNAME records (mail subdomains never need Cloudflare proxying). Idempotent. ---
+export async function unproxyDns(
+  db: Db,
+  domain: Domain,
+  userId: string,
+): Promise<{ unproxied: number; removed: number; ensuredMailHost: boolean }> {
+  const cfZoneId = await resolveAndSaveCfZoneId(db, domain, userId);
+  if (!cfZoneId) throw new Error("Cloudflare zone id could not be resolved");
+  const secrets = await db.query.userSecrets.findFirst({ where: eq(userSecrets.userId, userId) });
+  if (!secrets?.cfApiToken) throw new Error("Cloudflare token missing");
+  const headers = { Authorization: `Bearer ${secrets.cfApiToken}`, "Content-Type": "application/json" };
+  const base = `https://api.cloudflare.com/client/v4/zones/${cfZoneId}/dns_records`;
+  const serverIp: string | undefined = domain.ipAddress || undefined;
+  const mailHost: string = domain.mailcowHostname || `mail.${domain.name}`;
+
+  const listJson = (await (await fetch(`${base}?per_page=500`, { headers })).json()) as any;
+  if (!listJson.success) throw new Error("Failed to list Cloudflare records: " + JSON.stringify(listJson.errors));
+
+  let unproxied = 0;
+  let removed = 0;
+  let ensuredMailHost = false;
+
+  // 1. Fix the mail host: delete any A record for it that's proxied or not the real server IP.
+  const mailARecords = listJson.result.filter((r: any) => r.type === "A" && r.name === mailHost);
+  for (const r of mailARecords) {
+    if (r.proxied || (serverIp && r.content !== serverIp)) {
+      await fetch(`${base}/${r.id}`, { method: "DELETE", headers });
+      removed++;
+    }
+  }
+  // 2. Ensure exactly one DNS-only mail A -> server IP.
+  if (serverIp && !mailARecords.some((r: any) => !r.proxied && r.content === serverIp)) {
+    await fetch(base, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ type: "A", name: mailHost, content: serverIp, ttl: 1, proxied: false }),
+    });
+    ensuredMailHost = true;
+  }
+  // 3. Un-proxy every other proxied A/CNAME record.
+  for (const r of listJson.result) {
+    if ((r.type === "A" || r.type === "CNAME") && r.proxied && r.name !== mailHost) {
+      await fetch(`${base}/${r.id}`, { method: "PATCH", headers, body: JSON.stringify({ proxied: false }) });
+      unproxied++;
+      await new Promise((res) => setTimeout(res, 100));
+    }
+  }
+  return { unproxied, removed, ensuredMailHost };
+}

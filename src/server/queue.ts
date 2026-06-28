@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { SSHManager } from "../lib/ssh";
 import { decrypt } from "../lib/encryption";
 import { jobEvents } from "./events";
-import { ensureMailDomains, createMailboxes, syncDkim } from "./pipeline";
+import { ensureMailDomains, createMailboxes, syncDkim, unproxyDns } from "./pipeline";
 import crypto from "crypto";
 
 // Try to decrypt credentials, falling back to plain text if not encrypted
@@ -225,6 +225,19 @@ async function executeProvisionJob(
   try {
     await ssh.connect({ timeoutMs: 30000, maxRetries: 5 });
     log("Connected successfully. Preparing environment and system packages...\n", "Updating System");
+
+    // Self-heal Cloudflare DNS early (guarded) so it has time to propagate during the long
+    // provision: remove any proxied/duplicate `mail` A record and un-proxy the rest, so the
+    // Mailcow API at mail.<domain> is reachable (a proxied mail host breaks it).
+    try {
+      const dnsDomain = await db.query.domains.findFirst({ where: eq(domains.id, domainId) });
+      if (dnsDomain?.userId) {
+        const r = await unproxyDns(db, dnsDomain, dnsDomain.userId);
+        log(`DNS check: un-proxied ${r.unproxied} record(s), removed ${r.removed} bad mail record(s).\n`, "Updating System");
+      }
+    } catch (dnsErr: any) {
+      log(`DNS un-proxy step skipped: ${dnsErr.message}\n`, "Updating System");
+    }
 
     const mailcowHostname = `mail.${domainName}`;
 
