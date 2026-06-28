@@ -30,8 +30,10 @@ const FORMAT_WEIGHTS: Record<LocalFormat, number> = {
   firstl: 10,
 };
 
+// NOTE: never include `mail` (or other reserved names) here — they collide with the mail
+// server host (mail.<domain>) and autodiscover/autoconfig records, creating a duplicate
+// A record that breaks the Mailcow API/mail. See RESERVED_PREFIXES below.
 const PREFIX_WEIGHTS: Record<string, number> = {
-  mail: 40,
   web: 35,
   app: 25,
   api: 20,
@@ -296,12 +298,26 @@ function selectWeightedPrefix(availablePrefixes: string[]): string {
 }
 
 /* ---------- main planner ---------- */
+// Subdomain prefixes that must NEVER be used as mailbox subdomains because they collide
+// with the mail server host / autodiscovery records and break the Mailcow API and mail.
+const RESERVED_PREFIXES = new Set([
+  "mail",
+  "autodiscover",
+  "autoconfig",
+  "www",
+  "dkim",
+  "_dmarc",
+  "@",
+]);
+
 export function planDomain(domain: string, input: PlanInput): DomainPlan {
-  const { totalInboxes, prefixes, names } = input;
+  const { totalInboxes, names } = input;
+  // Strip reserved names so `mail` (etc.) can never become a sending subdomain.
+  const prefixes = input.prefixes.filter((p) => !RESERVED_PREFIXES.has(p.toLowerCase().trim()));
   if (totalInboxes < 1) {
     return { domain, totalInboxes: 0, subdomainCount: 0, subdomainDistribution: {}, inboxes: [] };
   }
-  if (prefixes.length === 0) throw new Error("No subdomain prefixes provided");
+  if (prefixes.length === 0) throw new Error("No usable subdomain prefixes provided (after removing reserved names)");
   if (names.length === 0) throw new Error("No names provided");
 
   const minAllowed = input.minSubdomains ?? 1;
