@@ -3,14 +3,16 @@
 // 20-minute Mailcow image pull). Both the BullMQ worker and the manual per-step buttons
 // call these same functions, so there is exactly one code path.
 
-import { eq } from "drizzle-orm";
-import { plannedInboxes } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
+import { plannedInboxes, dnsRecords, userSecrets } from "@/lib/db/schema";
 import {
   mailcowRequest,
   parseMailcowResult,
   generateMailboxPassword,
+  cfTxtContent,
   QUOTA,
 } from "./mailcow-helpers";
+import { resolveAndSaveCfZoneId } from "./cloudflare";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = any;
@@ -240,4 +242,132 @@ export async function verifyMailboxes(db: Db, domain: Domain): Promise<{ total: 
     await db.update(plannedInboxes).set({ status: ok ? "active" : "failed" }).where(eq(plannedInboxes.id, ib.id));
   }
   return { total: inboxes.length, active };
+}
+
+// --- Step: push the domain's planned DNS records to Cloudflare. Idempotent: records
+// already marked active are skipped. TXT content is quoted to avoid Cloudflare warnings. ---
+export async function pushDns(
+  db: Db,
+  domain: Domain,
+  userId: string,
+): Promise<{ pushed: number; failed: number; results: { id: string; name: string; success: boolean; error?: string }[] }> {
+  const cfZoneId = await resolveAndSaveCfZoneId(db, domain, userId);
+  if (!cfZoneId) throw new Error("Cloudflare zone id could not be resolved");
+  const secrets = await db.query.userSecrets.findFirst({ where: eq(userSecrets.userId, userId) });
+  if (!secrets?.cfApiToken) throw new Error("Cloudflare token missing");
+
+  const records = await db.select().from(dnsRecords).where(eq(dnsRecords.domainId, domain.id));
+  const results: { id: string; name: string; success: boolean; error?: string }[] = [];
+  let pushed = 0;
+  let failed = 0;
+
+  for (const record of records) {
+    if (record.status === "active") continue;
+    const name = record.name === "@" ? domain.name : `${record.name}.${domain.name}`;
+    try {
+      const res = await fetch(`https://api.cloudflare.com/client/v4/zones/${cfZoneId}/dns_records`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${secrets.cfApiToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: record.type,
+          name,
+          content: cfTxtContent(record.type, record.content),
+          ttl: record.ttl || 1,
+          priority: record.priority,
+          proxied: record.proxied || false,
+        }),
+      });
+      const json = (await res.json()) as { success: boolean; result?: { id: string }; errors?: { message: string }[] };
+      if (json.success) {
+        await db
+          .update(dnsRecords)
+          .set({ cfRecordId: json.result!.id, status: "active", lastError: null })
+          .where(eq(dnsRecords.id, record.id));
+        results.push({ id: record.id, name: record.name, success: true });
+        pushed++;
+      } else {
+        const errorMsg = json.errors?.[0]?.message || "Unknown Cloudflare error";
+        await db.update(dnsRecords).set({ lastError: errorMsg }).where(eq(dnsRecords.id, record.id));
+        results.push({ id: record.id, name: record.name, success: false, error: errorMsg });
+        failed++;
+      }
+    } catch (err) {
+      const errorMsg = String(err);
+      await db.update(dnsRecords).set({ lastError: errorMsg }).where(eq(dnsRecords.id, record.id));
+      results.push({ id: record.id, name: record.name, success: false, error: errorMsg });
+      failed++;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return { pushed, failed, results };
+}
+
+// --- Step: fetch each domain/subdomain's DKIM key from Mailcow and upsert the TXT record
+// to Cloudflare. Idempotent: updates the existing record by cfRecordId, else creates it. ---
+export async function syncDkim(
+  db: Db,
+  domain: Domain,
+  userId: string,
+): Promise<{ results: { name: string; success: boolean; error?: string }[] }> {
+  const cfZoneId = await resolveAndSaveCfZoneId(db, domain, userId);
+  if (!cfZoneId) throw new Error("Cloudflare zone id could not be resolved");
+  const secrets = await db.query.userSecrets.findFirst({ where: eq(userSecrets.userId, userId) });
+  if (!secrets?.cfApiToken) throw new Error("Cloudflare token missing");
+
+  const inboxes = await db.select().from(plannedInboxes).where(eq(plannedInboxes.domainId, domain.id));
+  const uniqueSubdomains = [domain.name, ...Array.from(new Set(inboxes.map((i: any) => i.subdomainFqdn)))];
+  const results: { name: string; success: boolean; error?: string }[] = [];
+
+  for (const sub of uniqueSubdomains) {
+    try {
+      const { json } = await mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, `get/dkim/${sub}`);
+      const dkimPublic = (json as any)?.dkim_public;
+      if (!dkimPublic) {
+        results.push({ name: sub, success: false, error: "DKIM not found in Mailcow" });
+        continue;
+      }
+      const dkimKey = String(dkimPublic).replace(/(\r\n|\n|\r)/gm, "");
+      const recName = sub === domain.name ? "dkim._domainkey" : `dkim._domainkey.${sub.split(".")[0]}`;
+      const fullRecName = recName === "@" ? domain.name : `${recName}.${domain.name}`;
+      const recordContent = `v=DKIM1;k=rsa;t=s;s=email;p=${dkimKey}`;
+
+      const dnsRec = await db.query.dnsRecords.findFirst({
+        where: and(
+          eq(dnsRecords.domainId, domain.id),
+          eq(dnsRecords.type, "TXT"),
+          eq(dnsRecords.name, recName),
+        ),
+      });
+
+      let cfRes;
+      let isNew = false;
+      const body = JSON.stringify({ type: "TXT", name: fullRecName, content: cfTxtContent("TXT", recordContent), ttl: 1 });
+      const headers = { Authorization: `Bearer ${secrets.cfApiToken}`, "Content-Type": "application/json" };
+      if (dnsRec?.cfRecordId) {
+        cfRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${cfZoneId}/dns_records/${dnsRec.cfRecordId}`, { method: "PUT", headers, body });
+      } else {
+        isNew = true;
+        cfRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${cfZoneId}/dns_records`, { method: "POST", headers, body });
+      }
+      const cfJson = (await cfRes.json()) as any;
+      if (cfJson.success && isNew) {
+        await db.insert(dnsRecords).values({
+          userId,
+          domainId: domain.id,
+          type: "TXT",
+          name: recName,
+          content: recordContent,
+          ttl: 1,
+          cfRecordId: cfJson.result.id,
+          status: "active",
+        });
+      } else if (cfJson.success && dnsRec) {
+        await db.update(dnsRecords).set({ content: recordContent }).where(eq(dnsRecords.id, dnsRec.id));
+      }
+      results.push({ name: sub, success: cfJson.success, error: cfJson.errors?.[0]?.message });
+    } catch (err) {
+      results.push({ name: sub, success: false, error: String(err) });
+    }
+  }
+  return { results };
 }

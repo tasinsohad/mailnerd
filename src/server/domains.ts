@@ -14,9 +14,12 @@ import { eq, and, desc, inArray } from "drizzle-orm";
 import { planDomain, randInt, DomainPlan, generateDnsRecords } from "@/lib/planning";
 import dns from "dns/promises";
 import { cfTxtContent } from "./mailcow-helpers";
+import { resolveAndSaveCfZoneId } from "./cloudflare";
+import { pushDns as pipelinePushDns } from "./pipeline";
 
-// Re-exported for any existing importers of this module.
+// Re-exported for any existing importers of these modules.
 export { cfTxtContent };
+export { resolveAndSaveCfZoneId };
 
 // Validation schemas
 const validateDomainsSchema = z.object({
@@ -323,92 +326,6 @@ export const addDomainsWizardAction = createServerFn({ method: "POST" })
     }
   });
 
-export async function resolveAndSaveCfZoneId(db: any, domain: any, userId: string): Promise<string | null> {
-  if (domain.cfZoneId) return domain.cfZoneId;
-
-  // 1. Try DB lookup in cloudflareZones
-  const matchedDbZone = await db.query.cloudflareZones.findFirst({
-    where: and(
-      eq(cloudflareZones.userId, userId),
-      eq(cloudflareZones.name, domain.name.toLowerCase())
-    )
-  });
-  if (matchedDbZone) {
-    await db
-      .update(domains)
-      .set({ cfZoneId: matchedDbZone.zoneId })
-      .where(eq(domains.id, domain.id));
-    return matchedDbZone.zoneId;
-  }
-
-  // 2. Try live Cloudflare API query
-  const secrets = await db.query.userSecrets.findFirst({
-    where: eq(userSecrets.userId, userId),
-  });
-  if (!secrets?.cfApiToken) return null;
-
-  try {
-    // Try querying zone by name directly: /zones?name=domainName
-    let url = `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(domain.name.toLowerCase())}`;
-    
-    // If account ID is present, try accounts/{accountId}/zones?name=domainName
-    if (secrets.cfAccountId) {
-      url = `https://api.cloudflare.com/client/v4/accounts/${secrets.cfAccountId}/zones?name=${encodeURIComponent(domain.name.toLowerCase())}`;
-    }
-
-    let res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${secrets.cfApiToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    let json = await res.json() as any;
-
-    // Fallback: If account-specific query fails/returns empty, try generic query
-    if ((!json.success || !json.result || json.result.length === 0) && secrets.cfAccountId) {
-      const fallbackUrl = `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(domain.name.toLowerCase())}`;
-      res = await fetch(fallbackUrl, {
-        headers: {
-          Authorization: `Bearer ${secrets.cfApiToken}`,
-          "Content-Type": "application/json",
-        },
-      });
-      json = await res.json() as any;
-    }
-
-    if (json.success && json.result && json.result.length > 0) {
-      const zoneId = json.result[0].id;
-      
-      // Save zone to cloudflare_zones cache
-      const existingZone = await db.query.cloudflareZones.findFirst({
-        where: and(
-          eq(cloudflareZones.userId, userId),
-          eq(cloudflareZones.zoneId, zoneId)
-        )
-      });
-      if (!existingZone) {
-        await db.insert(cloudflareZones).values({
-          userId,
-          zoneId: zoneId,
-          name: json.result[0].name,
-          status: json.result[0].status,
-        });
-      }
-
-      // Update domain cfZoneId
-      await db
-        .update(domains)
-        .set({ cfZoneId: zoneId })
-        .where(eq(domains.id, domain.id));
-
-      return zoneId;
-    }
-  } catch (err) {
-    console.error("Live Cloudflare API query failed:", err);
-  }
-
-  return null;
-}
 
 const getDomainDetailsSchema = z.object({
   id: z.string().uuid(),
@@ -465,74 +382,12 @@ export const pushDnsToCloudflare = createServerFn({ method: "POST" })
     });
     if (!domain) return { error: "Domain not found" };
 
-    // Automatically associate and populate the Cloudflare Zone ID if missing
-    const cfZoneId = await resolveAndSaveCfZoneId(db, domain, userId);
-    if (!cfZoneId) return { error: "Domain or Zone ID missing" };
-
-    const secrets = await db.query.userSecrets.findFirst({
-      where: eq(userSecrets.userId, userId),
-    });
-    if (!secrets?.cfApiToken) return { error: "Cloudflare token missing" };
-
-    const records = await db.select().from(dnsRecords).where(eq(dnsRecords.domainId, domain.id));
-    const results: { id: string; name: string; success: boolean; error?: string }[] = [];
-
-    for (const record of records) {
-      if (record.status === "active") continue;
-
-      const name = record.name === "@" ? domain.name : `${record.name}.${domain.name}`;
-
-      try {
-        const res = await fetch(
-          `https://api.cloudflare.com/client/v4/zones/${domain.cfZoneId}/dns_records`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${secrets.cfApiToken}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              type: record.type,
-              name,
-              content: cfTxtContent(record.type, record.content),
-              ttl: record.ttl || 1,
-              priority: record.priority,
-              proxied: record.proxied || false,
-            }),
-          },
-        );
-        const json = (await res.json()) as {
-          success: boolean;
-          result?: { id: string };
-          errors?: { message: string }[];
-        };
-        if (json.success) {
-          await db
-            .update(dnsRecords)
-            .set({ cfRecordId: json.result!.id, status: "active", lastError: null })
-            .where(eq(dnsRecords.id, record.id));
-          results.push({ id: record.id, name: record.name, success: true });
-        } else {
-          const errorMsg = json.errors?.[0]?.message || "Unknown Cloudflare error";
-          await db
-            .update(dnsRecords)
-            .set({ lastError: errorMsg })
-            .where(eq(dnsRecords.id, record.id));
-          results.push({ id: record.id, name: record.name, success: false, error: errorMsg });
-        }
-      } catch (err) {
-        const errorMsg = String(err);
-        await db
-          .update(dnsRecords)
-          .set({ lastError: errorMsg })
-          .where(eq(dnsRecords.id, record.id));
-        results.push({ id: record.id, name: record.name, success: false, error: errorMsg });
-      }
-
-      await new Promise((r) => setTimeout(r, 200));
+    try {
+      const { results } = await pipelinePushDns(db, domain, userId);
+      return { results };
+    } catch (err) {
+      return { error: String(err) };
     }
-
-    return { results };
   });
 
 const getBatchDetailsSchema = z.object({
