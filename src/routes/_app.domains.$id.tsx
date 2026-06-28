@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getDomainDetails, pushDnsToCloudflare, updateDomain } from "@/server/domains";
+import { getDomainDetails, pushDnsToCloudflare, updateDomain, repairDomainDns } from "@/server/domains";
 import { provisionServer } from "@/server/provisioning";
 import { setupMailcowDomain, fetchDkimAndSync } from "@/server/mailcow";
 import {
@@ -20,6 +20,8 @@ import {
   Eye,
   EyeOff,
   Terminal,
+  RefreshCw,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -120,6 +122,23 @@ function DomainDetailsPage() {
     },
   });
 
+  const repairDnsMutation = useMutation({
+    mutationFn: () => {
+      toast.loading("Fixing Cloudflare DNS (un-proxying mail records)...", { id: "repairdns" });
+      return repairDomainDns({ data: { domainId: id } });
+    },
+    onSuccess: (res: any) => {
+      if (res?.error) toast.error(res.error, { id: "repairdns" });
+      else
+        toast.success(
+          `DNS fixed: un-proxied ${res.unproxied}, removed ${res.removed} bad mail record(s). Allow ~1 min for DNS to propagate.`,
+          { id: "repairdns", duration: 10000 },
+        );
+      qc.invalidateQueries({ queryKey: ["domain", id] });
+    },
+    onError: (err: any) => toast.error(err.message, { id: "repairdns" }),
+  });
+
   const updateDomainMutation = useMutation({
     mutationFn: (args: { id: string; ipAddress: string; sshUser: string; sshPassword?: string }) =>
       updateDomain({ data: args }),
@@ -147,20 +166,87 @@ function DomainDetailsPage() {
     },
   });
 
+  // Report the ACTUAL outcome from Mailcow (verified against get/mailbox/all),
+  // not just "no top-level error". Surfaces real per-mailbox failures.
+  const reportMailcowResult = (res: any) => {
+    if (res?.error) {
+      toast.error(res.error, { id: "mailcow" });
+      return;
+    }
+    const s = res?.summary;
+    if (s && s.failed > 0) {
+      const firstErr = res.results?.find((r: any) => r.type === "mailbox" && !r.success)?.error;
+      toast.error(
+        `${s.created}/${s.total} mailboxes created. ${s.failed} failed${firstErr ? ` — ${firstErr}` : ""}`,
+        { id: "mailcow", duration: 10000 },
+      );
+    } else if (s) {
+      toast.success(`Verified ${s.created}/${s.total} mailboxes in Mailcow`, { id: "mailcow" });
+    } else {
+      toast.success("Mailbox setup finished", { id: "mailcow" });
+    }
+    qc.invalidateQueries({ queryKey: ["domain", id] });
+  };
+
   const setupMailcowMutation = useMutation({
-    mutationFn: () => setupMailcowDomain({ data: { domainId: id } }),
-    onSuccess: (res: any) => {
-      if (res?.error) toast.error(res.error);
-      else toast.success("Mailcow domain and mailboxes created");
+    mutationFn: () => {
+      toast.loading(`Creating ${plan?.totalInboxes || 0} mailboxes in Mailcow...`, { id: "mailcow" });
+      return setupMailcowDomain({ data: { domainId: id } });
+    },
+    onSuccess: reportMailcowResult,
+    onError: (err: any) => {
+      toast.error(err.message, { id: "mailcow" });
+    }
+  });
+
+  // Clean slate: delete the mailboxes in Mailcow and recreate them with fresh passwords.
+  const recreateMailboxesMutation = useMutation({
+    mutationFn: () => {
+      toast.loading(`Deleting & recreating mailboxes in Mailcow...`, { id: "mailcow" });
+      return setupMailcowDomain({ data: { domainId: id, recreate: true } });
+    },
+    onSuccess: reportMailcowResult,
+    onError: (err: any) => {
+      toast.error(err.message, { id: "mailcow" });
     },
   });
 
+  const handleRecreateMailboxes = () => {
+    if (
+      confirm(
+        "Recreate mailboxes (clean slate)?\n\nThis DELETES the existing mailboxes for this domain in Mailcow and recreates them with NEW passwords. Old passwords will stop working. The mail domain and DKIM are kept.\n\nContinue?",
+      )
+    ) {
+      recreateMailboxesMutation.mutate();
+    }
+  };
+
+  const handleWipeAndReprovision = () => {
+    if (
+      confirm(
+        "Wipe & re-provision EVERYTHING on this server?\n\nThis tears down Docker/Mailcow on the server, reinstalls from scratch, then re-runs DNS → provision → mailbox creation → DKIM. It takes 20-40 minutes and all current mailbox passwords will be regenerated.\n\nContinue?",
+      )
+    ) {
+      runFullAutomation();
+    }
+  };
+
   const syncDkimMutation = useMutation({
-    mutationFn: () => fetchDkimAndSync({ data: { domainId: id } }),
-    onSuccess: (res: any) => {
-      if (res?.error) toast.error(res.error);
-      else toast.success("DKIM keys synced to Cloudflare");
+    mutationFn: () => {
+      toast.loading(`Syncing DKIM keys to Cloudflare...`, { id: "dkim" });
+      return fetchDkimAndSync({ data: { domainId: id } });
     },
+    onSuccess: (res: any) => {
+      if (res?.error) {
+        toast.error(res.error, { id: "dkim" });
+      } else {
+        toast.success("DKIM keys synced to Cloudflare", { id: "dkim" });
+        qc.invalidateQueries({ queryKey: ["domain", id] });
+      }
+    },
+    onError: (err: any) => {
+      toast.error(err.message, { id: "dkim" });
+    }
   });
 
   const runFullAutomation = async () => {
@@ -217,6 +303,15 @@ function DomainDetailsPage() {
       if (resMail?.error) {
         throw new Error(resMail.error);
       }
+      // A run with no top-level error can still have rejected mailboxes — fail loudly.
+      if (resMail?.summary && resMail.summary.failed > 0) {
+        const firstErr = (resMail as any).results?.find(
+          (r: any) => r.type === "mailbox" && !r.success,
+        )?.error;
+        throw new Error(
+          `Only ${resMail.summary.created}/${resMail.summary.total} mailboxes were created${firstErr ? ` — ${firstErr}` : ""}`,
+        );
+      }
 
       toast.loading("Step 4: Syncing DKIM...", { id: "auto" });
       const resDkim = await syncDkimMutation.mutateAsync();
@@ -232,36 +327,50 @@ function DomainDetailsPage() {
 
   const exportCsv = () => {
     if (!inboxes.length) return;
+
+    // Mail server clients connect to (mailcow host), e.g. mail.example.com
+    const mailServer = domain.mailcowHostname || `mail.${domain.name}`;
+
+    // Only export mailboxes that were actually created (have a password) — these are
+    // the usable sending accounts to load into an outreach platform.
+    const usable = inboxes.filter((ib: any) => ib.password);
+    if (!usable.length) {
+      alert("No created mailboxes to export yet. Create the mailboxes first.");
+      return;
+    }
+
+    // Wrap a field in quotes if it contains a comma, quote, or newline (RFC 4180).
+    const esc = (v: any) => {
+      const s = String(v ?? "");
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+
     const headers = [
-      "Domain",
-      "Subdomain Prefix",
-      "Subdomain FQDN",
-      "Email Address",
-      "Local Part",
-      "Full Name",
-      "First Name",
-      "Last Name",
-      "Format",
+      "Name",
+      "Email",
       "Password",
-      "IP Address",
-      "SSH User",
+      "IMAP Server",
+      "IMAP Port",
+      "SMTP Server",
+      "SMTP Port",
+      "Daily Limit",
+      "SMTP Secure",
+      "IMAP Secure",
     ];
-    const rows = inboxes.map((ib: any) => [
-      domain.name,
-      ib.subdomainPrefix,
-      ib.subdomainFqdn,
+    const rows = usable.map((ib: any) => [
+      ib.fullName || [ib.firstName, ib.lastName].filter(Boolean).join(" ") || ib.localPart || "",
       ib.email,
-      ib.localPart,
-      ib.fullName || "",
-      ib.firstName || "",
-      ib.lastName || "",
-      ib.format,
       ib.password || "",
-      domain.ipAddress || "",
-      domain.sshUser || "",
+      mailServer, // IMAP Server
+      "993", // IMAP Port
+      mailServer, // SMTP Server
+      "587", // SMTP Port (STARTTLS)
+      "15", // Daily Limit
+      "TLS", // SMTP Secure (STARTTLS on 587)
+      "SSL", // IMAP Secure (implicit TLS on 993)
     ]);
 
-    const csvContent = [headers, ...rows].map((r) => r.join(",")).join("\n");
+    const csvContent = [headers, ...rows].map((r) => r.map(esc).join(",")).join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
@@ -346,6 +455,19 @@ function DomainDetailsPage() {
               Push DNS
             </Button>
             <Button
+              onClick={() => repairDnsMutation.mutate()}
+              disabled={repairDnsMutation.isPending}
+              className="rounded-xl h-10 gap-2 bg-teal-500 hover:bg-teal-600 text-white"
+              title="Un-proxy DNS and remove any duplicate/proxied mail record so the Mailcow API/mail host works"
+            >
+              {repairDnsMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Network className="h-4 w-4" />
+              )}
+              Fix DNS
+            </Button>
+            <Button
               onClick={() => provisionMutation.mutate()}
               disabled={provisionMutation.isPending}
               className="rounded-xl h-10 gap-2 bg-purple-500 hover:bg-purple-600 text-white"
@@ -381,6 +503,28 @@ function DomainDetailsPage() {
               )}
               Sync DKIM
             </Button>
+            <Button
+              onClick={handleRecreateMailboxes}
+              disabled={recreateMailboxesMutation.isPending}
+              className="rounded-xl h-10 gap-2 bg-orange-500 hover:bg-orange-600 text-white"
+              title="Delete the mailboxes in Mailcow and recreate them with fresh passwords"
+            >
+              {recreateMailboxesMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Recreate Mailboxes
+            </Button>
+            <Button
+              onClick={handleWipeAndReprovision}
+              disabled={isAnyPending}
+              className="rounded-xl h-10 gap-2 bg-red-600 hover:bg-red-700 text-white"
+              title="Wipe Docker/Mailcow on the server and re-provision everything from scratch"
+            >
+              <Trash2 className="h-4 w-4" />
+              Wipe &amp; Re-provision
+            </Button>
           </div>
         </div>
       </div>
@@ -408,6 +552,52 @@ function DomainDetailsPage() {
           <div className="text-[10px] text-gray-500">Balanced distribution</div>
         </div>
       </div>
+
+      {domain.mailcowHostname && (
+        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-4">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <Key className="h-5 w-5 text-gray-500" /> Mailcow Access
+          </h2>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-2xl border border-gray-100 p-4 flex flex-col gap-1">
+              <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                Admin Panel
+              </div>
+              <a
+                href={`https://${domain.mailcowHostname}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm text-blue-600 hover:underline break-all"
+              >
+                https://{domain.mailcowHostname}
+              </a>
+              <div className="mt-2 text-sm">
+                User: <span className="font-mono font-bold">admin</span>
+              </div>
+              <div className="text-sm">
+                Pass: <span className="font-mono font-bold">moohoo</span>{" "}
+                <span className="text-amber-600 text-xs">(default — change after first login)</span>
+              </div>
+            </div>
+            <div className="rounded-2xl border border-gray-100 p-4 flex flex-col gap-1">
+              <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                Webmail (per mailbox)
+              </div>
+              <a
+                href={`https://${domain.mailcowHostname}/SOGo/`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm text-blue-600 hover:underline break-all"
+              >
+                https://{domain.mailcowHostname}/SOGo/
+              </a>
+              <div className="mt-2 text-sm text-gray-500">
+                Log in with the full email address + its password (from Export CSV).
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-6 md:grid-cols-2">
         <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-4 relative">
@@ -511,6 +701,23 @@ function DomainDetailsPage() {
                     {domain.sshUser || "root"}
                   </span>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {domain.ipAddress && (
+            <div className="mt-2 rounded-2xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm">
+              <div className="font-semibold text-amber-800 flex items-center gap-1.5">
+                <Network className="h-4 w-4" /> Set Reverse DNS (PTR) — required for deliverability
+              </div>
+              <div className="mt-1 text-amber-700">
+                In your VPS provider's control panel, set the PTR record for{" "}
+                <span className="font-mono font-bold">{domain.ipAddress}</span> →{" "}
+                <span className="font-mono font-bold">
+                  {domain.mailcowHostname || `mail.${domain.name}`}
+                </span>
+                . This can't be set via API and must match the mail hostname, or major
+                providers (Gmail/Outlook) will reject or spam-folder your mail.
               </div>
             </div>
           )}
