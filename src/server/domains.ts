@@ -85,14 +85,29 @@ export const listDomains = createServerFn({ method: "GET" })
     if (!db) return [];
 
     try {
-      let query = db.select().from(domains).where(eq(domains.userId, userId));
-      if (data?.batchId) {
-        query = db
-          .select()
-          .from(domains)
-          .where(and(eq(domains.userId, userId), eq(domains.batchId, data.batchId)));
-      }
-      return await query.orderBy(desc(domains.createdAt));
+      const where = data?.batchId
+        ? and(eq(domains.userId, userId), eq(domains.batchId, data.batchId))
+        : eq(domains.userId, userId);
+      const rows = await db.select().from(domains).where(where).orderBy(desc(domains.createdAt));
+
+      // Attach the job (batch) name and the planned inbox count to each domain row.
+      const batchList = await db.select().from(domainBatches).where(eq(domainBatches.userId, userId));
+      const batchName = new Map<string, string>(batchList.map((b: any) => [b.id, b.name]));
+
+      const ids = rows.map((r: any) => r.id);
+      const plans =
+        ids.length > 0
+          ? await db.select().from(domainPlans).where(inArray(domainPlans.domainId, ids))
+          : [];
+      const inboxCount = new Map<string, number>(
+        plans.map((p: any) => [p.domainId, p.totalInboxes ?? 0]),
+      );
+
+      return rows.map((r: any) => ({
+        ...r,
+        batchName: r.batchId ? batchName.get(r.batchId) ?? null : null,
+        plannedInboxCount: inboxCount.get(r.id) ?? 0,
+      }));
     } catch {
       return [];
     }

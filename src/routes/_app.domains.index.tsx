@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { listDomains, deleteDomain, listDomainBatches } from "@/server/domains";
+import { listDomains, listDomainBatches } from "@/server/domains";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -10,22 +10,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Globe, Trash2, Loader2, ChevronRight } from "lucide-react";
+import { Plus, Globe, Loader2, ChevronRight, FolderGit2 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import { toast } from "sonner";
-
+import { StatusPill } from "@/components/StatusPill";
+import { DomainActionsMenu } from "@/components/DomainActionsMenu";
 import { AddDomainWizard } from "@/components/AddDomainWizard";
 
 export const Route = createFileRoute("/_app/domains/")({
   component: DomainsPage,
 });
-
-const STATUS_COLOR: Record<string, string> = {
-  pending: "bg-warning/15 text-warning",
-  active: "bg-success/15 text-success",
-  error: "bg-destructive/15 text-destructive",
-  configuring: "bg-primary/15 text-primary",
-};
 
 function DomainsPage() {
   const qc = useQueryClient();
@@ -43,39 +36,28 @@ function DomainsPage() {
       listDomains({ data: batchFilter !== "all" ? { batchId: batchFilter } : {} }),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteDomain({ data: { id } }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["domains"] });
-      toast.success("Domain deleted");
-    },
-    onError: () => toast.error("Failed to delete domain"),
-  });
+  const refresh = () => qc.invalidateQueries({ queryKey: ["domains"] });
 
   return (
-    <div className="flex flex-col gap-6 p-8">
+    <div className="mx-auto flex max-w-6xl flex-col gap-6 p-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Domains</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {domains.length} domain{domains.length !== 1 ? "s" : ""} total
+          <div className="ident text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+            Control console
+          </div>
+          <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground">Domains</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {domains.length} domain{domains.length !== 1 ? "s" : ""}
           </p>
         </div>
         <div className="flex gap-3">
-          <Button
-            onClick={() => setWizardOpen(true)}
-            className="bg-primary hover:bg-primary/90 rounded-lg gap-2 shadow-lg shadow-primary/20"
-          >
-            <Plus className="h-4 w-4" /> Add Domains
-          </Button>
-
           {batches.length > 0 && (
             <Select value={batchFilter} onValueChange={setBatchFilter}>
               <SelectTrigger className="w-44 rounded-lg">
-                <SelectValue placeholder="All batches" />
+                <SelectValue placeholder="All jobs" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All batches</SelectItem>
+                <SelectItem value="all">All jobs</SelectItem>
                 {batches.map((b: any) => (
                   <SelectItem key={b.id} value={b.id}>
                     {b.name}
@@ -84,6 +66,9 @@ function DomainsPage() {
               </SelectContent>
             </Select>
           )}
+          <Button onClick={() => setWizardOpen(true)} className="gap-2">
+            <Plus className="h-4 w-4" /> Add domains
+          </Button>
         </div>
       </div>
 
@@ -94,54 +79,47 @@ function DomainsPage() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : domains.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-xl bg-card p-16 text-center ring-1 ring-border">
-          <Globe className="h-12 w-12 text-muted-foreground" />
-          <p className="text-lg font-medium text-foreground">No domains yet</p>
-          <p className="text-sm text-muted-foreground">Use "Add Domains" to get started.</p>
+        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/40 p-16 text-center">
+          <Globe className="h-10 w-10 text-muted-foreground" />
+          <p className="font-display text-lg font-medium text-foreground">No domains yet</p>
+          <p className="text-sm text-muted-foreground">Use "Add domains" to get started.</p>
         </div>
       ) : (
-        <div className="flex flex-col gap-2">
-          {domains.map((d: any) => (
-            <Link
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          {domains.map((d: any, i: number) => (
+            <div
               key={d.id}
-              to="/domains/$id"
-              params={{ id: d.id }}
-              className="flex items-center justify-between rounded-lg bg-card px-5 py-4 ring-1 ring-border shadow-sm hover:shadow-md transition-all group"
+              className={`flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/40 ${i > 0 ? "border-t border-border" : ""}`}
             >
-              <div className="flex items-center gap-4">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
+              <Link
+                to="/domains/$id"
+                params={{ id: d.id }}
+                className="flex min-w-0 flex-1 items-center gap-3"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
                   <Globe className="h-4 w-4 text-primary" />
                 </div>
-                <div>
-                  <div className="font-medium text-foreground">{d.name}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {d.plannedInboxCount ? `${d.plannedInboxCount} inboxes planned` : "No plan yet"}
+                <div className="min-w-0">
+                  <div className="ident truncate text-sm font-medium text-foreground">{d.name}</div>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    {d.batchName ? (
+                      <span className="inline-flex items-center gap-1">
+                        <FolderGit2 className="h-3 w-3" /> {d.batchName}
+                      </span>
+                    ) : (
+                      <span>No job</span>
+                    )}
+                    <span aria-hidden>·</span>
+                    <span>{d.plannedInboxCount ? `${d.plannedInboxCount} mailboxes` : "No plan yet"}</span>
                   </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span
-                  className={`rounded-lg px-2 py-0.5 text-xs font-medium ${STATUS_COLOR[d.status] ?? "bg-muted text-muted-foreground"}`}
-                >
-                  {d.status}
-                </span>
-                <div className="rounded-xl p-2 text-muted-foreground group-hover:text-primary">
-                  <ChevronRight className="h-4 w-4" />
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-xl text-red-300 hover:text-destructive hover:bg-destructive/10"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (confirm(`Delete ${d.name}?`)) deleteMutation.mutate(d.id);
-                  }}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            </Link>
+              </Link>
+              <StatusPill status={d.status} />
+              <Link to="/domains/$id" params={{ id: d.id }} className="text-muted-foreground hover:text-foreground">
+                <ChevronRight className="h-4 w-4" />
+              </Link>
+              <DomainActionsMenu domainId={d.id} domainName={d.name} onChanged={refresh} />
+            </div>
           ))}
         </div>
       )}
