@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { listDomains, listDomainBatches } from "@/server/domains";
@@ -10,19 +10,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Globe, Loader2, ChevronRight, FolderGit2 } from "lucide-react";
-import { Link } from "@tanstack/react-router";
+import { Plus, Globe, Loader2, ChevronRight, FolderGit2, X } from "lucide-react";
 import { StatusPill } from "@/components/StatusPill";
 import { DomainActionsMenu } from "@/components/DomainActionsMenu";
 import { AddDomainWizard } from "@/components/AddDomainWizard";
 
 export const Route = createFileRoute("/_app/domains/")({
   component: DomainsPage,
+  // Allow ?batch=<jobId> so jobs can deep-link into a filtered domain view.
+  validateSearch: (search: Record<string, unknown>): { batch?: string } => ({
+    batch: typeof search.batch === "string" ? search.batch : undefined,
+  }),
 });
 
 function DomainsPage() {
   const qc = useQueryClient();
-  const [batchFilter, setBatchFilter] = useState<string>("all");
+  const navigate = useNavigate();
+  const { batch } = Route.useSearch();
+  const batchFilter = batch ?? "all";
   const [wizardOpen, setWizardOpen] = useState(false);
 
   const { data: batches = [] } = useQuery({
@@ -36,6 +41,11 @@ function DomainsPage() {
       listDomains({ data: batchFilter !== "all" ? { batchId: batchFilter } : {} }),
   });
 
+  const setFilter = (v: string) =>
+    navigate({ to: "/domains", search: v === "all" ? {} : { batch: v } });
+
+  const activeJobName =
+    batchFilter !== "all" ? batches.find((b: any) => b.id === batchFilter)?.name : null;
   const refresh = () => qc.invalidateQueries({ queryKey: ["domains"] });
 
   return (
@@ -48,11 +58,17 @@ function DomainsPage() {
           <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground">Domains</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {domains.length} domain{domains.length !== 1 ? "s" : ""}
+            {activeJobName ? (
+              <>
+                {" in "}
+                <span className="text-foreground">{activeJobName}</span>
+              </>
+            ) : null}
           </p>
         </div>
         <div className="flex gap-3">
           {batches.length > 0 && (
-            <Select value={batchFilter} onValueChange={setBatchFilter}>
+            <Select value={batchFilter} onValueChange={setFilter}>
               <SelectTrigger className="w-44 rounded-lg">
                 <SelectValue placeholder="All jobs" />
               </SelectTrigger>
@@ -72,6 +88,16 @@ function DomainsPage() {
         </div>
       </div>
 
+      {activeJobName && (
+        <button
+          onClick={() => setFilter("all")}
+          className="inline-flex w-fit items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <FolderGit2 className="h-3 w-3" /> Filtered by job: {activeJobName}
+          <X className="h-3 w-3" />
+        </button>
+      )}
+
       <AddDomainWizard open={wizardOpen} onOpenChange={setWizardOpen} />
 
       {isLoading ? (
@@ -81,8 +107,10 @@ function DomainsPage() {
       ) : domains.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/40 p-16 text-center">
           <Globe className="h-10 w-10 text-muted-foreground" />
-          <p className="font-display text-lg font-medium text-foreground">No domains yet</p>
-          <p className="text-sm text-muted-foreground">Use "Add domains" to get started.</p>
+          <p className="font-display text-lg font-medium text-foreground">No domains here</p>
+          <p className="text-sm text-muted-foreground">
+            {activeJobName ? "This job has no domains." : 'Use "Add domains" to get started.'}
+          </p>
         </div>
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
