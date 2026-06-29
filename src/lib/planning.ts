@@ -327,6 +327,16 @@ export function planDomain(domain: string, input: PlanInput): DomainPlan {
 
   if (subdomainCount > prefixes.length) subdomainCount = prefixes.length;
 
+  // Ensure enough subdomains to spread the inboxes naturally (~8 each). With too few, all
+  // inboxes still get placed (naturalSplit packs more per subdomain), but we prefer a real
+  // spread when we have the prefixes for it. Bounded by available prefixes and maxAllowed.
+  const minNeededForSpread = Math.ceil(totalInboxes / 8);
+  if (subdomainCount < minNeededForSpread) {
+    subdomainCount = Math.min(minNeededForSpread, prefixes.length, maxAllowed);
+  }
+  // Never plan more subdomains than inboxes (would leave empty subdomains).
+  if (subdomainCount > totalInboxes) subdomainCount = totalInboxes;
+
   const chosenPrefixes = sampleUnique(prefixes, subdomainCount);
 
   const counts = naturalSplit(totalInboxes, subdomainCount);
@@ -414,37 +424,44 @@ export function planDomain(domain: string, input: PlanInput): DomainPlan {
   return { domain, totalInboxes, subdomainCount, subdomainDistribution, inboxes };
 }
 
+// Distribute `total` inboxes across `buckets` subdomains. INVARIANT: the returned counts ALWAYS
+// sum to exactly `total` — no inbox is ever silently dropped. We keep a soft cap (~8 per
+// subdomain) for a natural look, but RAISE it automatically when there aren't enough buckets to
+// hold `total` (otherwise small subdomain counts would lose inboxes — the cause of "28 planned,
+// 8 created").
 function naturalSplit(total: number, buckets: number): number[] {
   if (buckets <= 0) return [];
-  if (buckets > total) {
-    // Each bucket gets at least 1, rest get 0
-    return new Array(buckets).fill(1).map((_, i) => (i < total ? 1 : 0));
+  if (buckets >= total) {
+    // One inbox per bucket for the first `total` buckets, rest empty.
+    return shuffle(new Array(buckets).fill(0).map((_, i) => (i < total ? 1 : 0)));
   }
 
-  const minPerSub = 1;
-  const maxPerSub = 8;
+  const SOFT_MAX_PER_SUB = 8;
+  // Effective cap must be high enough that buckets * cap >= total, so every inbox fits.
+  const cap = Math.max(SOFT_MAX_PER_SUB, Math.ceil(total / buckets));
 
-  // Start with minimum (1) for each bucket
-  const result = new Array(buckets).fill(minPerSub);
-  let remaining = total - buckets; // remaining after giving 1 to each
+  const result = new Array(buckets).fill(1);
+  let remaining = total - buckets;
 
-  if (remaining < 0) {
-    // Should not happen due to check above, but handle gracefully
-    return new Array(buckets).fill(1).slice(0, total);
-  }
-
-  // Randomly distribute remaining inboxes
-  let attempts = 0;
-  while (remaining > 0 && attempts < 1000) {
+  let guard = 0;
+  while (remaining > 0 && guard < 100000) {
     const pos = randInt(0, buckets - 1);
-    if (result[pos] < maxPerSub) {
+    if (result[pos] < cap) {
       result[pos]++;
       remaining--;
     }
-    attempts++;
+    guard++;
   }
 
-  // Shuffle to make distribution random
+  // Safety net: if the random walk ever stalls, place any leftover round-robin so the sum is
+  // guaranteed to equal `total`.
+  let pos = 0;
+  while (remaining > 0) {
+    result[pos % buckets]++;
+    remaining--;
+    pos++;
+  }
+
   return shuffle(result);
 }
 
