@@ -564,12 +564,12 @@ function DomainDetailsPage() {
                 Admin Panel
               </div>
               <a
-                href={`https://${domain.mailcowHostname}`}
+                href={`https://${domain.mailcowHostname}/admin`}
                 target="_blank"
                 rel="noreferrer"
                 className="text-sm text-blue-600 hover:underline break-all"
               >
-                https://{domain.mailcowHostname}
+                https://{domain.mailcowHostname}/admin
               </a>
               <div className="mt-2 text-sm">
                 User: <span className="font-mono font-bold">admin</span>

@@ -60,6 +60,55 @@ export function mergeProgress(
   };
 }
 
+// Subdomain prefixes that can't hold mailboxes (collide with the mail host / autodiscovery).
+const RESERVED_SUBDOMAIN_PREFIXES = new Set(["mail", "autodiscover", "autoconfig", "www", "dkim", "_dmarc"]);
+
+// --- Repair: some inboxes were planned on the mail host (mail.<domain>) or other reserved
+// subdomains before the reserved-name fix. Those can never be created (the host isn't a mail
+// domain). Reassign each to a valid existing subdomain, regenerating the email and avoiding
+// collisions, so the user still gets the mailbox. Idempotent (no-op when nothing is bad). ---
+export async function reassignReservedSubdomainInboxes(
+  db: Db,
+  domain: Domain,
+): Promise<{ reassigned: number }> {
+  const mailHost = (domain.mailcowHostname || `mail.${domain.name}`).toLowerCase();
+  const inboxes = await db.select().from(plannedInboxes).where(eq(plannedInboxes.domainId, domain.id));
+  const isBad = (fqdn: unknown) => {
+    const f = String(fqdn).toLowerCase();
+    return f === mailHost || RESERVED_SUBDOMAIN_PREFIXES.has(f.split(".")[0]);
+  };
+  const bad = inboxes.filter((ib: any) => isBad(ib.subdomainFqdn));
+  if (!bad.length) return { reassigned: 0 };
+  const goodSubs = Array.from(
+    new Set(inboxes.filter((ib: any) => !isBad(ib.subdomainFqdn)).map((ib: any) => String(ib.subdomainFqdn))),
+  );
+  if (!goodSubs.length) return { reassigned: 0 }; // nothing valid to move them to
+  const emails = new Set(inboxes.map((ib: any) => String(ib.email).toLowerCase()));
+
+  let reassigned = 0;
+  let ti = 0;
+  for (const ib of bad) {
+    const target = goodSubs[ti % goodSubs.length];
+    ti++;
+    const targetPrefix = String(target).split(".")[0];
+    emails.delete(String(ib.email).toLowerCase());
+    let lp = ib.localPart;
+    let email = `${lp}@${target}`;
+    let n = 1;
+    while (emails.has(email.toLowerCase())) {
+      lp = `${ib.localPart}${n++}`;
+      email = `${lp}@${target}`;
+    }
+    emails.add(email.toLowerCase());
+    await db
+      .update(plannedInboxes)
+      .set({ subdomainPrefix: targetPrefix, subdomainFqdn: target, localPart: lp, email, status: "planned", password: null })
+      .where(eq(plannedInboxes.id, ib.id));
+    reassigned++;
+  }
+  return { reassigned };
+}
+
 // --- Step: ensure each planned subdomain exists in Mailcow as a mail domain with adequate
 // quota. Idempotent: add/domain creates if missing; if it already exists, edit/domain
 // repairs its limits. Truth comes from get/domain/all, never the POST result. ---
@@ -87,8 +136,16 @@ export async function ensureMailDomains(
         `Is the mail host Cloudflare-proxied? mail.<domain> must be DNS-only (grey cloud).`,
     );
   }
+  // Reassign any inboxes stuck on the mail host / reserved subdomains (planned before the
+  // reserved-name fix) to a valid subdomain so they can actually be created.
+  await reassignReservedSubdomainInboxes(db, domain);
+
   const inboxes = await db.select().from(plannedInboxes).where(eq(plannedInboxes.domainId, domain.id));
-  const uniqueSubdomains = Array.from(new Set(inboxes.map((i: any) => String(i.subdomainFqdn))));
+  const mailHost = (domain.mailcowHostname || `mail.${domain.name}`).toLowerCase();
+  // Never try to add the mail server host itself as a mail domain (Mailcow rejects it).
+  const uniqueSubdomains = Array.from(new Set(inboxes.map((i: any) => String(i.subdomainFqdn)))).filter(
+    (s) => String(s).toLowerCase() !== mailHost,
+  );
   const { DOMAIN_MAX_MAILBOXES, DOMAIN_QUOTA_MB, MAILBOX_MAX_QUOTA_MB, MAILBOX_QUOTA_MB } = QUOTA;
 
   const addDomainErrors: Record<string, string> = {};
