@@ -5,7 +5,6 @@ import { domains } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { NodeSSH } from "node-ssh";
 import { addServerSetupJob } from "./queue";
-import { mailcowSsha256, generateMailboxPassword } from "./mailcow-helpers";
 
 export const testSshConnection = createServerFn({ method: "POST" })
   .middleware([requireAuth])
@@ -50,16 +49,13 @@ export const testSshConnection = createServerFn({ method: "POST" })
     }
   });
 
-// Reset the Mailcow admin-panel password. The Mailcow API key cannot change the superadmin
-// password, so we SSH in and update the `admin` table directly with a Mailcow-compatible
-// {SSHA256} hash, then store the plaintext so the UI can show the current credential.
+// Reset the Mailcow admin-panel password. The API key cannot change the superadmin password,
+// so we SSH in and run Mailcow's own helper (helper-scripts/mailcow-reset-admin.sh) — the
+// proven, version-safe way. It resets the `admin` account to a freshly generated random
+// password (and clears 2FA), prints it, and we parse + store it so the UI shows the credential.
 export const resetMailcowAdminPassword = createServerFn({ method: "POST" })
   .middleware([requireAuth])
-  .inputValidator((d: unknown) =>
-    z
-      .object({ domainId: z.string(), newPassword: z.string().min(8).max(128).optional() })
-      .parse(d),
-  )
+  .inputValidator((d: unknown) => z.object({ domainId: z.string() }).parse(d))
   .handler(async ({ data, context }) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { db, userId } = context as any;
@@ -77,13 +73,14 @@ export const resetMailcowAdminPassword = createServerFn({ method: "POST" })
     const sshPassword = domain.sshPassword || domain.server?.sshPassword;
     if (!ipAddress || !sshUser) return { error: "SSH credentials not configured for this domain" };
 
-    const password = data.newPassword || generateMailboxPassword();
-    const hash = mailcowSsha256(password); // contains only base64 + {SSHA256} — shell/SQL safe
-    const sql = `UPDATE admin SET password='${hash}' WHERE username='admin';`;
+    // Locate the helper (fast lookup in the mailcow dir, then a full-disk fallback) and run it
+    // non-interactively (`yes y` answers any confirm/ENTER prompt across script versions).
     const cmd = [
       "cd /opt/mailcow-dockerized 2>/dev/null || cd ~/mailcow-dockerized 2>/dev/null || cd mailcow-dockerized",
-      "set -a; . ./mailcow.conf; set +a",
-      `docker compose exec -T mysql-mailcow mysql -u"$DBUSER" -p"$DBPASS" "$DBNAME" -e "${sql}"`,
+      'SCRIPT=$(find . -name mailcow-reset-admin.sh 2>/dev/null | head -1)',
+      '[ -z "$SCRIPT" ] && SCRIPT=$(find / -name mailcow-reset-admin.sh 2>/dev/null | head -1)',
+      '[ -z "$SCRIPT" ] && echo "MAILCOW_RESET_SCRIPT_NOT_FOUND" && exit 1',
+      'yes y | bash "$SCRIPT"',
     ].join(" && ");
 
     const ssh = new NodeSSH();
@@ -95,8 +92,15 @@ export const resetMailcowAdminPassword = createServerFn({ method: "POST" })
         readyTimeout: 20000,
       });
       const res = await ssh.execCommand(cmd);
-      if (res.code !== 0) {
-        return { error: `Failed to update password: ${res.stderr || res.stdout || "unknown error"}` };
+      // Strip ANSI colour codes, then pull the generated password the script prints.
+      const out = `${res.stdout}\n${res.stderr}`.replace(/\x1b\[[0-9;]*m/g, "");
+      if (out.includes("MAILCOW_RESET_SCRIPT_NOT_FOUND")) {
+        return { error: "mailcow-reset-admin.sh not found on the server." };
+      }
+      const match = out.match(/Password:\s*(\S+)/i);
+      const password = match?.[1]?.trim();
+      if (!password) {
+        return { error: `Reset ran but no password was returned. Output: ${out.slice(0, 400)}` };
       }
       await db
         .update(domains)

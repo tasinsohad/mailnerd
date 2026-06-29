@@ -1,8 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -10,20 +8,9 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Eye, EyeOff, Copy, RefreshCw, KeyRound, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Copy, KeyRound, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { resetMailcowAdminPassword } from "@/server/provisioning";
-
-// Generate a readable strong password for the dialog default (client-side; the server
-// generates its own if the field is left as-is and re-submitted).
-function genPassword(): string {
-  const sets = ["ABCDEFGHJKLMNPQRSTUVWXYZ", "abcdefghijkmnopqrstuvwxyz", "23456789", "!@#$%^&*-_"];
-  const all = sets.join("");
-  const pick = (s: string) => s[Math.floor(Math.random() * s.length)];
-  const chars = sets.map(pick);
-  for (let i = chars.length; i < 18; i++) chars.push(pick(all));
-  return chars.sort(() => Math.random() - 0.5).join("");
-}
 
 export function MailcowAdminReset({
   domainId,
@@ -37,7 +24,6 @@ export function MailcowAdminReset({
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [show, setShow] = useState(false);
-  const [value, setValue] = useState("");
 
   const copy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -45,16 +31,17 @@ export function MailcowAdminReset({
   };
 
   const reset = useMutation({
-    mutationFn: (newPassword: string) => {
+    mutationFn: () => {
       toast.loading("Resetting admin password…", { id: "adminpw" });
-      return resetMailcowAdminPassword({ data: { domainId, newPassword } });
+      return resetMailcowAdminPassword({ data: { domainId } });
     },
     onSuccess: (res: any) => {
       if (res?.error) {
         toast.error(res.error, { id: "adminpw" });
         return;
       }
-      toast.success("Admin password updated", { id: "adminpw" });
+      toast.success("Admin password reset — new password shown in the card", { id: "adminpw" });
+      setShow(true);
       qc.invalidateQueries({ queryKey: ["domain", domainId] });
       setOpen(false);
     },
@@ -92,10 +79,7 @@ export function MailcowAdminReset({
         variant="outline"
         size="sm"
         className="mt-2 h-8 w-fit gap-1.5"
-        onClick={() => {
-          setValue(genPassword());
-          setOpen(true);
-        }}
+        onClick={() => setOpen(true)}
       >
         <KeyRound className="h-3.5 w-3.5" />
         Reset password
@@ -106,39 +90,19 @@ export function MailcowAdminReset({
           <DialogHeader>
             <DialogTitle>Reset Mailcow admin password</DialogTitle>
           </DialogHeader>
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-muted-foreground">
-              Sets a new password for the <span className="font-mono">admin</span> account on{" "}
-              <span className="font-mono">{mailcowHostname}/admin</span>. Save it somewhere safe — it's shown here after reset.
-            </p>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="adminpw-input">New password</Label>
-              <div className="flex items-center gap-2">
-                <Input
-                  id="adminpw-input"
-                  value={value}
-                  onChange={(e) => setValue(e.target.value)}
-                  className="font-mono"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <Button variant="outline" size="icon" className="shrink-0" title="Generate" onClick={() => setValue(genPassword())}>
-                  <RefreshCw className="h-4 w-4" />
-                </Button>
-                <Button variant="outline" size="icon" className="shrink-0" title="Copy" onClick={() => copy(value)}>
-                  <Copy className="h-4 w-4" />
-                </Button>
-              </div>
-              <span className="text-xs text-muted-foreground">At least 8 characters.</span>
-            </div>
-          </div>
+          <p className="text-sm text-muted-foreground">
+            Runs Mailcow's own reset on <span className="font-mono">{mailcowHostname}</span>: the{" "}
+            <span className="font-mono">admin</span> account gets a new randomly generated password
+            (and 2FA is cleared). The old password stops working immediately. The new password is
+            shown here afterward — copy it somewhere safe.
+          </p>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)} disabled={reset.isPending}>
               Cancel
             </Button>
-            <Button onClick={() => reset.mutate(value)} disabled={reset.isPending || value.length < 8}>
+            <Button onClick={() => reset.mutate()} disabled={reset.isPending}>
               {reset.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
-              Set password
+              Reset password
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -11,16 +11,6 @@ export const QUOTA = {
   MAILBOX_QUOTA_MB: 1024, // default/created mailbox size: 1 GB (sending accounts)
 } as const;
 
-// Mailcow's {SSHA256} password scheme: base64( sha256(password+salt) || salt ), where salt is
-// a 16-char hex string. Mailcow's verify_hash() detects the scheme from the {SSHA256} prefix,
-// so this validates regardless of the server's configured default scheme. Used to set the admin
-// password directly in the DB (the API key cannot change the superadmin password).
-export function mailcowSsha256(password: string): string {
-  const salt = crypto.randomBytes(8).toString("hex"); // 16 ascii chars
-  const digest = crypto.createHash("sha256").update(password + salt, "utf8").digest();
-  return "{SSHA256}" + Buffer.concat([digest, Buffer.from(salt, "utf8")]).toString("base64");
-}
-
 // Generate a strong mailbox password that satisfies any sane complexity policy:
 // guaranteed >=2 each of upper/lower/digit/special, length 20, cryptographically random.
 // (Math.random().toString(36) was weak/inconsistent — it could omit a character class
