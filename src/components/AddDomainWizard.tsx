@@ -883,7 +883,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
             </div>
           )}
 
-          <DialogFooter className="p-8 border-t border-gray-50 bg-muted/50">
+          <DialogFooter className="p-8 border-t border-border bg-muted/50">
             <Button
               type="button"
               variant="ghost"

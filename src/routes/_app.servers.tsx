@@ -146,8 +146,8 @@ function ServersPage() {
             >
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100">
-                    <Server className="h-5 w-5 text-purple-600" />
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+                    <Server className="h-5 w-5 text-primary" />
                   </div>
                   <div>
                     <div className="font-semibold text-foreground">{s.label}</div>
