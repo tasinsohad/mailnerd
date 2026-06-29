@@ -21,10 +21,10 @@ export const Route = createFileRoute("/_app/domains/")({
 });
 
 const STATUS_COLOR: Record<string, string> = {
-  pending: "bg-yellow-100 text-yellow-700",
-  active: "bg-green-100 text-green-700",
-  error: "bg-red-100 text-red-700",
-  configuring: "bg-blue-100 text-blue-700",
+  pending: "bg-warning/15 text-warning",
+  active: "bg-success/15 text-success",
+  error: "bg-destructive/15 text-destructive",
+  configuring: "bg-primary/15 text-primary",
 };
 
 function DomainsPage() {
@@ -109,7 +109,7 @@ function DomainsPage() {
               className="flex items-center justify-between rounded-2xl bg-card px-5 py-4 ring-1 ring-border shadow-sm hover:shadow-md transition-all group"
             >
               <div className="flex items-center gap-4">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
                   <Globe className="h-4 w-4 text-primary" />
                 </div>
                 <div>
@@ -131,7 +131,7 @@ function DomainsPage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="rounded-xl text-red-300 hover:text-red-600 hover:bg-red-50"
+                  className="rounded-xl text-red-300 hover:text-destructive hover:bg-destructive/10"
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();

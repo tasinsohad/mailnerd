@@ -25,8 +25,43 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
+import { MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
+
+// Shared status presentation: an LED dot whose color carries meaning.
+const STATUS_STYLE: Record<string, { color: string; label: string; pulse?: boolean }> = {
+  ready: { color: "text-success", label: "Ready" },
+  active: { color: "text-success", label: "Active" },
+  provisioning: { color: "text-warning", label: "Provisioning", pulse: true },
+  configuring: { color: "text-warning", label: "Configuring", pulse: true },
+  queued: { color: "text-muted-foreground", label: "Queued" },
+  pending: { color: "text-muted-foreground", label: "Pending" },
+  failed: { color: "text-destructive", label: "Failed" },
+  error: { color: "text-destructive", label: "Error" },
+};
+
+function StatusPill({ status }: { status?: string }) {
+  const s = STATUS_STYLE[String(status ?? "").toLowerCase()] ?? {
+    color: "text-muted-foreground",
+    label: status ? String(status) : "Unknown",
+  };
+  return (
+    <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-foreground">
+      <span className={cn("status-dot", s.color, s.pulse && "status-dot--pulse")} />
+      {s.label}
+    </span>
+  );
+}
 
 export const Route = createFileRoute("/_app/domains/$id")({
   component: DomainDetailsPage,
@@ -418,114 +453,63 @@ function DomainDetailsPage() {
             </div>
           </Link>
           <div>
-            <h1 className="text-2xl font-bold text-foreground">{domain.name}</h1>
-            <div className="flex items-center gap-2 mt-1">
-              <span
-                className={`px-2 py-0.5 rounded-md text-xs font-bold ${domain.status === "active" ? "bg-green-100 text-green-700" : "bg-muted text-muted-foreground"}`}
-              >
-                {domain.status.toUpperCase()}
-              </span>
+            <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground">
+              <span className="ident">{domain.name}</span>
+            </h1>
+            <div className="mt-1.5">
+              <StatusPill status={domain.status} />
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2">
           <Button
             onClick={runFullAutomation}
             disabled={isAnyPending}
-            className="rounded-2xl h-12 gap-2 bg-primary hover:bg-primary/90 text-white shadow-xl shadow-purple-500/20 px-6 font-bold"
+            className="h-10 gap-2 px-5 font-semibold"
           >
-            <Zap className="h-5 w-5 fill-current" />
+            {isAnyPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4 fill-current" />}
             Run Full Automation
           </Button>
 
-          <div className="h-8 w-[1px] bg-secondary" />
-
-          <div className="flex gap-2 bg-card p-2 rounded-[1.5rem] shadow-sm ring-1 ring-border">
-            <Button
-              onClick={() => pushDnsMutation.mutate()}
-              disabled={pushDnsMutation.isPending}
-              className="rounded-xl h-10 gap-2 bg-primary hover:bg-primary text-white"
-            >
-              {pushDnsMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
-              Push DNS
-            </Button>
-            <Button
-              onClick={() => repairDnsMutation.mutate()}
-              disabled={repairDnsMutation.isPending}
-              className="rounded-xl h-10 gap-2 bg-teal-500 hover:bg-teal-600 text-white"
-              title="Un-proxy DNS and remove any duplicate/proxied mail record so the Mailcow API/mail host works"
-            >
-              {repairDnsMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Network className="h-4 w-4" />
-              )}
-              Fix DNS
-            </Button>
-            <Button
-              onClick={() => provisionMutation.mutate()}
-              disabled={provisionMutation.isPending}
-              className="rounded-xl h-10 gap-2 bg-primary hover:bg-primary text-white"
-            >
-              {provisionMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Zap className="h-4 w-4" />
-              )}
-              Provision
-            </Button>
-            <Button
-              onClick={() => setupMailcowMutation.mutate()}
-              disabled={setupMailcowMutation.isPending}
-              className="rounded-xl h-10 gap-2 bg-primary hover:bg-primary/90 text-white"
-            >
-              {setupMailcowMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Mail className="h-4 w-4" />
-              )}
-              Setup Mailcow
-            </Button>
-            <Button
-              onClick={() => syncDkimMutation.mutate()}
-              disabled={syncDkimMutation.isPending}
-              className="rounded-xl h-10 gap-2 bg-amber-500 hover:bg-amber-600 text-white"
-            >
-              {syncDkimMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <ShieldCheck className="h-4 w-4" />
-              )}
-              Sync DKIM
-            </Button>
-            <Button
-              onClick={handleRecreateMailboxes}
-              disabled={recreateMailboxesMutation.isPending}
-              className="rounded-xl h-10 gap-2 bg-orange-500 hover:bg-orange-600 text-white"
-              title="Delete the mailboxes in Mailcow and recreate them with fresh passwords"
-            >
-              {recreateMailboxesMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
-              Recreate Mailboxes
-            </Button>
-            <Button
-              onClick={handleWipeAndReprovision}
-              disabled={isAnyPending}
-              className="rounded-xl h-10 gap-2 bg-red-600 hover:bg-red-700 text-white"
-              title="Wipe Docker/Mailcow on the server and re-provision everything from scratch"
-            >
-              <Trash2 className="h-4 w-4" />
-              Wipe &amp; Re-provision
-            </Button>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon" className="h-10 w-10" title="More actions">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              <DropdownMenuLabel>Run a step</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => pushDnsMutation.mutate()} disabled={pushDnsMutation.isPending}>
+                <Send className="h-4 w-4" /> Push DNS to Cloudflare
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => provisionMutation.mutate()} disabled={provisionMutation.isPending}>
+                <Zap className="h-4 w-4" /> Provision server
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setupMailcowMutation.mutate()} disabled={setupMailcowMutation.isPending}>
+                <Mail className="h-4 w-4" /> Set up mailboxes
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => syncDkimMutation.mutate()} disabled={syncDkimMutation.isPending}>
+                <ShieldCheck className="h-4 w-4" /> Sync DKIM
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Repair</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => repairDnsMutation.mutate()} disabled={repairDnsMutation.isPending}>
+                <Network className="h-4 w-4" /> Fix DNS (un-proxy)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleRecreateMailboxes} disabled={recreateMailboxesMutation.isPending}>
+                <RefreshCw className="h-4 w-4" /> Recreate mailboxes
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleWipeAndReprovision}
+                disabled={isAnyPending}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="h-4 w-4" /> Wipe &amp; re-provision
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -576,7 +560,7 @@ function DomainDetailsPage() {
               </div>
               <div className="text-sm">
                 Pass: <span className="font-mono font-bold">moohoo</span>{" "}
-                <span className="text-amber-600 text-xs">(default — change after first login)</span>
+                <span className="text-warning text-xs">(default — change after first login)</span>
               </div>
             </div>
             <div className="rounded-2xl border border-border p-4 flex flex-col gap-1">
@@ -610,7 +594,7 @@ function DomainDetailsPage() {
                 variant="ghost"
                 size="sm"
                 onClick={() => setIsEditingServer(true)}
-                className="h-8 text-xs rounded-xl text-primary hover:text-primary hover:bg-blue-50"
+                className="h-8 text-xs rounded-xl text-primary hover:text-primary hover:bg-primary/10"
               >
                 Edit
               </Button>
@@ -706,11 +690,11 @@ function DomainDetailsPage() {
           )}
 
           {domain.ipAddress && (
-            <div className="mt-2 rounded-2xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm">
-              <div className="font-semibold text-amber-800 flex items-center gap-1.5">
+            <div className="mt-2 rounded-2xl bg-warning/10 border border-warning/30 px-4 py-3 text-sm">
+              <div className="font-semibold text-warning flex items-center gap-1.5">
                 <Network className="h-4 w-4" /> Set Reverse DNS (PTR) — required for deliverability
               </div>
-              <div className="mt-1 text-amber-700">
+              <div className="mt-1 text-warning">
                 In your VPS provider's control panel, set the PTR record for{" "}
                 <span className="font-mono font-bold">{domain.ipAddress}</span> →{" "}
                 <span className="font-mono font-bold">
@@ -895,7 +879,7 @@ function SubdomainInboxSection({
           {inboxes.slice(0, 4).map((ib: any, i: number) => (
             <div
               key={ib.id}
-              className="w-8 h-8 rounded-full bg-blue-100 border-2 border-white flex items-center justify-center text-[10px] font-bold text-primary"
+              className="w-8 h-8 rounded-full bg-primary/15 border-2 border-white flex items-center justify-center text-[10px] font-bold text-primary"
               style={{ zIndex: 4 - i }}
               title={ib.email}
             >
@@ -927,7 +911,7 @@ function SubdomainInboxSection({
                   <td className="px-4 py-3 font-medium text-foreground">{ib.email}</td>
                   <td className="px-4 py-3 text-muted-foreground">{ib.personName}</td>
                   <td className="px-4 py-3">
-                    <span className="bg-blue-50 text-primary px-2 py-0.5 rounded-md text-[10px] font-bold uppercase">
+                    <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-md text-[10px] font-bold uppercase">
                       {ib.format}
                     </span>
                   </td>

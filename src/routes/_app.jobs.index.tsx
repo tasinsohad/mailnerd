@@ -96,7 +96,7 @@ function BatchCard({ batch }: { batch: any }) {
         <Button
           variant="ghost"
           size="sm"
-          className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-50 rounded-full"
+          className="h-8 w-8 p-0 text-red-500 hover:text-destructive hover:bg-destructive/10 rounded-full"
           onClick={handleDelete}
           disabled={deleteMutation.isPending}
         >
@@ -108,7 +108,7 @@ function BatchCard({ batch }: { batch: any }) {
         </Button>
       </div>
       <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-green-100">
+        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-success/15">
           <FolderGit2 className="h-5 w-5 text-primary" />
         </div>
         <div>

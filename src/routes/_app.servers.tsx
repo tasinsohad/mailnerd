@@ -157,7 +157,7 @@ function ServersPage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="text-red-400 hover:text-red-600 hover:bg-red-50 rounded-xl"
+                  className="text-red-400 hover:text-destructive hover:bg-destructive/10 rounded-xl"
                   onClick={() => deleteMutation.mutate(s.id)}
                   disabled={deleteMutation.isPending}
                 >

@@ -84,10 +84,10 @@ function SettingsPage() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : isError ? (
-        <div className="rounded-3xl bg-red-50/50 p-8 ring-1 ring-red-200/50 flex flex-col gap-5">
+        <div className="rounded-3xl bg-destructive/10/50 p-8 ring-1 ring-red-200/50 flex flex-col gap-5">
           <div>
             <h2 className="text-lg font-semibold text-red-900">Database Connection Failed</h2>
-            <p className="text-sm text-red-700/80 leading-relaxed mt-1">
+            <p className="text-sm text-destructive/80 leading-relaxed mt-1">
               {error instanceof Error ? error.message : String(error)}
             </p>
           </div>
@@ -95,7 +95,7 @@ function SettingsPage() {
             <Button
               variant="ghost"
               onClick={() => qc.invalidateQueries({ queryKey: ["secrets"] })}
-              className="text-red-700 hover:text-red-800 hover:bg-red-100/50 rounded-xl px-4 text-xs"
+              className="text-destructive hover:text-destructive hover:bg-destructive/15/50 rounded-xl px-4 text-xs"
             >
               Retry Connection
             </Button>
@@ -151,7 +151,7 @@ function SettingsPage() {
                 <div className="flex items-center gap-2 mt-1">
                   {verifyStatus && (
                     <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${verifyStatus.valid ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600"}`}
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${verifyStatus.valid ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}`}
                     >
                       {verifyStatus.valid ? "✅ VALID" : `❌ INVALID: ${verifyStatus.error}`}
                     </span>

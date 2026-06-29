@@ -294,7 +294,7 @@ function JobPipelinePage() {
               variant="outline"
               onClick={handleBatchRecreateMailboxes}
               disabled={batchBusy}
-              className="h-11 px-4 rounded-2xl border-orange-200 text-orange-600 hover:bg-orange-50"
+              className="h-11 px-4 rounded-2xl border-warning/30 text-warning hover:bg-warning/10"
               title="Delete & recreate every mailbox in this job with fresh passwords"
             >
               {batchBusy ? (
@@ -308,7 +308,7 @@ function JobPipelinePage() {
               variant="outline"
               onClick={handleBatchWipeReprovision}
               disabled={batchBusy}
-              className="h-11 px-4 rounded-2xl border-red-200 text-red-600 hover:bg-red-50"
+              className="h-11 px-4 rounded-2xl border-destructive/30 text-destructive hover:bg-destructive/10"
               title="Wipe Docker/Mailcow and re-provision every server in this job from scratch"
             >
               <Trash2 className="h-4 w-4 mr-2" />
@@ -318,7 +318,7 @@ function JobPipelinePage() {
               variant="outline"
               onClick={handleDelete}
               disabled={deleteMutation.isPending}
-              className="h-11 px-4 rounded-2xl border-red-200 text-red-600 hover:bg-red-50"
+              className="h-11 px-4 rounded-2xl border-destructive/30 text-destructive hover:bg-destructive/10"
             >
               {deleteMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -331,7 +331,7 @@ function JobPipelinePage() {
               <Button
                 variant="outline"
                 onClick={() => setStep("SERVER_SETUP")}
-                className="h-11 px-4 rounded-2xl border-orange-200 text-orange-600 hover:bg-orange-50"
+                className="h-11 px-4 rounded-2xl border-warning/30 text-warning hover:bg-warning/10"
               >
                 <Server className="h-4 w-4 mr-2" />
                 Go to Server Setup
@@ -404,7 +404,7 @@ function EditableDomainRow({ domain }: { domain: any }) {
             variant="ghost"
             size="sm"
             onClick={() => setIsEditing(true)}
-            className="text-primary hover:text-primary hover:bg-blue-50"
+            className="text-primary hover:text-primary hover:bg-primary/10"
           >
             Edit
           </Button>
@@ -414,7 +414,7 @@ function EditableDomainRow({ domain }: { domain: any }) {
   }
 
   return (
-    <tr className="border-b border-border last:border-0 bg-blue-50/30">
+    <tr className="border-b border-border last:border-0 bg-primary/10/30">
       <td className="p-3">
         <Input value={name} onChange={(e) => setName(e.target.value)} className="h-9 text-sm rounded-xl" />
       </td>
@@ -610,7 +610,7 @@ function PreFlightStep({
             </div>
           ))}
           {Object.values(sshStatuses).includes("fail") && (
-            <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm flex items-center gap-2">
+            <div className="p-4 bg-destructive/10 text-destructive rounded-xl text-sm flex items-center gap-2">
               <XCircle className="w-4 h-4" /> Warning: Some servers are unreachable. You may
               proceed, but server setup will fail.
             </div>
@@ -726,7 +726,7 @@ function DnsPushStep({
             {l.length > 0 && (
               <div className="max-h-32 overflow-y-auto text-xs font-mono bg-muted p-2 rounded border">
                 {l.map((res: any, i) => (
-                  <div key={i} className={res.success ? "text-green-700" : "text-red-700"}>
+                  <div key={i} className={res.success ? "text-success" : "text-destructive"}>
                     {res.success ? "✅" : "❌"} {res.name} {res.error ? `- ${res.error}` : ""}
                   </div>
                 ))}
@@ -739,10 +739,10 @@ function DnsPushStep({
                   <Loader2 className="w-3 h-3 animate-spin text-primary" />
                 )}
                 {propagation[d.id] === "ok" && (
-                  <span className="text-green-600 font-bold">Passed</span>
+                  <span className="text-success font-bold">Passed</span>
                 )}
                 {propagation[d.id] === "fail" && (
-                  <span className="text-amber-600 font-bold">Awaiting Global Propagation</span>
+                  <span className="text-warning font-bold">Awaiting Global Propagation</span>
                 )}
               </div>
             )}

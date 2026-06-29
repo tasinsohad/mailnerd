@@ -458,7 +458,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
         <div className="bg-card min-h-[400px] flex flex-col">
           {step === 0 && (
             <div className="p-8 flex flex-col gap-8 flex-1">
-              <div className="flex items-center gap-4 p-4 bg-blue-50/50 rounded-2xl border border-blue-100">
+              <div className="flex items-center gap-4 p-4 bg-primary/10/50 rounded-2xl border border-blue-100">
                 <FolderOpen className="h-5 w-5 text-primary" />
                 <div className="flex-1">
                   <h3 className="font-semibold text-sm text-foreground">Load Template (Optional)</h3>
@@ -497,7 +497,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="text-red-500 hover:text-red-600 hover:bg-red-50"
+                    className="text-red-500 hover:text-destructive hover:bg-destructive/10"
                     onClick={() => {
                       if (confirm("Delete this template?")) {
                         deleteTemplateMutation.mutate(selectedTemplateId);
@@ -509,7 +509,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 </div>
               )}
 
-              <div className="bg-green-50/50 border border-green-100 rounded-3xl p-6 flex items-start gap-4">
+              <div className="bg-success/10/50 border border-green-100 rounded-3xl p-6 flex items-start gap-4">
                 <div className="h-10 w-10 rounded-2xl bg-primary text-white flex items-center justify-center shrink-0">
                   <Wand2 className="h-5 w-5" />
                 </div>
@@ -656,8 +656,8 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                         key={i}
                         className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold border transition-all ${
                           v.valid
-                            ? "bg-green-50 text-green-600 border-green-100"
-                            : "bg-red-50 text-red-600 border-red-100"
+                            ? "bg-success/10 text-success border-green-100"
+                            : "bg-destructive/10 text-destructive border-red-100"
                         }`}
                       >
                         {v.valid ? (
@@ -678,7 +678,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
             <div className="flex-1 flex flex-col min-h-0">
               {/* Global Range Inputs */}
               <div className="p-8 pb-4 flex flex-col gap-6">
-                <div className="bg-green-50/50 border border-green-100 rounded-3xl p-6">
+                <div className="bg-success/10/50 border border-green-100 rounded-3xl p-6">
                   <h3 className="font-semibold text-foreground text-sm mb-4">
                     Global Range Settings
                   </h3>
@@ -947,7 +947,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                   <td className="px-4 py-3 font-mono text-xs break-all text-muted-foreground max-w-[300px]">{r.content}</td>
                   <td className="px-4 py-3 text-center">
                     {r.proxied ? (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-warning/15 text-warning">
                         Proxied
                       </span>
                     ) : (
