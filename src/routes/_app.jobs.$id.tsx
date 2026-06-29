@@ -8,7 +8,6 @@ import {
   updateDomain,
 } from "@/server/domains";
 import { testSshConnection, provisionServer } from "@/server/provisioning";
-import { setupMailcowDomain } from "@/server/mailcow";
 import {
   Globe,
   FolderGit2,
@@ -22,13 +21,15 @@ import {
   Terminal,
   Trash2,
   Download,
-  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { JobActionsMenu } from "@/components/JobActionsMenu";
+import { DomainActionsMenu } from "@/components/DomainActionsMenu";
+import { StatusPill } from "@/components/StatusPill";
 
 export const Route = createFileRoute("/_app/jobs/$id")({
   component: JobPipelinePage,
@@ -40,7 +41,6 @@ function JobPipelinePage() {
   const { id } = Route.useParams();
   const [step, setStep] = useState<Step>("VIEW");
   const [autoStepped, setAutoStepped] = useState(false);
-  const [batchBusy, setBatchBusy] = useState(false);
 
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -147,69 +147,6 @@ function JobPipelinePage() {
   const domains = (data as any)?.domains ?? [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const inboxes = (data as any)?.inboxes ?? [];
-
-  // Batch: delete & recreate mailboxes (clean slate) across every domain in the job.
-  const handleBatchRecreateMailboxes = async () => {
-    if (!domains.length) return;
-    if (
-      !confirm(
-        `Recreate mailboxes for ALL ${domains.length} domains (clean slate)?\n\nThis DELETES every mailbox in Mailcow and recreates them with NEW passwords. Old passwords will stop working. Mail domains and DKIM are kept.\n\nContinue?`,
-      )
-    )
-      return;
-    setBatchBusy(true);
-    let created = 0;
-    let failed = 0;
-    for (const d of domains) {
-      if (!d.mailcowHostname) continue; // server not provisioned yet
-      try {
-        const res: any = await setupMailcowDomain({ data: { domainId: d.id, recreate: true } });
-        if (res?.summary) {
-          created += res.summary.created;
-          failed += res.summary.failed;
-        } else if (res?.error) {
-          failed += 1;
-        }
-      } catch {
-        failed += 1;
-      }
-    }
-    setBatchBusy(false);
-    qc.invalidateQueries({ queryKey: ["batch", id] });
-    if (failed > 0)
-      toast.error(`Recreated ${created} mailboxes; ${failed} failed. Open a domain to see why.`, {
-        duration: 10000,
-      });
-    else toast.success(`Recreated ${created} mailboxes across ${domains.length} domains.`);
-  };
-
-  // Batch: wipe Docker/Mailcow and re-provision every server from scratch.
-  const handleBatchWipeReprovision = async () => {
-    if (!domains.length) return;
-    if (
-      !confirm(
-        `Wipe & re-provision ALL ${domains.length} servers from scratch?\n\nThis reinstalls Docker/Mailcow on each server (20-40 min each) and regenerates everything. Continue?`,
-      )
-    )
-      return;
-    setBatchBusy(true);
-    let startedOk = 0;
-    let startFailed = 0;
-    for (const d of domains) {
-      try {
-        const res: any = await provisionServer({ data: { domainId: d.id } });
-        if (res?.error) startFailed += 1;
-        else startedOk += 1;
-      } catch {
-        startFailed += 1;
-      }
-    }
-    setBatchBusy(false);
-    qc.invalidateQueries({ queryKey: ["batch", id] });
-    toast[startFailed ? "error" : "success"](
-      `Re-provision started for ${startedOk} server(s)${startFailed ? `, ${startFailed} failed to start` : ""}. Open "Server Setup" to watch progress.`,
-    );
-  };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const records = (data as any)?.records ?? [];
 
@@ -290,30 +227,10 @@ function JobPipelinePage() {
               <Download className="h-4 w-4 mr-2" />
               Export CSV
             </Button>
-            <Button
-              variant="outline"
-              onClick={handleBatchRecreateMailboxes}
-              disabled={batchBusy}
-              className="h-11 px-4 rounded-lg border-warning/30 text-warning hover:bg-warning/10"
-              title="Delete & recreate every mailbox in this job with fresh passwords"
-            >
-              {batchBusy ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4 mr-2" />
-              )}
-              Recreate Mailboxes
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handleBatchWipeReprovision}
-              disabled={batchBusy}
-              className="h-11 px-4 rounded-lg border-destructive/30 text-destructive hover:bg-destructive/10"
-              title="Wipe Docker/Mailcow and re-provision every server in this job from scratch"
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Wipe &amp; Re-provision
-            </Button>
+            <JobActionsMenu
+              domainIds={domains.map((d: any) => d.id)}
+              onChanged={() => qc.invalidateQueries({ queryKey: ["batch", id] })}
+            />
             <Button
               variant="outline"
               onClick={handleDelete}
@@ -393,21 +310,33 @@ function EditableDomainRow({ domain }: { domain: any }) {
   if (!isEditing) {
     return (
       <tr className="border-b border-border last:border-0 hover:bg-muted/50 transition-colors">
-        <td className="p-4 font-medium text-foreground">{domain.name}</td>
+        <td className="p-4">
+          <div className="ident text-sm font-medium text-foreground">{domain.name}</div>
+          <div className="mt-1.5">
+            <StatusPill status={domain.status} />
+          </div>
+        </td>
         <td className="p-4 font-mono text-xs text-muted-foreground">{domain.ipAddress || "-"}</td>
         <td className="p-4 font-mono text-xs text-muted-foreground">{domain.sshUser || "-"}</td>
         <td className="p-4 font-mono text-xs text-muted-foreground italic">
           {domain.sshPassword ? "••••••••" : "Not set"}
         </td>
-        <td className="p-4 text-right">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setIsEditing(true)}
-            className="text-primary hover:text-primary hover:bg-primary/10"
-          >
-            Edit
-          </Button>
+        <td className="p-4">
+          <div className="flex items-center justify-end gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsEditing(true)}
+              className="text-primary hover:text-primary hover:bg-primary/10"
+            >
+              Edit
+            </Button>
+            <DomainActionsMenu
+              domainId={domain.id}
+              domainName={domain.name}
+              onChanged={() => qc.invalidateQueries({ queryKey: ["batch"] })}
+            />
+          </div>
         </td>
       </tr>
     );
