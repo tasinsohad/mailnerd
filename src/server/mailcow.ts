@@ -4,6 +4,7 @@ import { z } from "zod";
 import { domains } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { ensureMailDomains, createMailboxes, syncDkim } from "./pipeline";
+import { ensureWorkingApiKey } from "./mailcow-key";
 
 export const setupMailcowDomain = createServerFn({ method: "POST" })
   .middleware([requireAuth])
@@ -17,12 +18,17 @@ export const setupMailcowDomain = createServerFn({ method: "POST" })
     const { db, userId } = context as any;
     if (!db) return { error: "Database not connected" };
 
-    const domain = await db.query.domains.findFirst({
+    const loaded = await db.query.domains.findFirst({
       where: and(eq(domains.id, data.domainId), eq(domains.userId, userId)),
+      with: { server: true },
     });
-    if (!domain || !domain.mailcowHostname || !domain.mailcowApiKey) {
+    if (!loaded || !loaded.mailcowHostname || !loaded.mailcowApiKey) {
       return { error: "Mailcow credentials missing for this domain" };
     }
+
+    // Self-heal a drifted API key (401 after a re-provision) by re-reading it from the server
+    // before touching mailboxes — otherwise ensureMailDomains throws "API not reachable".
+    const { domain } = await ensureWorkingApiKey(db, loaded);
 
     const { existingDomains, results: domainResults } = await ensureMailDomains(db, domain);
     const { results: mailboxResults, summary } = await createMailboxes(db, domain, existingDomains, {

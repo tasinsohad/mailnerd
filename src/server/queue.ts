@@ -7,6 +7,7 @@ import { SSHManager } from "../lib/ssh";
 import { decrypt } from "../lib/encryption";
 import { jobEvents } from "./events";
 import { ensureMailDomains, createMailboxes, syncDkim, unproxyDns } from "./pipeline";
+import { ensureWorkingApiKey } from "./mailcow-key";
 import crypto from "crypto";
 
 // Try to decrypt credentials, falling back to plain text if not encrypted
@@ -410,6 +411,10 @@ async function executeProvisionJob(
     // Capture the generated API key from the stream the moment it appears and persist
     // it immediately, so a later failure can't leave the DB with a stale key.
     let capturedApiKey: string | null = null;
+    // Match on a rolling buffer, not per-chunk: the SSH stream can split the 64-hex key across
+    // two data chunks, which would make a per-chunk regex miss it and leave the DB with a stale
+    // key (-> later 401s and a "ready but no mailboxes" domain).
+    let keyScanBuffer = "";
     const API_KEY_MARKER = /(?:GENERATED_API_KEY|MAILCOW_API_KEY)=([a-f0-9]{64})/;
 
     await ssh.executeCommand(deployScript, {
@@ -418,14 +423,17 @@ async function executeProvisionJob(
       // 15 min was too short and killed the job mid-pull; allow 45 min.
       timeoutMs: 2_700_000,
       onData: (chunk) => {
-        const m = chunk.match(API_KEY_MARKER);
-        if (m && !capturedApiKey) {
-          capturedApiKey = m[1];
-          // Persist right away (best-effort) so the key survives any later failure.
-          db.update(domains)
-            .set({ mailcowHostname, mailcowApiKey: capturedApiKey })
-            .where(eq(domains.id, domainId))
-            .catch((err: any) => console.error("Failed to persist API key early:", err));
+        if (!capturedApiKey) {
+          keyScanBuffer = (keyScanBuffer + chunk).slice(-512); // keep tail across chunk boundaries
+          const m = keyScanBuffer.match(API_KEY_MARKER);
+          if (m) {
+            capturedApiKey = m[1];
+            // Persist right away (best-effort) so the key survives any later failure.
+            db.update(domains)
+              .set({ mailcowHostname, mailcowApiKey: capturedApiKey })
+              .where(eq(domains.id, domainId))
+              .catch((err: any) => console.error("Failed to persist API key early:", err));
+          }
         }
         // Redact the key from logs stored/shown to the user.
         log(chunk.replace(/([a-f0-9]{64})/g, "[redacted-api-key]"), "Configuring");
@@ -462,12 +470,27 @@ async function executeProvisionJob(
     // never undo the successful provision - the domain stays "ready" and the manual
     // "Setup Mailcow" / "Recreate Mailboxes" buttons remain available to re-run.
     try {
-      const freshDomain = await db.query.domains.findFirst({ where: eq(domains.id, domainId) });
+      const loadedDomain = await db.query.domains.findFirst({
+        where: eq(domains.id, domainId),
+        with: { server: true },
+      });
+      // Make sure the key we use actually works (re-read from the server if it drifted) before
+      // creating mailboxes — otherwise the probe 401s and we'd report "ready" with no mailboxes.
+      const { domain: freshDomain } = loadedDomain
+        ? await ensureWorkingApiKey(db, loadedDomain)
+        : { domain: loadedDomain };
       if (freshDomain?.mailcowHostname && freshDomain?.mailcowApiKey) {
         log("Creating mailboxes...", "Ready");
         const { existingDomains } = await ensureMailDomains(db, freshDomain);
         const { summary } = await createMailboxes(db, freshDomain, existingDomains);
         log(`Mailboxes: ${summary.created}/${summary.total} created.`, "Ready");
+        if (summary.created < summary.total) {
+          log(
+            `WARNING: only ${summary.created}/${summary.total} mailboxes were created. ` +
+              `Re-run "Recreate mailboxes" from the domain page.`,
+            "Ready",
+          );
+        }
         if (freshDomain.userId) {
           try {
             await syncDkim(db, freshDomain, freshDomain.userId);
