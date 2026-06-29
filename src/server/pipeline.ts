@@ -396,15 +396,20 @@ export async function syncDkim(
   for (const sub of uniqueSubdomains) {
     try {
       const { json } = await mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, `get/dkim/${sub}`);
-      const dkimPublic = (json as any)?.dkim_public;
-      if (!dkimPublic) {
-        results.push({ name: sub, success: false, error: "DKIM not found in Mailcow" });
+      // Mailcow returns { pubkey, dkim_txt, dkim_selector, length } — NOT `dkim_public`.
+      // Prefer the ready-made dkim_txt; otherwise build the record from the raw pubkey.
+      const dkimTxt = (json as any)?.dkim_txt;
+      const pubkey = (json as any)?.pubkey;
+      if (!dkimTxt && !pubkey) {
+        results.push({ name: sub, success: false, error: "DKIM key not found in Mailcow" });
         continue;
       }
-      const dkimKey = String(dkimPublic).replace(/(\r\n|\n|\r)/gm, "");
       const recName = sub === domain.name ? "dkim._domainkey" : `dkim._domainkey.${sub.split(".")[0]}`;
       const fullRecName = recName === "@" ? domain.name : `${recName}.${domain.name}`;
-      const recordContent = `v=DKIM1;k=rsa;t=s;s=email;p=${dkimKey}`;
+      const recordContent =
+        dkimTxt && String(dkimTxt).toLowerCase().includes("v=dkim1")
+          ? String(dkimTxt).replace(/(\r\n|\n|\r)/gm, "")
+          : `v=DKIM1;k=rsa;t=s;s=email;p=${String(pubkey).replace(/(\r\n|\n|\r)/gm, "")}`;
 
       const dnsRec = await db.query.dnsRecords.findFirst({
         where: and(

@@ -147,8 +147,12 @@ function DomainDetailsPage() {
   }, [domain?.status, domain?.id]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
+    // Only auto-scroll to the live log while actively provisioning — not when opening a
+    // ready domain (which would yank the page down to its historical logs on load).
+    if (domain?.status === "configuring" || domain?.status === "provisioning") {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logs, domain?.status]);
 
   const pushDnsMutation = useMutation({
     mutationFn: () => pushDnsToCloudflare({ data: { domainId: id } }),
