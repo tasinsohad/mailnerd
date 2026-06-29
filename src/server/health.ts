@@ -1,6 +1,25 @@
-import dns from "node:dns/promises";
 import tls from "node:tls";
 import { mailcowRequest } from "./mailcow-helpers";
+
+// DNS-over-HTTPS resolver. Node's dns.resolve*/reverse use c-ares (direct UDP/53 queries),
+// which fail in many runtimes (no configured server / blocked), even though https/tls work
+// (they use the OS resolver). DoH uses the same HTTPS transport that already works here, so
+// the DNS checks reflect reality. Returns the answer `data` strings for the record type.
+const DOH_TYPE: Record<string, number> = { A: 1, MX: 15, TXT: 16, PTR: 12 };
+async function doh(name: string, type: "A" | "MX" | "TXT" | "PTR", timeoutMs = 6000): Promise<string[]> {
+  const url = `https://dns.google/resolve?name=${encodeURIComponent(name)}&type=${type}`;
+  const res = await withTimeout(fetch(url, { headers: { accept: "application/dns-json" } }), timeoutMs);
+  if (!res.ok) throw new Error(`DoH ${res.status}`);
+  const json: any = await res.json();
+  // Status 0 = NOERROR, 3 = NXDOMAIN. Anything without Answer means "no such record".
+  if (json.Status !== 0 || !Array.isArray(json.Answer)) return [];
+  return json.Answer.filter((a: any) => a.type === DOH_TYPE[type]).map((a: any) => String(a.data));
+}
+
+// TXT answers come back wrapped in quotes and possibly split into chunks; normalise.
+function txtValue(data: string): string {
+  return data.replace(/"\s+"/g, "").replace(/^"|"$/g, "");
+}
 
 // Deliverability health engine. Each indicator is probed independently (one failure never
 // aborts the rest) and carries a concrete remediation. Network probes (DNS/RBL/TLS/Mailcow)
@@ -68,7 +87,8 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
 
   // 1. Mail host A record + Cloudflare-proxy check.
   try {
-    const ips = await withTimeout(dns.resolve4(mailHost), 6000);
+    const ips = await doh(mailHost, "A");
+    if (ips.length === 0) throw new Error("no A record");
     if (ips.some((ip) => isCloudflareIp(ip))) {
       add({ id: "mailhost", label: "Mail host DNS", status: "fail", detail: `${mailHost} is Cloudflare-proxied (${ips[0]}) — the Mailcow API and mail can't be reached.`, fix: "Un-proxy the mail host (set it DNS-only).", action: "fixDns" });
     } else if (ipAddress && !ips.includes(ipAddress)) {
@@ -83,7 +103,8 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
   // 2. Reverse DNS (PTR).
   if (ipAddress) {
     try {
-      const ptr = await withTimeout(dns.reverse(ipAddress), 6000);
+      const revName = ipAddress.split(".").reverse().join(".") + ".in-addr.arpa";
+      const ptr = (await doh(revName, "PTR")).map((h) => h.replace(/\.$/, ""));
       if (ptr.some((h) => h.toLowerCase() === mailHost.toLowerCase())) {
         add({ id: "ptr", label: "Reverse DNS (PTR)", status: "ok", detail: `${ipAddress} → ${ptr[0]}` });
       } else {
@@ -121,24 +142,27 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
   };
 
   await agg("mx", "MX records", async (s) => {
-    const mx = await withTimeout(dns.resolveMx(s), 6000);
-    return mx.some((m) => m.exchange.toLowerCase().replace(/\.$/, "") === mailHost.toLowerCase());
+    const mx = await doh(s, "MX");
+    return mx.some((m) => (m.trim().split(/\s+/).pop() || "").toLowerCase().replace(/\.$/, "") === mailHost.toLowerCase());
   }, "Push DNS to set MX → mail host.", "pushDns");
 
   await agg("spf", "SPF", async (s) => {
-    const txt = await withTimeout(dns.resolveTxt(s), 6000);
-    return txt.some((parts) => parts.join("").toLowerCase().includes("v=spf1"));
+    const txt = await doh(s, "TXT");
+    return txt.some((t) => txtValue(t).toLowerCase().includes("v=spf1"));
   }, "Push DNS to publish SPF.", "pushDns");
 
   await agg("dkim", "DKIM", async (s) => {
     const prefix = s.split(".")[0];
-    const txt = await withTimeout(dns.resolveTxt(`dkim._domainkey.${prefix}.${name}`), 6000);
-    return txt.some((parts) => parts.join("").toLowerCase().includes("v=dkim1") && parts.join("").includes("p="));
+    const txt = await doh(`dkim._domainkey.${prefix}.${name}`, "TXT");
+    return txt.some((t) => {
+      const v = txtValue(t).toLowerCase();
+      return v.includes("v=dkim1") && v.includes("p=");
+    });
   }, "Run Sync DKIM to publish the DKIM key.", "syncDkim");
 
   await agg("dmarc", "DMARC", async (s) => {
-    const txt = await withTimeout(dns.resolveTxt(`_dmarc.${s}`), 6000);
-    return txt.some((parts) => parts.join("").toLowerCase().includes("v=dmarc1"));
+    const txt = await doh(`_dmarc.${s}`, "TXT");
+    return txt.some((t) => txtValue(t).toLowerCase().includes("v=dmarc1"));
   }, "Push DNS to publish DMARC.", "pushDns");
 
   // 7. Blacklist / IP reputation.
@@ -149,10 +173,10 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
       await Promise.all(
         DNSBLS.map(async (bl) => {
           try {
-            await withTimeout(dns.resolve4(`${rev}.${bl}`), 5000);
-            listings.push(bl); // resolved => listed
+            const a = await doh(`${rev}.${bl}`, "A", 5000);
+            if (a.length > 0) listings.push(bl); // answer => listed
           } catch {
-            /* NXDOMAIN / timeout => not listed */
+            /* query failed => treat as not listed */
           }
         }),
       );
