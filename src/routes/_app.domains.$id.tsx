@@ -99,6 +99,7 @@ function DomainDetailsPage() {
   const [ipAddress, setIpAddress] = useState("");
   const [sshUser, setSshUser] = useState("root");
   const [sshPassword, setSshPassword] = useState("");
+  const [dnsOpen, setDnsOpen] = useState(false);
 
   useEffect(() => {
     if (domain) {
@@ -530,7 +531,7 @@ function DomainDetailsPage() {
           <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
             Avg Per Subdomain
           </div>
-          <div className="text-3xl font-black text-purple-500">
+          <div className="text-3xl font-black text-primary">
             {plan?.subdomainCount ? (plan.totalInboxes / plan.subdomainCount).toFixed(1) : 0}
           </div>
           <div className="text-[10px] text-muted-foreground">Balanced distribution</div>
@@ -670,8 +671,8 @@ function DomainDetailsPage() {
             </div>
           ) : (
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100">
-                <Server className="h-5 w-5 text-purple-600" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+                <Server className="h-5 w-5 text-primary" />
               </div>
               <div>
                 <div className="font-medium">{domain.name}</div>
@@ -739,34 +740,47 @@ function DomainDetailsPage() {
         </div>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-1">
-        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Globe className="h-5 w-5 text-muted-foreground" /> DNS Blueprint
-          </h2>
-          {records.length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+      <div className="rounded-xl border border-border bg-card">
+        <button
+          type="button"
+          onClick={() => setDnsOpen((v) => !v)}
+          className="flex w-full items-center gap-3 px-6 py-4 text-left transition-colors hover:bg-muted/40"
+          aria-expanded={dnsOpen}
+        >
+          <Globe className="h-5 w-5 text-muted-foreground" />
+          <span className="font-display text-base font-semibold text-foreground">DNS Blueprint</span>
+          <span className="ident rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+            {records.length}
+          </span>
+          <ChevronDown
+            className={`ml-auto h-4 w-4 text-muted-foreground transition-transform ${dnsOpen ? "rotate-180" : ""}`}
+          />
+        </button>
+        {dnsOpen &&
+          (records.length > 0 ? (
+            <div className="grid grid-cols-1 gap-2 border-t border-border p-4 sm:grid-cols-2 lg:grid-cols-3">
               {records.map((record: any) => (
                 <div
                   key={record.id}
-                  className="flex items-center gap-2 rounded-xl bg-slate-50 px-4 py-2 border border-slate-100"
+                  className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2"
                 >
-                  <div className="text-[10px] font-bold text-slate-400 bg-slate-200 px-1.5 py-0.5 rounded uppercase w-10 text-center">
+                  <span className="ident w-12 shrink-0 rounded bg-secondary px-1.5 py-0.5 text-center text-[10px] font-semibold uppercase text-muted-foreground">
                     {record.type}
-                  </div>
-                  <div className="font-mono text-[10px] text-slate-700 truncate flex-1">
+                  </span>
+                  <span className="ident flex-1 truncate text-[11px] text-foreground">
                     {record.name === "@" ? domain.name : `${record.name}.${domain.name}`}
-                  </div>
-                  <div className="text-[9px] text-slate-400 truncate max-w-[80px] font-mono">
+                  </span>
+                  <span className="ident max-w-[90px] truncate text-[10px] text-muted-foreground" title={record.content}>
                     {record.content}
-                  </div>
+                  </span>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground italic">No DNS records generated yet.</div>
-          )}
-        </div>
+            <div className="border-t border-border p-6 text-sm italic text-muted-foreground">
+              No DNS records generated yet.
+            </div>
+          ))}
       </div>
 
       {(domain.status === "configuring" || domain.status === "provisioning" || domain.status === "failed" || domain.status === "error" || logs.length > 0) && (
@@ -867,7 +881,7 @@ function SubdomainInboxSection({
           ) : (
             <ChevronRight className="h-5 w-5 text-muted-foreground" />
           )}
-          <Network className="h-5 w-5 text-purple-500" />
+          <Network className="h-5 w-5 text-primary" />
           <div>
             <div className="font-semibold text-foreground">
               {prefix}.{domain}
