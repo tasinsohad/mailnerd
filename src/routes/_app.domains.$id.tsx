@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { MoreHorizontal } from "lucide-react";
+import { HealthCard } from "@/components/HealthCard";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
 
@@ -513,6 +514,12 @@ function DomainDetailsPage() {
           </DropdownMenu>
         </div>
       </div>
+
+      <HealthCard
+        domainId={id}
+        initialHealth={(domain.health as any) ?? null}
+        initialCheckedAt={domain.healthCheckedAt ?? null}
+      />
 
       <div className="grid gap-6 md:grid-cols-3">
         <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">

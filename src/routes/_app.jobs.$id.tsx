@@ -30,6 +30,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { JobActionsMenu } from "@/components/JobActionsMenu";
 import { DomainActionsMenu } from "@/components/DomainActionsMenu";
 import { StatusPill } from "@/components/StatusPill";
+import { JobHealthSummary } from "@/components/JobHealthSummary";
 
 export const Route = createFileRoute("/_app/jobs/$id")({
   component: JobPipelinePage,
@@ -264,7 +265,12 @@ function JobPipelinePage() {
         )}
       </div>
 
-      {step === "VIEW" && <ViewStep domains={domains} inboxes={inboxes} records={records} />}
+      {step === "VIEW" && (
+        <div className="flex flex-col gap-6">
+          <JobHealthSummary batchId={id} domains={domains} />
+          <ViewStep domains={domains} inboxes={inboxes} records={records} />
+        </div>
+      )}
       {step === "PRE_FLIGHT" && (
         <PreFlightStep
           domains={domains}

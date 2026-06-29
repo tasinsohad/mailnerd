@@ -96,6 +96,8 @@ export const domains = pgTable("domains", {
   mailcowApiKey: text("mailcow_api_key"),
   plannedInboxCount: integer("planned_inbox_count"),
   terminalLogs: text("terminal_logs"),
+  health: jsonb("health"), // last deliverability health result (see src/server/health.ts)
+  healthCheckedAt: timestamp("health_checked_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
