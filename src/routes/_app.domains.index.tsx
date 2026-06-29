@@ -56,15 +56,15 @@ function DomainsPage() {
     <div className="flex flex-col gap-6 p-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Domains</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-2xl font-bold text-foreground">Domains</h1>
+          <p className="text-sm text-muted-foreground mt-1">
             {domains.length} domain{domains.length !== 1 ? "s" : ""} total
           </p>
         </div>
         <div className="flex gap-3">
           <Button
             onClick={() => setWizardOpen(true)}
-            className="bg-[#4DB584] hover:bg-[#3da070] rounded-2xl gap-2 shadow-lg shadow-[#4DB584]/20"
+            className="bg-primary hover:bg-primary/90 rounded-2xl gap-2 shadow-lg shadow-primary/20"
           >
             <Plus className="h-4 w-4" /> Add Domains
           </Button>
@@ -91,13 +91,13 @@ function DomainsPage() {
 
       {isLoading ? (
         <div className="flex justify-center py-20">
-          <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : domains.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-3xl bg-white p-16 text-center ring-1 ring-black/5">
-          <Globe className="h-12 w-12 text-gray-300" />
-          <p className="text-lg font-medium text-gray-700">No domains yet</p>
-          <p className="text-sm text-gray-500">Use "Add Domains" to get started.</p>
+        <div className="flex flex-col items-center justify-center gap-3 rounded-3xl bg-card p-16 text-center ring-1 ring-border">
+          <Globe className="h-12 w-12 text-muted-foreground" />
+          <p className="text-lg font-medium text-foreground">No domains yet</p>
+          <p className="text-sm text-muted-foreground">Use "Add Domains" to get started.</p>
         </div>
       ) : (
         <div className="flex flex-col gap-2">
@@ -106,26 +106,26 @@ function DomainsPage() {
               key={d.id}
               to="/domains/$id"
               params={{ id: d.id }}
-              className="flex items-center justify-between rounded-2xl bg-white px-5 py-4 ring-1 ring-black/5 shadow-sm hover:shadow-md transition-all group"
+              className="flex items-center justify-between rounded-2xl bg-card px-5 py-4 ring-1 ring-border shadow-sm hover:shadow-md transition-all group"
             >
               <div className="flex items-center gap-4">
                 <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50">
-                  <Globe className="h-4 w-4 text-blue-500" />
+                  <Globe className="h-4 w-4 text-primary" />
                 </div>
                 <div>
-                  <div className="font-medium text-gray-900">{d.name}</div>
-                  <div className="text-xs text-gray-500">
+                  <div className="font-medium text-foreground">{d.name}</div>
+                  <div className="text-xs text-muted-foreground">
                     {d.plannedInboxCount ? `${d.plannedInboxCount} inboxes planned` : "No plan yet"}
                   </div>
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 <span
-                  className={`rounded-lg px-2 py-0.5 text-xs font-medium ${STATUS_COLOR[d.status] ?? "bg-gray-100 text-gray-600"}`}
+                  className={`rounded-lg px-2 py-0.5 text-xs font-medium ${STATUS_COLOR[d.status] ?? "bg-muted text-muted-foreground"}`}
                 >
                   {d.status}
                 </span>
-                <div className="rounded-xl p-2 text-gray-400 group-hover:text-[#4DB584]">
+                <div className="rounded-xl p-2 text-muted-foreground group-hover:text-primary">
                   <ChevronRight className="h-4 w-4" />
                 </div>
                 <Button

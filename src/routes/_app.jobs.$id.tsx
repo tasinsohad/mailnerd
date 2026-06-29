@@ -228,7 +228,7 @@ function JobPipelinePage() {
   if (isLoading) {
     return (
       <div className="flex justify-center py-20">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -238,7 +238,7 @@ function JobPipelinePage() {
       <div className="flex flex-col items-center justify-center py-20">
         <FolderGit2 className="h-12 w-12 text-red-500 mb-4" />
         <h2 className="text-xl font-bold">Job not found</h2>
-        <Link to="/jobs" className="text-blue-500 hover:underline mt-2">
+        <Link to="/jobs" className="text-primary hover:underline mt-2">
           Back to Jobs
         </Link>
       </div>
@@ -251,8 +251,8 @@ function JobPipelinePage() {
         <div className="flex items-center gap-4">
           {step === "VIEW" ? (
             <Link to="/jobs">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-black/5 hover:bg-gray-50 transition-colors">
-                <ArrowLeft className="h-5 w-5 text-gray-600" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-card shadow-sm ring-1 ring-border hover:bg-muted transition-colors">
+                <ArrowLeft className="h-5 w-5 text-muted-foreground" />
               </div>
             </Link>
           ) : (
@@ -261,20 +261,20 @@ function JobPipelinePage() {
             </Button>
           )}
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">{batch.name}</h1>
-            <div className="flex gap-2 items-center text-sm text-gray-500 mt-1">
+            <h1 className="text-2xl font-bold text-foreground">{batch.name}</h1>
+            <div className="flex gap-2 items-center text-sm text-muted-foreground mt-1">
               <span>Step:</span>
-              <span className={`font-bold ${step === "VIEW" ? "text-blue-600" : ""}`}>Plan</span>
+              <span className={`font-bold ${step === "VIEW" ? "text-primary" : ""}`}>Plan</span>
               <span>→</span>
-              <span className={`font-bold ${step === "PRE_FLIGHT" ? "text-blue-600" : ""}`}>
+              <span className={`font-bold ${step === "PRE_FLIGHT" ? "text-primary" : ""}`}>
                 Pre-Flight
               </span>
               <span>→</span>
-              <span className={`font-bold ${step === "DNS_PUSH" ? "text-blue-600" : ""}`}>
+              <span className={`font-bold ${step === "DNS_PUSH" ? "text-primary" : ""}`}>
                 DNS Push
               </span>
               <span>→</span>
-              <span className={`font-bold ${step === "SERVER_SETUP" ? "text-blue-600" : ""}`}>
+              <span className={`font-bold ${step === "SERVER_SETUP" ? "text-primary" : ""}`}>
                 Server Setup
               </span>
             </div>
@@ -285,7 +285,7 @@ function JobPipelinePage() {
             <Button
               variant="outline"
               onClick={handleExportCsv}
-              className="h-11 px-4 rounded-2xl border-gray-200 text-gray-600 hover:bg-gray-50"
+              className="h-11 px-4 rounded-2xl border-border text-muted-foreground hover:bg-muted"
             >
               <Download className="h-4 w-4 mr-2" />
               Export CSV
@@ -339,7 +339,7 @@ function JobPipelinePage() {
             )}
             <Button
               onClick={() => setStep("PRE_FLIGHT")}
-              className="h-11 px-8 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white shadow-lg"
+              className="h-11 px-8 rounded-2xl bg-primary hover:bg-primary/90 text-white shadow-lg"
             >
               Start Provisioning Pipeline
             </Button>
@@ -392,11 +392,11 @@ function EditableDomainRow({ domain }: { domain: any }) {
 
   if (!isEditing) {
     return (
-      <tr className="border-b border-gray-100 last:border-0 hover:bg-gray-50/50 transition-colors">
-        <td className="p-4 font-medium text-gray-800">{domain.name}</td>
-        <td className="p-4 font-mono text-xs text-gray-600">{domain.ipAddress || "-"}</td>
-        <td className="p-4 font-mono text-xs text-gray-600">{domain.sshUser || "-"}</td>
-        <td className="p-4 font-mono text-xs text-gray-400 italic">
+      <tr className="border-b border-border last:border-0 hover:bg-muted/50 transition-colors">
+        <td className="p-4 font-medium text-foreground">{domain.name}</td>
+        <td className="p-4 font-mono text-xs text-muted-foreground">{domain.ipAddress || "-"}</td>
+        <td className="p-4 font-mono text-xs text-muted-foreground">{domain.sshUser || "-"}</td>
+        <td className="p-4 font-mono text-xs text-muted-foreground italic">
           {domain.sshPassword ? "••••••••" : "Not set"}
         </td>
         <td className="p-4 text-right">
@@ -404,7 +404,7 @@ function EditableDomainRow({ domain }: { domain: any }) {
             variant="ghost"
             size="sm"
             onClick={() => setIsEditing(true)}
-            className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+            className="text-primary hover:text-primary hover:bg-blue-50"
           >
             Edit
           </Button>
@@ -414,7 +414,7 @@ function EditableDomainRow({ domain }: { domain: any }) {
   }
 
   return (
-    <tr className="border-b border-gray-100 last:border-0 bg-blue-50/30">
+    <tr className="border-b border-border last:border-0 bg-blue-50/30">
       <td className="p-3">
         <Input value={name} onChange={(e) => setName(e.target.value)} className="h-9 text-sm rounded-xl" />
       </td>
@@ -432,7 +432,7 @@ function EditableDomainRow({ domain }: { domain: any }) {
           <Button variant="ghost" size="sm" onClick={() => setIsEditing(false)} className="rounded-xl">
             Cancel
           </Button>
-          <Button size="sm" onClick={handleSave} disabled={updateMut.isPending} className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white">
+          <Button size="sm" onClick={handleSave} disabled={updateMut.isPending} className="rounded-xl bg-primary hover:bg-primary/90 text-white">
             {updateMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
           </Button>
         </div>
@@ -453,31 +453,31 @@ function ViewStep({
   return (
     <div className="grid gap-6">
       <div className="grid gap-6 md:grid-cols-3">
-        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-2">
-          <div className="text-xs font-bold text-gray-400 uppercase">Total Domains</div>
-          <div className="text-3xl font-black text-blue-500">{domains.length}</div>
+        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+          <div className="text-xs font-bold text-muted-foreground uppercase">Total Domains</div>
+          <div className="text-3xl font-black text-primary">{domains.length}</div>
         </div>
-        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-2">
-          <div className="text-xs font-bold text-gray-400 uppercase">Total Inboxes</div>
-          <div className="text-3xl font-black text-[#4DB584]">{inboxes.length}</div>
+        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+          <div className="text-xs font-bold text-muted-foreground uppercase">Total Inboxes</div>
+          <div className="text-3xl font-black text-primary">{inboxes.length}</div>
         </div>
-        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-2">
-          <div className="text-xs font-bold text-gray-400 uppercase">DNS Records</div>
+        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+          <div className="text-xs font-bold text-muted-foreground uppercase">DNS Records</div>
           <div className="text-3xl font-black text-purple-500">{records.length}</div>
         </div>
       </div>
 
-      <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-        <h3 className="text-lg font-bold text-gray-900 mb-4">Domains in Job</h3>
+      <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border">
+        <h3 className="text-lg font-bold text-foreground mb-4">Domains in Job</h3>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="border-b-2 border-gray-100">
-                <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Domain</th>
-                <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-wider">IP Address</th>
-                <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-wider">SSH User</th>
-                <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-wider">SSH Password</th>
-                <th className="p-4 text-xs font-bold text-gray-400 uppercase tracking-wider text-right">Actions</th>
+              <tr className="border-b-2 border-border">
+                <th className="p-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">Domain</th>
+                <th className="p-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">IP Address</th>
+                <th className="p-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">SSH User</th>
+                <th className="p-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">SSH Password</th>
+                <th className="p-4 text-xs font-bold text-muted-foreground uppercase tracking-wider text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -524,7 +524,7 @@ function PreFlightStep({
   };
 
   return (
-    <div className="flex flex-col gap-4 bg-white rounded-3xl p-6 shadow-sm ring-1 ring-black/5">
+    <div className="flex flex-col gap-4 bg-card rounded-3xl p-6 shadow-sm ring-1 ring-border">
       <Tabs
         defaultValue="dns"
         onValueChange={(v) => {
@@ -549,7 +549,7 @@ function PreFlightStep({
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm text-left">
                     <thead>
-                      <tr className="bg-gray-50">
+                      <tr className="bg-muted">
                         <th className="p-2">Name</th>
                         <th className="p-2">Type</th>
                         <th className="p-2">Content</th>
@@ -561,7 +561,7 @@ function PreFlightStep({
                         <tr key={r.id} className="border-b last:border-0">
                           <td className="p-2">{r.name}</td>
                           <td className="p-2">
-                            <span className="bg-gray-200 px-1 rounded text-xs">{r.type}</span>
+                            <span className="bg-secondary px-1 rounded text-xs">{r.type}</span>
                           </td>
                           <td className="p-2 truncate max-w-[200px]" title={r.content}>
                             {r.content}
@@ -584,7 +584,7 @@ function PreFlightStep({
               return (
                 <div key={d.id} className="border rounded-xl p-4">
                   <h3 className="font-bold mb-2">{d.name}</h3>
-                  <div className="text-sm text-gray-500">{dInboxes.length} inboxes planned</div>
+                  <div className="text-sm text-muted-foreground">{dInboxes.length} inboxes planned</div>
                 </div>
               );
             })}
@@ -596,13 +596,13 @@ function PreFlightStep({
             <div key={d.id} className="border rounded-xl p-4 flex items-center justify-between">
               <div className="flex flex-col">
                 <span className="font-bold">{d.name}</span>
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-muted-foreground">
                   {d.ipAddress} | {d.sshUser}
                 </span>
               </div>
               <div>
                 {sshStatuses[d.id] === "testing" && (
-                  <Loader2 className="animate-spin text-blue-500" />
+                  <Loader2 className="animate-spin text-primary" />
                 )}
                 {sshStatuses[d.id] === "ok" && <CheckCircle2 className="text-green-500" />}
                 {sshStatuses[d.id] === "fail" && <XCircle className="text-red-500" />}
@@ -618,7 +618,7 @@ function PreFlightStep({
         </TabsContent>
       </Tabs>
       <div className="pt-4 border-t flex justify-end">
-        <Button onClick={onNext} className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl">
+        <Button onClick={onNext} className="bg-primary hover:bg-primary/90 text-white rounded-xl">
           Confirm & Start
         </Button>
       </div>
@@ -694,10 +694,10 @@ function DnsPushStep({
   ).length;
 
   return (
-    <div className="flex flex-col gap-6 bg-white rounded-3xl p-6 shadow-sm ring-1 ring-black/5">
+    <div className="flex flex-col gap-6 bg-card rounded-3xl p-6 shadow-sm ring-1 ring-border">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold">Cloudflare DNS Push</h2>
-        <div className="text-sm text-gray-500">
+        <div className="text-sm text-muted-foreground">
           {totalDone} / {domains.length} domains processed
         </div>
       </div>
@@ -712,19 +712,19 @@ function DnsPushStep({
               <span className="font-bold flex items-center gap-2">
                 <Globe className="w-4 h-4" /> {d.name}
               </span>
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-muted-foreground">
                 {p.status === "pushing" && <Loader2 className="w-3 h-3 animate-spin inline mr-1" />}
                 {p.current} / {p.total} records
               </span>
             </div>
-            <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
+            <div className="w-full bg-muted h-2 rounded-full overflow-hidden">
               <div
-                className={`h-full ${p.status === "error" ? "bg-red-500" : "bg-blue-500"} transition-all`}
+                className={`h-full ${p.status === "error" ? "bg-red-500" : "bg-primary"} transition-all`}
                 style={{ width: `${(p.current / (p.total || 1)) * 100}%` }}
               />
             </div>
             {l.length > 0 && (
-              <div className="max-h-32 overflow-y-auto text-xs font-mono bg-gray-50 p-2 rounded border">
+              <div className="max-h-32 overflow-y-auto text-xs font-mono bg-muted p-2 rounded border">
                 {l.map((res: any, i) => (
                   <div key={i} className={res.success ? "text-green-700" : "text-red-700"}>
                     {res.success ? "✅" : "❌"} {res.name} {res.error ? `- ${res.error}` : ""}
@@ -736,7 +736,7 @@ function DnsPushStep({
               <div className="text-xs flex items-center gap-2 mt-2">
                 Propagation Check:
                 {propagation[d.id] === "pending" && (
-                  <Loader2 className="w-3 h-3 animate-spin text-blue-500" />
+                  <Loader2 className="w-3 h-3 animate-spin text-primary" />
                 )}
                 {propagation[d.id] === "ok" && (
                   <span className="text-green-600 font-bold">Passed</span>
@@ -754,7 +754,7 @@ function DnsPushStep({
         <Button
           onClick={onNext}
           disabled={isRunning}
-          className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl"
+          className="bg-primary hover:bg-primary/90 text-white rounded-xl"
         >
           Proceed to Server Setup
         </Button>
@@ -872,7 +872,7 @@ function TerminalWindow({ domain }: { domain: any }) {
     status === "Starting Containers" ||
     status === "Provisioning"
   )
-    statusColor = "bg-blue-500";
+    statusColor = "bg-primary";
   if (status === "Failed") statusColor = "bg-red-500";
   if (status === "Ready") statusColor = "bg-green-500";
 
@@ -880,14 +880,14 @@ function TerminalWindow({ domain }: { domain: any }) {
     <div className="flex flex-col bg-black rounded-lg overflow-hidden shadow-2xl border border-gray-800">
       <div className="bg-gray-900 px-4 py-2 flex justify-between items-center border-b border-gray-800">
         <div className="flex items-center gap-3">
-          <Terminal className="w-4 h-4 text-gray-400" />
+          <Terminal className="w-4 h-4 text-muted-foreground" />
           <span className="text-gray-200 font-mono text-sm">{domain.ipAddress}</span>
         </div>
         <div className="flex items-center gap-2">
           <div
-            className={`w-2 h-2 rounded-full ${statusColor} ${statusColor === "bg-blue-500" ? "animate-pulse" : ""}`}
+            className={`w-2 h-2 rounded-full ${statusColor} ${statusColor === "bg-primary" ? "animate-pulse" : ""}`}
           />
-          <span className="text-gray-400 text-xs font-mono">{status}</span>
+          <span className="text-muted-foreground text-xs font-mono">{status}</span>
         </div>
       </div>
       <div className="p-4 h-80 overflow-y-auto font-mono text-xs text-green-400 leading-relaxed custom-scrollbar">
@@ -940,7 +940,7 @@ function TerminalWindowFailedFooter({ domain, onRetry }: { domain: any; onRetry:
               await updatePasswordMutation.mutateAsync(editPassword);
             }}
             disabled={updatePasswordMutation.isPending}
-            className="h-9 text-xs rounded-xl bg-blue-600 hover:bg-blue-700 text-white"
+            className="h-9 text-xs rounded-xl bg-primary hover:bg-primary/90 text-white"
           >
             {updatePasswordMutation.isPending ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -952,7 +952,7 @@ function TerminalWindowFailedFooter({ domain, onRetry }: { domain: any; onRetry:
             size="sm"
             variant="ghost"
             onClick={() => setShowEdit(false)}
-            className="h-9 text-xs rounded-xl text-gray-400 hover:text-gray-200"
+            className="h-9 text-xs rounded-xl text-muted-foreground hover:text-gray-200"
           >
             Cancel
           </Button>
@@ -963,7 +963,7 @@ function TerminalWindowFailedFooter({ domain, onRetry }: { domain: any; onRetry:
             size="sm"
             variant="outline"
             onClick={() => setShowEdit(true)}
-            className="h-9 text-xs rounded-xl border-gray-800 bg-gray-950 text-gray-300 hover:bg-gray-800 hover:text-white"
+            className="h-9 text-xs rounded-xl border-gray-800 bg-gray-950 text-muted-foreground hover:bg-gray-800 hover:text-white"
           >
             Change SSH Password
           </Button>

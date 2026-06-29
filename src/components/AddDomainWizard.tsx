@@ -436,33 +436,33 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
         <DialogHeader className="p-8 bg-[#23242A] text-white">
           <div className="flex items-center justify-between w-full">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#4DB584] text-white">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-white">
                 <Wand2 className="h-5 w-5" />
               </div>
               <div>
                 <DialogTitle className="text-xl">Add Domains Wizard</DialogTitle>
-                <p className="text-xs text-gray-400 mt-1">Step {step + 1} of 4</p>
+                <p className="text-xs text-muted-foreground mt-1">Step {step + 1} of 4</p>
               </div>
             </div>
             <div className="flex gap-2">
               {[0, 1, 2, 3].map((s) => (
                 <div
                   key={s}
-                  className={`h-1.5 w-8 rounded-full transition-colors ${s <= step ? "bg-[#4DB584]" : "bg-white/10"}`}
+                  className={`h-1.5 w-8 rounded-full transition-colors ${s <= step ? "bg-primary" : "bg-card/10"}`}
                 />
               ))}
             </div>
           </div>
         </DialogHeader>
 
-        <div className="bg-white min-h-[400px] flex flex-col">
+        <div className="bg-card min-h-[400px] flex flex-col">
           {step === 0 && (
             <div className="p-8 flex flex-col gap-8 flex-1">
               <div className="flex items-center gap-4 p-4 bg-blue-50/50 rounded-2xl border border-blue-100">
-                <FolderOpen className="h-5 w-5 text-blue-500" />
+                <FolderOpen className="h-5 w-5 text-primary" />
                 <div className="flex-1">
-                  <h3 className="font-semibold text-sm text-gray-900">Load Template (Optional)</h3>
-                  <p className="text-xs text-gray-500 mt-1">
+                  <h3 className="font-semibold text-sm text-foreground">Load Template (Optional)</h3>
+                  <p className="text-xs text-muted-foreground mt-1">
                     Select a saved template or continue with defaults
                   </p>
                 </div>
@@ -510,12 +510,12 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
               )}
 
               <div className="bg-green-50/50 border border-green-100 rounded-3xl p-6 flex items-start gap-4">
-                <div className="h-10 w-10 rounded-2xl bg-[#4DB584] text-white flex items-center justify-center shrink-0">
+                <div className="h-10 w-10 rounded-2xl bg-primary text-white flex items-center justify-center shrink-0">
                   <Wand2 className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="font-semibold text-gray-900 text-sm">Planning Configuration</h3>
-                  <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                  <h3 className="font-semibold text-foreground text-sm">Planning Configuration</h3>
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
                     Our AI planner generates unique, natural-looking inboxes. Save your prefixes and
                     names as a template for future use.
                   </p>
@@ -526,17 +526,17 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <div className="flex flex-col">
-                      <Label className="text-gray-900 font-bold text-sm tracking-tight">
+                      <Label className="text-foreground font-bold text-sm tracking-tight">
                         Subdomain Prefixes
                       </Label>
-                      <p className="text-[10px] text-gray-400 mt-0.5">
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
                         Used for mail, tracking, and web subdomains
                       </p>
                     </div>
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="text-blue-500 hover:text-blue-600"
+                      className="text-primary hover:text-primary"
                       onClick={() => setSavingTemplate(true)}
                     >
                       <Save className="h-3 w-3 mr-1" /> Save
@@ -545,17 +545,17 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                   <Textarea
                     value={prefixesText}
                     onChange={(e) => setPrefixesText(e.target.value)}
-                    className="text-xs h-36 rounded-[1.5rem] border-gray-100 bg-gray-50/50 p-4 focus:bg-white transition-all leading-relaxed resize-none shadow-inner"
+                    className="text-xs h-36 rounded-[1.5rem] border-border bg-muted/50 p-4 focus:bg-card transition-all leading-relaxed resize-none shadow-inner"
                     placeholder="mail&#10;web&#10;app&#10;dev..."
                   />
                 </div>
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <div className="flex flex-col">
-                      <Label className="text-gray-900 font-bold text-sm tracking-tight">
+                      <Label className="text-foreground font-bold text-sm tracking-tight">
                         Pool of Full Names
                       </Label>
-                      <p className="text-[10px] text-gray-400 mt-0.5">
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
                         Enter full names (e.g., John Smith). They will be split into first and last
                         names
                       </p>
@@ -564,7 +564,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                   <Textarea
                     value={namesText}
                     onChange={(e) => setNamesText(e.target.value)}
-                    className="text-xs h-36 rounded-[1.5rem] border-gray-100 bg-gray-50/50 p-4 focus:bg-white transition-all leading-relaxed resize-none shadow-inner"
+                    className="text-xs h-36 rounded-[1.5rem] border-border bg-muted/50 p-4 focus:bg-card transition-all leading-relaxed resize-none shadow-inner"
                     placeholder="John Smith&#10;Mary Johnson&#10;Michael Brown..."
                   />
                 </div>
@@ -572,7 +572,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
 
               {savingTemplate && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                  <div className="bg-white rounded-2xl p-6 w-96 shadow-2xl">
+                  <div className="bg-card rounded-2xl p-6 w-96 shadow-2xl">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="font-semibold">Save Template</h3>
                       <Button variant="ghost" size="sm" onClick={() => setSavingTemplate(false)}>
@@ -610,23 +610,23 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
           {step === 1 && (
             <div className="p-8 flex flex-col gap-8 flex-1">
               <div className="flex flex-col gap-3">
-                <Label className="text-gray-900 font-bold text-sm tracking-tight">Batch Name</Label>
+                <Label className="text-foreground font-bold text-sm tracking-tight">Batch Name</Label>
                 <Input
                   placeholder="e.g. Winter Campaign 2024"
                   value={batchName}
                   onChange={(e) => setBatchName(e.target.value)}
-                  className="rounded-2xl border-gray-100 bg-gray-50/50 focus:bg-white h-12 px-5 transition-all shadow-sm"
+                  className="rounded-2xl border-border bg-muted/50 focus:bg-card h-12 px-5 transition-all shadow-sm"
                 />
               </div>
               <div className="flex flex-col gap-3">
                 <div className="flex justify-between items-end">
                   <div className="flex flex-col">
-                    <Label className="text-gray-900 font-bold text-sm tracking-tight">
+                    <Label className="text-foreground font-bold text-sm tracking-tight">
                       Domains List
                     </Label>
-                    <p className="text-[10px] text-gray-400 mt-0.5">Enter one domain per line</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Enter one domain per line</p>
                   </div>
-                  <span className="text-[10px] font-mono text-gray-400 bg-gray-100 px-2 py-0.5 rounded-lg">
+                  <span className="text-[10px] font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded-lg">
                     {parseList(domainList).length} detected
                   </span>
                 </div>
@@ -639,18 +639,18 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                       const domains = parseList(domainList);
                       if (domains.length > 0) validateMutation.mutate(domains);
                     }}
-                    className="min-h-[220px] rounded-[1.5rem] border-gray-100 bg-gray-50/50 focus:bg-white p-5 transition-all resize-none shadow-inner leading-relaxed pr-12"
+                    className="min-h-[220px] rounded-[1.5rem] border-border bg-muted/50 focus:bg-card p-5 transition-all resize-none shadow-inner leading-relaxed pr-12"
                     required
                   />
                   <div className="absolute right-4 top-4">
                     {validateMutation.isPending && (
-                      <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                     )}
                   </div>
                 </div>
 
                 {validationResults.length > 0 && (
-                  <div className="flex flex-wrap gap-2 p-4 bg-gray-50/50 rounded-[1.5rem] border border-gray-100/50">
+                  <div className="flex flex-wrap gap-2 p-4 bg-muted/50 rounded-[1.5rem] border border-border/50">
                     {validationResults.map((v, i) => (
                       <div
                         key={i}
@@ -679,17 +679,17 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
               {/* Global Range Inputs */}
               <div className="p-8 pb-4 flex flex-col gap-6">
                 <div className="bg-green-50/50 border border-green-100 rounded-3xl p-6">
-                  <h3 className="font-semibold text-gray-900 text-sm mb-4">
+                  <h3 className="font-semibold text-foreground text-sm mb-4">
                     Global Range Settings
                   </h3>
-                  <p className="text-[10px] text-gray-500 mb-4">
+                  <p className="text-[10px] text-muted-foreground mb-4">
                     These ranges apply to all domains in the batch. Each domain will randomly get
                     values within these ranges.
                   </p>
 
                   <div className="grid grid-cols-2 gap-6">
                     <div className="flex flex-col gap-2">
-                      <Label className="text-gray-900 font-bold text-xs">
+                      <Label className="text-foreground font-bold text-xs">
                         Subdomains per Domain
                       </Label>
                       <div className="flex items-center gap-2">
@@ -701,7 +701,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                           placeholder="Min"
                           min={1}
                         />
-                        <span className="text-gray-400">—</span>
+                        <span className="text-muted-foreground">—</span>
                         <Input
                           type="number"
                           value={maxSubdomains}
@@ -714,7 +714,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                     </div>
 
                     <div className="flex flex-col gap-2">
-                      <Label className="text-gray-900 font-bold text-xs">Inboxes per Domain</Label>
+                      <Label className="text-foreground font-bold text-xs">Inboxes per Domain</Label>
                       <div className="flex items-center gap-2">
                         <Input
                           type="number"
@@ -724,7 +724,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                           placeholder="Min"
                           min={1}
                         />
-                        <span className="text-gray-400">—</span>
+                        <span className="text-muted-foreground">—</span>
                         <Input
                           type="number"
                           value={maxInboxes}
@@ -758,7 +758,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
               </div>
 
               {/* Domain List with Server Config */}
-              <div className="grid grid-cols-[1.5fr,1.2fr,0.8fr,0.8fr] gap-4 px-8 text-[10px] font-bold text-gray-400 uppercase tracking-[0.1em] mb-3">
+              <div className="grid grid-cols-[1.5fr,1.2fr,0.8fr,0.8fr] gap-4 px-8 text-[10px] font-bold text-muted-foreground uppercase tracking-[0.1em] mb-3">
                 <div>Domain Name</div>
                 <div>IP Address</div>
                 <div>SSH User</div>
@@ -768,31 +768,31 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 {domainRows.map((row, i) => (
                   <div
                     key={i}
-                    className="grid grid-cols-[1.5fr,1.2fr,0.8fr,0.8fr] gap-4 items-center bg-white p-2 px-3 rounded-xl ring-1 ring-black/[0.03] shadow-sm hover:shadow-md hover:ring-[#4DB584]/20 transition-all group"
+                    className="grid grid-cols-[1.5fr,1.2fr,0.8fr,0.8fr] gap-4 items-center bg-card p-2 px-3 rounded-xl ring-1 ring-black/[0.03] shadow-sm hover:shadow-md hover:ring-primary/20 transition-all group"
                   >
                     <Input
                       value={row.domain}
                       onChange={(e) => updateRow(i, "domain", e.target.value)}
-                      className="h-9 rounded-xl border-gray-100 bg-gray-50/50 focus:bg-white text-xs font-semibold transition-all"
+                      className="h-9 rounded-xl border-border bg-muted/50 focus:bg-card text-xs font-semibold transition-all"
                       placeholder="Domain"
                     />
                     <Input
                       value={row.ipAddress}
                       onChange={(e) => updateRow(i, "ipAddress", e.target.value)}
-                      className="h-9 rounded-xl border-gray-100 bg-gray-50/50 focus:bg-white text-xs font-mono transition-all"
+                      className="h-9 rounded-xl border-border bg-muted/50 focus:bg-card text-xs font-mono transition-all"
                       placeholder="IP Address"
                     />
                     <Input
                       value={row.sshUser}
                       onChange={(e) => updateRow(i, "sshUser", e.target.value)}
-                      className="h-9 rounded-xl border-gray-100 bg-gray-50/50 focus:bg-white text-xs transition-all"
+                      className="h-9 rounded-xl border-border bg-muted/50 focus:bg-card text-xs transition-all"
                       placeholder="User"
                     />
                     <Input
                       type="password"
                       value={row.sshPassword || ""}
                       onChange={(e) => updateRow(i, "sshPassword", e.target.value)}
-                      className="h-9 rounded-xl border-gray-100 bg-gray-50/50 focus:bg-white text-xs transition-all"
+                      className="h-9 rounded-xl border-border bg-muted/50 focus:bg-card text-xs transition-all"
                       placeholder="Password"
                     />
                   </div>
@@ -804,11 +804,11 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
           {step === 3 && (
             <div className="p-8 flex flex-col gap-6 flex-1">
               <div className="text-center">
-                <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-[#4DB584]/10 mb-4">
-                  <Wand2 className="h-6 w-6 text-[#4DB584]" />
+                <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 mb-4">
+                  <Wand2 className="h-6 w-6 text-primary" />
                 </div>
-                <h3 className="text-xl font-bold text-gray-900">Planning Preview</h3>
-                <p className="text-sm text-gray-500 mt-2">
+                <h3 className="text-xl font-bold text-foreground">Planning Preview</h3>
+                <p className="text-sm text-muted-foreground mt-2">
                   Review the random values generated for each domain
                 </p>
               </div>
@@ -820,7 +820,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                     toast.success("Re-randomized all domains!");
                   }}
                   variant="outline"
-                  className="rounded-xl border-[#4DB584] text-[#4DB584] hover:bg-[#4DB584]/10"
+                  className="rounded-xl border-primary text-primary hover:bg-primary/10"
                 >
                   <Wand2 className="h-4 w-4 mr-2" />
                   Re-randomize All
@@ -828,7 +828,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 <Button
                   onClick={handlePreviewDns}
                   variant="outline"
-                  className="rounded-xl border-blue-500 text-blue-500 hover:bg-blue-500/10 ml-4"
+                  className="rounded-xl border-blue-500 text-primary hover:bg-primary/10 ml-4"
                 >
                   Preview DNS Records
                 </Button>
@@ -836,8 +836,8 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
 
               <div className="overflow-auto max-h-[300px] scrollbar-thin scrollbar-thumb-gray-200">
                 <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-white">
-                    <tr className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.1em]">
+                  <thead className="sticky top-0 bg-card">
+                    <tr className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.1em]">
                       <th className="text-left pb-3">Domain</th>
                       <th className="text-center pb-3">Subdomains</th>
                       <th className="text-center pb-3">Total Inboxes</th>
@@ -846,15 +846,15 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {domainRows.map((row, i) => (
-                      <tr key={i} className="hover:bg-gray-50/50">
-                        <td className="py-3 font-medium text-gray-700">{row.domain}</td>
-                        <td className="py-3 text-center text-gray-600">
+                      <tr key={i} className="hover:bg-muted/50">
+                        <td className="py-3 font-medium text-foreground">{row.domain}</td>
+                        <td className="py-3 text-center text-muted-foreground">
                           {row.plannedSubdomainCount || 0}
                         </td>
-                        <td className="py-3 text-center text-gray-600">
+                        <td className="py-3 text-center text-muted-foreground">
                           {row.plannedInboxCount || 0}
                         </td>
-                        <td className="py-3 text-[10px] text-gray-500 font-mono">
+                        <td className="py-3 text-[10px] text-muted-foreground font-mono">
                           {row.plannedDistribution?.join(", ") || "-"}
                         </td>
                       </tr>
@@ -863,32 +863,32 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 </table>
               </div>
 
-              <div className="bg-gray-50 rounded-2xl p-4 space-y-2">
-                <div className="text-xs font-bold text-gray-400 uppercase">Summary</div>
+              <div className="bg-muted rounded-2xl p-4 space-y-2">
+                <div className="text-xs font-bold text-muted-foreground uppercase">Summary</div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Domains</span>
+                  <span className="text-muted-foreground">Domains</span>
                   <span className="font-medium">{domainRows.length}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Total Inboxes</span>
+                  <span className="text-muted-foreground">Total Inboxes</span>
                   <span className="font-medium">
                     {domainRows.reduce((a, b) => a + (b.plannedInboxCount || 0), 0)}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Template</span>
+                  <span className="text-muted-foreground">Template</span>
                   <span className="font-medium">{selectedTemplateId || "Default"}</span>
                 </div>
               </div>
             </div>
           )}
 
-          <DialogFooter className="p-8 border-t border-gray-50 bg-gray-50/50">
+          <DialogFooter className="p-8 border-t border-gray-50 bg-muted/50">
             <Button
               type="button"
               variant="ghost"
               onClick={() => (step === 0 ? onOpenChange(false) : setStep(step - 1))}
-              className="rounded-2xl text-gray-500"
+              className="rounded-2xl text-muted-foreground"
             >
               {step === 0 ? "Cancel" : "Back"}
             </Button>
@@ -906,7 +906,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 type="button"
                 onClick={handleSubmit}
                 disabled={loading}
-                className="bg-[#4DB584] hover:bg-[#3da070] rounded-2xl px-8 gap-2 shadow-lg shadow-[#4DB584]/20"
+                className="bg-primary hover:bg-primary/90 rounded-2xl px-8 gap-2 shadow-lg shadow-primary/20"
               >
                 {loading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -923,13 +923,13 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
     
     <Dialog open={showDnsPreview} onOpenChange={setShowDnsPreview}>
       <DialogContent className="max-w-4xl max-h-[80vh] flex flex-col rounded-2xl p-0">
-        <DialogHeader className="p-6 bg-gray-50 border-b">
+        <DialogHeader className="p-6 bg-muted border-b">
           <DialogTitle>DNS Records Preview</DialogTitle>
-          <p className="text-sm text-gray-500 mt-1">These records will be pushed to Cloudflare</p>
+          <p className="text-sm text-muted-foreground mt-1">These records will be pushed to Cloudflare</p>
         </DialogHeader>
         <div className="flex-1 overflow-auto p-6">
           <table className="w-full text-sm text-left">
-            <thead className="text-xs text-gray-500 uppercase bg-gray-50">
+            <thead className="text-xs text-muted-foreground uppercase bg-muted">
               <tr>
                 <th className="px-4 py-3">Domain</th>
                 <th className="px-4 py-3">Type</th>
@@ -940,18 +940,18 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
             </thead>
             <tbody>
               {dnsPreviewRecords.map((r, i) => (
-                <tr key={i} className="border-b last:border-0 hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{r.domain}</td>
+                <tr key={i} className="border-b last:border-0 hover:bg-muted">
+                  <td className="px-4 py-3 font-medium text-foreground">{r.domain}</td>
                   <td className="px-4 py-3 font-mono">{r.type}</td>
-                  <td className="px-4 py-3 font-mono text-gray-600">{r.name}</td>
-                  <td className="px-4 py-3 font-mono text-xs break-all text-gray-500 max-w-[300px]">{r.content}</td>
+                  <td className="px-4 py-3 font-mono text-muted-foreground">{r.name}</td>
+                  <td className="px-4 py-3 font-mono text-xs break-all text-muted-foreground max-w-[300px]">{r.content}</td>
                   <td className="px-4 py-3 text-center">
                     {r.proxied ? (
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
                         Proxied
                       </span>
                     ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-muted text-foreground">
                         DNS Only
                       </span>
                     )}
@@ -961,7 +961,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
             </tbody>
           </table>
         </div>
-        <DialogFooter className="p-4 bg-gray-50 border-t">
+        <DialogFooter className="p-4 bg-muted border-t">
           <Button onClick={() => setShowDnsPreview(false)}>Close Preview</Button>
         </DialogFooter>
       </DialogContent>

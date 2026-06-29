@@ -25,12 +25,12 @@ function JobsPage() {
     <div className="flex flex-col gap-6 p-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Jobs</h1>
-          <p className="text-sm text-gray-500 mt-1">Domain batches and provisioning runs</p>
+          <h1 className="text-2xl font-bold text-foreground">Jobs</h1>
+          <p className="text-sm text-muted-foreground mt-1">Domain batches and provisioning runs</p>
         </div>
         <Button
           onClick={() => setWizardOpen(true)}
-          className="bg-[#4DB584] hover:bg-[#3da070] rounded-2xl gap-2 shadow-lg shadow-[#4DB584]/20"
+          className="bg-primary hover:bg-primary/90 rounded-2xl gap-2 shadow-lg shadow-primary/20"
         >
           <Plus className="h-4 w-4" /> Add Domains
         </Button>
@@ -40,13 +40,13 @@ function JobsPage() {
 
       {isLoading ? (
         <div className="flex justify-center py-20">
-          <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : batches.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-3xl bg-white p-16 text-center ring-1 ring-black/5">
-          <FolderGit2 className="h-12 w-12 text-gray-300" />
-          <p className="text-lg font-medium text-gray-700">No jobs yet</p>
-          <p className="text-sm text-gray-500">Click "Add Domains" to create your first batch.</p>
+        <div className="flex flex-col items-center justify-center gap-3 rounded-3xl bg-card p-16 text-center ring-1 ring-border">
+          <FolderGit2 className="h-12 w-12 text-muted-foreground" />
+          <p className="text-lg font-medium text-foreground">No jobs yet</p>
+          <p className="text-sm text-muted-foreground">Click "Add Domains" to create your first batch.</p>
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -90,7 +90,7 @@ function BatchCard({ batch }: { batch: any }) {
     <Link
       to="/jobs/$id"
       params={{ id: batch.id }}
-      className="rounded-3xl bg-white p-6 ring-1 ring-black/5 shadow-sm flex flex-col gap-3 hover:ring-[#4DB584]/40 hover:shadow-md transition-all group relative"
+      className="rounded-3xl bg-card p-6 ring-1 ring-border shadow-sm flex flex-col gap-3 hover:ring-primary/40 hover:shadow-md transition-all group relative"
     >
       <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
         <Button
@@ -109,16 +109,16 @@ function BatchCard({ batch }: { batch: any }) {
       </div>
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-green-100">
-          <FolderGit2 className="h-5 w-5 text-[#4DB584]" />
+          <FolderGit2 className="h-5 w-5 text-primary" />
         </div>
         <div>
-          <div className="font-semibold text-gray-900">{batch.name}</div>
-          <div className="text-xs text-gray-500">
+          <div className="font-semibold text-foreground">{batch.name}</div>
+          <div className="text-xs text-muted-foreground">
             {new Date(batch.createdAt).toLocaleDateString()}
           </div>
         </div>
       </div>
-      <div className="flex items-center gap-2 text-sm text-gray-600">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Globe className="h-4 w-4" />
         <span>
           {domains.length} domain{domains.length !== 1 ? "s" : ""}

@@ -385,7 +385,7 @@ function DomainDetailsPage() {
   if (isLoading) {
     return (
       <div className="flex justify-center py-20">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -395,7 +395,7 @@ function DomainDetailsPage() {
       <div className="flex flex-col items-center justify-center py-20">
         <AlertCircle className="h-12 w-12 text-red-500 mb-4" />
         <h2 className="text-xl font-bold">Domain not found</h2>
-        <Link to="/domains" className="text-blue-500 hover:underline mt-2">
+        <Link to="/domains" className="text-primary hover:underline mt-2">
           Back to Domains
         </Link>
       </div>
@@ -413,15 +413,15 @@ function DomainDetailsPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Link to="/domains">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-black/5 hover:bg-gray-50 transition-colors">
-              <ArrowLeft className="h-5 w-5 text-gray-600" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-card shadow-sm ring-1 ring-border hover:bg-muted transition-colors">
+              <ArrowLeft className="h-5 w-5 text-muted-foreground" />
             </div>
           </Link>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">{domain.name}</h1>
+            <h1 className="text-2xl font-bold text-foreground">{domain.name}</h1>
             <div className="flex items-center gap-2 mt-1">
               <span
-                className={`px-2 py-0.5 rounded-md text-xs font-bold ${domain.status === "active" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}
+                className={`px-2 py-0.5 rounded-md text-xs font-bold ${domain.status === "active" ? "bg-green-100 text-green-700" : "bg-muted text-muted-foreground"}`}
               >
                 {domain.status.toUpperCase()}
               </span>
@@ -433,19 +433,19 @@ function DomainDetailsPage() {
           <Button
             onClick={runFullAutomation}
             disabled={isAnyPending}
-            className="rounded-2xl h-12 gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white shadow-xl shadow-purple-500/20 px-6 font-bold"
+            className="rounded-2xl h-12 gap-2 bg-primary hover:bg-primary/90 text-white shadow-xl shadow-purple-500/20 px-6 font-bold"
           >
             <Zap className="h-5 w-5 fill-current" />
             Run Full Automation
           </Button>
 
-          <div className="h-8 w-[1px] bg-gray-200" />
+          <div className="h-8 w-[1px] bg-secondary" />
 
-          <div className="flex gap-2 bg-white p-2 rounded-[1.5rem] shadow-sm ring-1 ring-black/5">
+          <div className="flex gap-2 bg-card p-2 rounded-[1.5rem] shadow-sm ring-1 ring-border">
             <Button
               onClick={() => pushDnsMutation.mutate()}
               disabled={pushDnsMutation.isPending}
-              className="rounded-xl h-10 gap-2 bg-blue-500 hover:bg-blue-600 text-white"
+              className="rounded-xl h-10 gap-2 bg-primary hover:bg-primary text-white"
             >
               {pushDnsMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -470,7 +470,7 @@ function DomainDetailsPage() {
             <Button
               onClick={() => provisionMutation.mutate()}
               disabled={provisionMutation.isPending}
-              className="rounded-xl h-10 gap-2 bg-purple-500 hover:bg-purple-600 text-white"
+              className="rounded-xl h-10 gap-2 bg-primary hover:bg-primary text-white"
             >
               {provisionMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -482,7 +482,7 @@ function DomainDetailsPage() {
             <Button
               onClick={() => setupMailcowMutation.mutate()}
               disabled={setupMailcowMutation.isPending}
-              className="rounded-xl h-10 gap-2 bg-[#4DB584] hover:bg-[#3da070] text-white"
+              className="rounded-xl h-10 gap-2 bg-primary hover:bg-primary/90 text-white"
             >
               {setupMailcowMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -530,44 +530,44 @@ function DomainDetailsPage() {
       </div>
 
       <div className="grid gap-6 md:grid-cols-3">
-        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-2">
-          <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+          <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
             Total Inboxes
           </div>
-          <div className="text-3xl font-black text-[#4DB584]">{plan?.totalInboxes || 0}</div>
-          <div className="text-[10px] text-gray-500">Planned across all subdomains</div>
+          <div className="text-3xl font-black text-primary">{plan?.totalInboxes || 0}</div>
+          <div className="text-[10px] text-muted-foreground">Planned across all subdomains</div>
         </div>
-        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-2">
-          <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">Subdomains</div>
-          <div className="text-3xl font-black text-blue-500">{plan?.subdomainCount || 0}</div>
-          <div className="text-[10px] text-gray-500">Unique routing prefixes</div>
+        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+          <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Subdomains</div>
+          <div className="text-3xl font-black text-primary">{plan?.subdomainCount || 0}</div>
+          <div className="text-[10px] text-muted-foreground">Unique routing prefixes</div>
         </div>
-        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-2">
-          <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+          <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
             Avg Per Subdomain
           </div>
           <div className="text-3xl font-black text-purple-500">
             {plan?.subdomainCount ? (plan.totalInboxes / plan.subdomainCount).toFixed(1) : 0}
           </div>
-          <div className="text-[10px] text-gray-500">Balanced distribution</div>
+          <div className="text-[10px] text-muted-foreground">Balanced distribution</div>
         </div>
       </div>
 
       {domain.mailcowHostname && (
-        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-4">
+        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Key className="h-5 w-5 text-gray-500" /> Mailcow Access
+            <Key className="h-5 w-5 text-muted-foreground" /> Mailcow Access
           </h2>
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="rounded-2xl border border-gray-100 p-4 flex flex-col gap-1">
-              <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+            <div className="rounded-2xl border border-border p-4 flex flex-col gap-1">
+              <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
                 Admin Panel
               </div>
               <a
                 href={`https://${domain.mailcowHostname}/admin`}
                 target="_blank"
                 rel="noreferrer"
-                className="text-sm text-blue-600 hover:underline break-all"
+                className="text-sm text-primary hover:underline break-all"
               >
                 https://{domain.mailcowHostname}/admin
               </a>
@@ -579,19 +579,19 @@ function DomainDetailsPage() {
                 <span className="text-amber-600 text-xs">(default — change after first login)</span>
               </div>
             </div>
-            <div className="rounded-2xl border border-gray-100 p-4 flex flex-col gap-1">
-              <div className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+            <div className="rounded-2xl border border-border p-4 flex flex-col gap-1">
+              <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
                 Webmail (per mailbox)
               </div>
               <a
                 href={`https://${domain.mailcowHostname}/SOGo/`}
                 target="_blank"
                 rel="noreferrer"
-                className="text-sm text-blue-600 hover:underline break-all"
+                className="text-sm text-primary hover:underline break-all"
               >
                 https://{domain.mailcowHostname}/SOGo/
               </a>
-              <div className="mt-2 text-sm text-gray-500">
+              <div className="mt-2 text-sm text-muted-foreground">
                 Log in with the full email address + its password (from Export CSV).
               </div>
             </div>
@@ -600,17 +600,17 @@ function DomainDetailsPage() {
       )}
 
       <div className="grid gap-6 md:grid-cols-2">
-        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-4 relative">
+        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4 relative">
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Server className="h-5 w-5 text-gray-500" /> Deployment Target
+              <Server className="h-5 w-5 text-muted-foreground" /> Deployment Target
             </h2>
             {!isEditingServer && (
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => setIsEditingServer(true)}
-                className="h-8 text-xs rounded-xl text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                className="h-8 text-xs rounded-xl text-primary hover:text-primary hover:bg-blue-50"
               >
                 Edit
               </Button>
@@ -621,7 +621,7 @@ function DomainDetailsPage() {
             <div className="flex flex-col gap-3">
               <div className="grid grid-cols-2 gap-2">
                 <div className="flex flex-col gap-1">
-                  <label className="text-[10px] font-bold text-gray-400 uppercase">IP Address</label>
+                  <label className="text-[10px] font-bold text-muted-foreground uppercase">IP Address</label>
                   <Input
                     value={ipAddress}
                     onChange={(e) => setIpAddress(e.target.value)}
@@ -630,7 +630,7 @@ function DomainDetailsPage() {
                   />
                 </div>
                 <div className="flex flex-col gap-1">
-                  <label className="text-[10px] font-bold text-gray-400 uppercase">SSH User</label>
+                  <label className="text-[10px] font-bold text-muted-foreground uppercase">SSH User</label>
                   <Input
                     value={sshUser}
                     onChange={(e) => setSshUser(e.target.value)}
@@ -640,7 +640,7 @@ function DomainDetailsPage() {
                 </div>
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] font-bold text-gray-400 uppercase">SSH Password</label>
+                <label className="text-[10px] font-bold text-muted-foreground uppercase">SSH Password</label>
                 <Input
                   type="password"
                   value={sshPassword}
@@ -674,7 +674,7 @@ function DomainDetailsPage() {
                     });
                   }}
                   disabled={updateDomainMutation.isPending}
-                  className="h-8 text-xs rounded-xl bg-blue-600 hover:bg-blue-700 text-white"
+                  className="h-8 text-xs rounded-xl bg-primary hover:bg-primary/90 text-white"
                 >
                   {updateDomainMutation.isPending ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
@@ -691,7 +691,7 @@ function DomainDetailsPage() {
               </div>
               <div>
                 <div className="font-medium">{domain.name}</div>
-                <div className="text-sm text-gray-500 flex items-center gap-3 mt-0.5">
+                <div className="text-sm text-muted-foreground flex items-center gap-3 mt-0.5">
                   <span className="flex items-center gap-1">
                     <Network className="h-3 w-3" />
                     {domain.ipAddress || "No IP configured"}
@@ -723,9 +723,9 @@ function DomainDetailsPage() {
           )}
         </div>
 
-        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-4">
+        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Network className="h-5 w-5 text-gray-500" /> Subdomain Breakdown
+            <Network className="h-5 w-5 text-muted-foreground" /> Subdomain Breakdown
           </h2>
           <div className="flex flex-wrap gap-2">
             {Object.entries(subdomainBreakdown as Record<string, number>).map(([prefix, count]) => {
@@ -736,17 +736,17 @@ function DomainDetailsPage() {
               return (
                 <div
                   key={prefix}
-                  className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100"
+                  className="flex items-center gap-2 bg-muted px-3 py-1.5 rounded-xl border border-border"
                 >
                   <div className="flex flex-col gap-1">
-                    <span className="text-xs font-mono font-bold text-gray-700">{prefix}</span>
-                    <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                    <span className="text-xs font-mono font-bold text-foreground">{prefix}</span>
+                    <div className="w-16 h-1.5 bg-secondary rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-[#4DB584] rounded-full"
+                        className="h-full bg-primary rounded-full"
                         style={{ width: `${percentage}%` }}
                       />
                     </div>
-                    <span className="text-xs font-bold text-[#4DB584]">{count} inboxes</span>
+                    <span className="text-xs font-bold text-primary">{count} inboxes</span>
                   </div>
                 </div>
               );
@@ -756,9 +756,9 @@ function DomainDetailsPage() {
       </div>
 
       <div className="grid gap-6 md:grid-cols-1">
-        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-4">
+        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Globe className="h-5 w-5 text-gray-500" /> DNS Blueprint
+            <Globe className="h-5 w-5 text-muted-foreground" /> DNS Blueprint
           </h2>
           {records.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -780,7 +780,7 @@ function DomainDetailsPage() {
               ))}
             </div>
           ) : (
-            <div className="text-sm text-gray-500 italic">No DNS records generated yet.</div>
+            <div className="text-sm text-muted-foreground italic">No DNS records generated yet.</div>
           )}
         </div>
       </div>
@@ -789,18 +789,18 @@ function DomainDetailsPage() {
         <div className="rounded-3xl bg-black overflow-hidden shadow-xl border border-gray-800 flex flex-col">
           <div className="bg-gray-900 px-6 py-4 flex justify-between items-center border-b border-gray-800">
             <div className="flex items-center gap-3">
-              <Terminal className="w-5 h-5 text-gray-400" />
+              <Terminal className="w-5 h-5 text-muted-foreground" />
               <span className="text-gray-200 font-mono text-sm font-semibold">VPS Setup Terminal Logs</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-gray-400 text-xs font-mono">{terminalStatus || domain.status.toUpperCase()}</span>
+              <span className="text-muted-foreground text-xs font-mono">{terminalStatus || domain.status.toUpperCase()}</span>
               <div
                 className={`w-2.5 h-2.5 rounded-full ${
                   domain.status === "ready" 
                     ? "bg-green-500" 
                     : domain.status === "failed" || domain.status === "error" 
                     ? "bg-red-500" 
-                    : "bg-blue-500 animate-pulse"
+                    : "bg-primary animate-pulse"
                 }`}
               />
             </div>
@@ -809,23 +809,23 @@ function DomainDetailsPage() {
             {logs.length > 0 ? (
               <pre className="whitespace-pre-wrap font-inherit break-all">{logs.join("")}</pre>
             ) : (
-              <div className="text-gray-500 italic">Waiting for setup logs stream...</div>
+              <div className="text-muted-foreground italic">Waiting for setup logs stream...</div>
             )}
             <div ref={bottomRef} />
           </div>
         </div>
       )}
 
-      <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-4">
+      <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Mail className="h-5 w-5 text-gray-500" /> Planned Inboxes by Subdomain
+            <Mail className="h-5 w-5 text-muted-foreground" /> Planned Inboxes by Subdomain
           </h2>
           <Button
             variant="outline"
             onClick={exportCsv}
             disabled={!inboxes.length}
-            className="rounded-xl h-9 gap-2 border-gray-200"
+            className="rounded-xl h-9 gap-2 border-border"
           >
             <Send className="h-4 w-4" /> Export CSV
           </Button>
@@ -846,7 +846,7 @@ function DomainDetailsPage() {
             })}
           </div>
         ) : (
-          <div className="text-sm text-gray-500 italic py-8 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200">
+          <div className="text-sm text-muted-foreground italic py-8 text-center bg-muted rounded-2xl border border-dashed border-border">
             No inboxes planned for this domain.
           </div>
         )}
@@ -872,30 +872,30 @@ function SubdomainInboxSection({
   };
 
   return (
-    <div className="rounded-xl border border-gray-200 overflow-hidden bg-white">
+    <div className="rounded-xl border border-border overflow-hidden bg-card">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors text-left"
+        className="w-full flex items-center justify-between p-4 hover:bg-muted transition-colors text-left"
       >
         <div className="flex items-center gap-3">
           {expanded ? (
-            <ChevronDown className="h-5 w-5 text-gray-400" />
+            <ChevronDown className="h-5 w-5 text-muted-foreground" />
           ) : (
-            <ChevronRight className="h-5 w-5 text-gray-400" />
+            <ChevronRight className="h-5 w-5 text-muted-foreground" />
           )}
           <Network className="h-5 w-5 text-purple-500" />
           <div>
-            <div className="font-semibold text-gray-900">
+            <div className="font-semibold text-foreground">
               {prefix}.{domain}
             </div>
-            <div className="text-xs text-gray-500">{inboxes.length} mailboxes</div>
+            <div className="text-xs text-muted-foreground">{inboxes.length} mailboxes</div>
           </div>
         </div>
         <div className="flex -space-x-2">
           {inboxes.slice(0, 4).map((ib: any, i: number) => (
             <div
               key={ib.id}
-              className="w-8 h-8 rounded-full bg-blue-100 border-2 border-white flex items-center justify-center text-[10px] font-bold text-blue-600"
+              className="w-8 h-8 rounded-full bg-blue-100 border-2 border-white flex items-center justify-center text-[10px] font-bold text-primary"
               style={{ zIndex: 4 - i }}
               title={ib.email}
             >
@@ -903,7 +903,7 @@ function SubdomainInboxSection({
             </div>
           ))}
           {inboxes.length > 4 && (
-            <div className="w-8 h-8 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center text-[9px] font-bold text-gray-500">
+            <div className="w-8 h-8 rounded-full bg-muted border-2 border-white flex items-center justify-center text-[9px] font-bold text-muted-foreground">
               +{inboxes.length - 4}
             </div>
           )}
@@ -911,9 +911,9 @@ function SubdomainInboxSection({
       </button>
 
       {expanded && (
-        <div className="border-t border-gray-100 bg-gray-50/30">
+        <div className="border-t border-border bg-muted/30">
           <table className="w-full text-left text-sm">
-            <thead className="bg-gray-50 text-gray-500 uppercase text-[10px] font-bold tracking-wider">
+            <thead className="bg-muted text-muted-foreground uppercase text-[10px] font-bold tracking-wider">
               <tr>
                 <th className="px-4 py-2">Email Address</th>
                 <th className="px-4 py-2">Display Name</th>
@@ -921,13 +921,13 @@ function SubdomainInboxSection({
                 <th className="px-4 py-2">Password</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-border">
               {inboxes.map((ib: any) => (
-                <tr key={ib.id} className="hover:bg-gray-100/50 transition-colors">
-                  <td className="px-4 py-3 font-medium text-gray-900">{ib.email}</td>
-                  <td className="px-4 py-3 text-gray-600">{ib.personName}</td>
+                <tr key={ib.id} className="hover:bg-muted/50 transition-colors">
+                  <td className="px-4 py-3 font-medium text-foreground">{ib.email}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{ib.personName}</td>
                   <td className="px-4 py-3">
-                    <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase">
+                    <span className="bg-blue-50 text-primary px-2 py-0.5 rounded-md text-[10px] font-bold uppercase">
                       {ib.format}
                     </span>
                   </td>
@@ -937,7 +937,7 @@ function SubdomainInboxSection({
                         <span>{showPasswords[ib.id] ? ib.password : "••••••••••••"}</span>
                         <button
                           onClick={() => togglePassword(ib.id)}
-                          className="text-gray-400 hover:text-gray-600 focus:outline-none"
+                          className="text-muted-foreground hover:text-muted-foreground focus:outline-none"
                         >
                           {showPasswords[ib.id] ? (
                             <EyeOff className="h-3.5 w-3.5" />
@@ -947,7 +947,7 @@ function SubdomainInboxSection({
                         </button>
                       </div>
                     ) : (
-                      <span className="text-gray-400 italic">Not created yet</span>
+                      <span className="text-muted-foreground italic">Not created yet</span>
                     )}
                   </td>
                 </tr>

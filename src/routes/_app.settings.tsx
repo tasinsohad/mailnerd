@@ -75,13 +75,13 @@ function SettingsPage() {
   return (
     <div className="flex flex-col gap-8 p-8 max-w-4xl">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-        <p className="text-sm text-gray-500 mt-1">Configure your API integrations</p>
+        <h1 className="text-2xl font-bold text-foreground">Settings</h1>
+        <p className="text-sm text-muted-foreground mt-1">Configure your API integrations</p>
       </div>
 
       {isLoading ? (
         <div className="flex justify-center py-20">
-          <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : isError ? (
         <div className="rounded-3xl bg-red-50/50 p-8 ring-1 ring-red-200/50 flex flex-col gap-5">
@@ -103,14 +103,14 @@ function SettingsPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-6">
-          <div className="rounded-3xl bg-white p-8 shadow-sm ring-1 ring-black/5 flex flex-col gap-6">
-            <div className="flex items-center gap-3 border-b border-gray-100 pb-4">
+          <div className="rounded-3xl bg-card p-8 shadow-sm ring-1 ring-border flex flex-col gap-6">
+            <div className="flex items-center gap-3 border-b border-border pb-4">
               <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#F48120]/10">
                 <Cloud className="h-5 w-5 text-[#F48120]" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold text-gray-900">Cloudflare Integration</h2>
-                <p className="text-xs text-gray-500">Required for automated DNS management</p>
+                <h2 className="text-lg font-semibold text-foreground">Cloudflare Integration</h2>
+                <p className="text-xs text-muted-foreground">Required for automated DNS management</p>
               </div>
             </div>
 
@@ -123,7 +123,7 @@ function SettingsPage() {
             >
               <div className="grid gap-2">
                 <Label className="flex items-center gap-2">
-                  <KeyRound className="h-4 w-4 text-gray-400" /> API Token
+                  <KeyRound className="h-4 w-4 text-muted-foreground" /> API Token
                 </Label>
 
                 <div className="flex gap-2">
@@ -139,7 +139,7 @@ function SettingsPage() {
                     variant="outline"
                     onClick={() => verifyMutation.mutate(form.cfApiToken)}
                     disabled={verifyMutation.isPending || !form.cfApiToken}
-                    className="rounded-xl border-gray-100"
+                    className="rounded-xl border-border"
                   >
                     {verifyMutation.isPending ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -156,7 +156,7 @@ function SettingsPage() {
                       {verifyStatus.valid ? "✅ VALID" : `❌ INVALID: ${verifyStatus.error}`}
                     </span>
                   )}
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-muted-foreground">
                     Must have Zone:Read and DNS:Edit permissions.
                   </p>
                 </div>
@@ -164,7 +164,7 @@ function SettingsPage() {
 
               <div className="grid gap-2">
                 <Label className="flex items-center gap-2">
-                  <KeyRound className="h-4 w-4 text-gray-400" /> Account ID
+                  <KeyRound className="h-4 w-4 text-muted-foreground" /> Account ID
                 </Label>
                 <Input
                   placeholder="Cloudflare Account ID (optional)"
@@ -178,7 +178,7 @@ function SettingsPage() {
                 <Button
                   type="submit"
                   disabled={saveMutation.isPending}
-                  className="bg-[#4DB584] hover:bg-[#3da070] rounded-xl w-32"
+                  className="bg-primary hover:bg-primary/90 rounded-xl w-32"
                 >
                   {saveMutation.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -192,7 +192,7 @@ function SettingsPage() {
                   variant="outline"
                   onClick={() => syncMutation.mutate()}
                   disabled={syncMutation.isPending || !secrets?.cfApiToken}
-                  className="rounded-xl border-gray-100 gap-2"
+                  className="rounded-xl border-border gap-2"
                 >
                   {syncMutation.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />

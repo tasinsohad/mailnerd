@@ -19,14 +19,14 @@ function StatCard({
   color: string;
 }) {
   return (
-    <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 flex flex-col gap-3">
+    <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-500">{label}</span>
+        <span className="text-sm font-medium text-muted-foreground">{label}</span>
         <div className={`flex h-10 w-10 items-center justify-center rounded-2xl ${color}`}>
           <Icon className="h-5 w-5 text-white" />
         </div>
       </div>
-      <div className="text-4xl font-bold text-gray-900">{value.toLocaleString()}</div>
+      <div className="text-4xl font-bold text-foreground">{value.toLocaleString()}</div>
     </div>
   );
 }
@@ -40,8 +40,8 @@ function IndexPage() {
   return (
     <div className="flex flex-col gap-8 p-8">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Overview</h1>
-        <p className="text-sm text-gray-500 mt-1">Your SMTP Forge at a glance</p>
+        <h1 className="text-2xl font-bold text-foreground">Overview</h1>
+        <p className="text-sm text-muted-foreground mt-1">Your SMTP Forge at a glance</p>
       </div>
 
       {isLoading ? (
@@ -49,7 +49,7 @@ function IndexPage() {
           {[...Array(4)].map((_, i) => (
             <div
               key={i}
-              className="rounded-3xl bg-white p-6 h-32 animate-pulse ring-1 ring-black/5"
+              className="rounded-3xl bg-card p-6 h-32 animate-pulse ring-1 ring-border"
             />
           ))}
         </div>
@@ -59,19 +59,19 @@ function IndexPage() {
             label="Total Domains"
             value={stats?.totalDomains ?? 0}
             icon={Globe}
-            color="bg-blue-500"
+            color="bg-primary"
           />
           <StatCard
             label="Total Inboxes"
             value={stats?.totalInboxes ?? 0}
             icon={Mail}
-            color="bg-[#4DB584]"
+            color="bg-primary"
           />
           <StatCard
             label="Servers"
             value={stats?.totalServers ?? 0}
             icon={Server}
-            color="bg-purple-500"
+            color="bg-primary"
           />
           <StatCard
             label="Active Jobs"
@@ -82,13 +82,13 @@ function IndexPage() {
         </div>
       )}
 
-      <div className="rounded-3xl bg-white p-8 shadow-sm ring-1 ring-black/5 flex flex-col items-center justify-center gap-4 text-center min-h-[200px]">
-        <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-[#4DB584]/10">
-          <TrendingUp className="h-8 w-8 text-[#4DB584]" />
+      <div className="rounded-3xl bg-card p-8 shadow-sm ring-1 ring-border flex flex-col items-center justify-center gap-4 text-center min-h-[200px]">
+        <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-primary/10">
+          <TrendingUp className="h-8 w-8 text-primary" />
         </div>
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">Welcome to SMTP Forge</h2>
-          <p className="text-sm text-gray-500 mt-1 max-w-sm">
+          <h2 className="text-lg font-semibold text-foreground">Welcome to SMTP Forge</h2>
+          <p className="text-sm text-muted-foreground mt-1 max-w-sm">
             Add servers and domains to start provisioning mailboxes at scale.
           </p>
         </div>
