@@ -4,6 +4,7 @@ import { getDomainDetails, pushDnsToCloudflare, updateDomain, repairDomainDns } 
 import { provisionServer } from "@/server/provisioning";
 import { setupMailcowDomain, fetchDkimAndSync } from "@/server/mailcow";
 import { regeneratePlan } from "@/server/plans";
+import { buildInboxCsv, downloadCsv } from "@/lib/csv";
 import {
   Globe,
   Server,
@@ -414,61 +415,26 @@ function DomainDetailsPage() {
   };
 
   const exportCsv = () => {
-    if (!inboxes.length) return;
-
     // Mail server clients connect to (mailcow host), e.g. mail.example.com
     const mailServer = domain.mailcowHostname || `mail.${domain.name}`;
-
-    // Only export mailboxes that were actually created (have a password) — these are
-    // the usable sending accounts to load into an outreach platform.
+    // Only export mailboxes that were actually created (have a password) — these are the
+    // usable sending accounts. Keeps "downloadable only when mailboxes are ready" true.
     const usable = inboxes.filter((ib: any) => ib.password);
     if (!usable.length) {
-      alert("No created mailboxes to export yet. Create the mailboxes first.");
+      toast.error("No created mailboxes to export yet. Create the mailboxes first.");
       return;
     }
-
-    // Wrap a field in quotes if it contains a comma, quote, or newline (RFC 4180).
-    const esc = (v: any) => {
-      const s = String(v ?? "");
-      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-
-    const headers = [
-      "Name",
-      "Email",
-      "Password",
-      "IMAP Server",
-      "IMAP Port",
-      "SMTP Server",
-      "SMTP Port",
-      "Daily Limit",
-      "SMTP Secure",
-      "IMAP Secure",
-    ];
-    const rows = usable.map((ib: any) => [
-      ib.fullName || [ib.firstName, ib.lastName].filter(Boolean).join(" ") || ib.localPart || "",
-      ib.email,
-      ib.password || "",
-      mailServer, // IMAP Server
-      "993", // IMAP Port
-      mailServer, // SMTP Server
-      "587", // SMTP Port (STARTTLS)
-      "15", // Daily Limit
-      "TLS", // SMTP Secure (STARTTLS on 587)
-      "SSL", // IMAP Secure (implicit TLS on 993)
-    ]);
-
-    const csvContent = [headers, ...rows].map((r) => r.map(esc).join(",")).join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `${domain.name}_planned_inboxes.csv`);
-    link.style.visibility = "hidden";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const rows = usable.map((ib: any) => ({
+      name: ib.fullName || [ib.firstName, ib.lastName].filter(Boolean).join(" ") || ib.localPart || "",
+      email: ib.email,
+      password: ib.password || "",
+      mailServer,
+    }));
+    downloadCsv(`${domain.name}_inboxes.csv`, buildInboxCsv(rows));
+    toast.success(`Exported ${rows.length} mailbox${rows.length === 1 ? "" : "es"}`);
   };
+
+  const canExportCsv = inboxes.some((ib: any) => ib.password);
 
   if (isLoading) {
     return (
@@ -868,7 +834,8 @@ function DomainDetailsPage() {
           <Button
             variant="outline"
             onClick={exportCsv}
-            disabled={!inboxes.length}
+            disabled={!canExportCsv}
+            title={canExportCsv ? undefined : "Available once mailboxes are created"}
             className="rounded-xl h-9 gap-2 border-border"
           >
             <Send className="h-4 w-4" /> Export CSV

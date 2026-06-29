@@ -2,6 +2,8 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { listDomains, listDomainBatches } from "@/server/domains";
+import { getInboxExport } from "@/server/plans";
+import { buildInboxCsv, downloadCsv } from "@/lib/csv";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -10,7 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Globe, Loader2, ChevronRight, FolderGit2, X } from "lucide-react";
+import { Plus, Globe, Loader2, ChevronRight, FolderGit2, X, Download } from "lucide-react";
+import { toast } from "sonner";
 import { StatusPill } from "@/components/StatusPill";
 import { DomainActionsMenu } from "@/components/DomainActionsMenu";
 import { AddDomainWizard } from "@/components/AddDomainWizard";
@@ -40,6 +43,27 @@ function DomainsPage() {
     queryFn: () =>
       listDomains({ data: batchFilter !== "all" ? { batchId: batchFilter } : {} }),
   });
+
+  const [exportingAll, setExportingAll] = useState(false);
+  const anyReady = domains.some((d: any) => (d.createdInboxCount ?? 0) > 0);
+
+  const downloadAll = async () => {
+    setExportingAll(true);
+    toast.loading("Building combined CSV…", { id: "export-all" });
+    try {
+      const res: any = await getInboxExport({ data: {} });
+      if (!res?.rows?.length) {
+        toast.error("No created mailboxes to export yet.", { id: "export-all" });
+        return;
+      }
+      downloadCsv("all_inboxes.csv", buildInboxCsv(res.rows));
+      toast.success(`Exported ${res.rows.length} mailboxes`, { id: "export-all" });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Export failed", { id: "export-all" });
+    } finally {
+      setExportingAll(false);
+    }
+  };
 
   const setFilter = (v: string) =>
     navigate({ to: "/domains", search: v === "all" ? {} : { batch: v } });
@@ -81,6 +105,18 @@ function DomainsPage() {
                 ))}
               </SelectContent>
             </Select>
+          )}
+          {domains.length > 0 && (
+            <Button
+              variant="outline"
+              onClick={downloadAll}
+              disabled={!anyReady || exportingAll}
+              className="gap-2"
+              title={anyReady ? "Download one combined CSV of all created mailboxes" : "Available once mailboxes are created"}
+            >
+              {exportingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              Download all CSVs
+            </Button>
           )}
           <Button onClick={() => setWizardOpen(true)} className="gap-2">
             <Plus className="h-4 w-4" /> Add domains
@@ -146,7 +182,12 @@ function DomainsPage() {
               <Link to="/domains/$id" params={{ id: d.id }} className="text-muted-foreground hover:text-foreground">
                 <ChevronRight className="h-4 w-4" />
               </Link>
-              <DomainActionsMenu domainId={d.id} domainName={d.name} onChanged={refresh} />
+              <DomainActionsMenu
+                domainId={d.id}
+                domainName={d.name}
+                onChanged={refresh}
+                canExport={(d.createdInboxCount ?? 0) > 0}
+              />
             </div>
           ))}
         </div>

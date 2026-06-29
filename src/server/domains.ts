@@ -103,10 +103,25 @@ export const listDomains = createServerFn({ method: "GET" })
         plans.map((p: any) => [p.domainId, p.totalInboxes ?? 0]),
       );
 
+      // Count actually-created mailboxes (a stored password = a usable account). Used to gate
+      // CSV export so it's only offered once mailboxes exist.
+      const inboxRows =
+        ids.length > 0
+          ? await db
+              .select({ domainId: plannedInboxes.domainId, password: plannedInboxes.password })
+              .from(plannedInboxes)
+              .where(inArray(plannedInboxes.domainId, ids))
+          : [];
+      const createdCount = new Map<string, number>();
+      for (const ir of inboxRows) {
+        if (ir.password) createdCount.set(ir.domainId, (createdCount.get(ir.domainId) ?? 0) + 1);
+      }
+
       return rows.map((r: any) => ({
         ...r,
         batchName: r.batchId ? batchName.get(r.batchId) ?? null : null,
         plannedInboxCount: inboxCount.get(r.id) ?? 0,
+        createdInboxCount: createdCount.get(r.id) ?? 0,
       }));
     } catch {
       return [];

@@ -29,6 +29,38 @@ export const listPlannedInboxes = createServerFn({ method: "GET" })
       .orderBy(plannedInboxes.subdomainFqdn, plannedInboxes.localPart);
   });
 
+// Export rows (created mailboxes with passwords) for one domain or, when domainId is omitted,
+// every domain the user owns. Used by the per-domain CSV export and the bulk "download all".
+export const getInboxExport = createServerFn({ method: "GET" })
+  .middleware([requireAuth])
+  .inputValidator((d: unknown) => z.object({ domainId: z.string().optional() }).parse(d))
+  .handler(async ({ data, context }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { db, userId } = context as any;
+    if (!db) return { rows: [], domainCount: 0 };
+
+    const doms = data.domainId
+      ? await db.select().from(domains).where(and(eq(domains.id, data.domainId), eq(domains.userId, userId)))
+      : await db.select().from(domains).where(eq(domains.userId, userId));
+
+    const rows: { domain: string; name: string; email: string; password: string; mailServer: string }[] = [];
+    for (const dom of doms) {
+      const mailServer = dom.mailcowHostname || `mail.${dom.name}`;
+      const inbs = await db.select().from(plannedInboxes).where(eq(plannedInboxes.domainId, dom.id));
+      for (const ib of inbs) {
+        if (!ib.password) continue; // only created/usable accounts
+        rows.push({
+          domain: dom.name,
+          name: ib.fullName || [ib.firstName, ib.lastName].filter(Boolean).join(" ") || ib.localPart || "",
+          email: ib.email,
+          password: ib.password,
+          mailServer,
+        });
+      }
+    }
+    return { rows, domainCount: doms.length };
+  });
+
 export const regeneratePlan = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator((d: unknown) =>

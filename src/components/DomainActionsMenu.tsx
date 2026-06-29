@@ -18,11 +18,14 @@ import {
   RefreshCw,
   Trash2,
   Loader2,
+  Download,
 } from "lucide-react";
 import { toast } from "sonner";
 import { pushDnsToCloudflare, repairDomainDns, deleteDomain } from "@/server/domains";
 import { provisionServer } from "@/server/provisioning";
 import { setupMailcowDomain, fetchDkimAndSync } from "@/server/mailcow";
+import { getInboxExport } from "@/server/plans";
+import { buildInboxCsv, downloadCsv } from "@/lib/csv";
 
 // Every per-domain control in one 3-dot menu. Used in the Domains list and anywhere a
 // single domain needs its full action set. Stops click propagation so it can live inside
@@ -31,12 +34,31 @@ export function DomainActionsMenu({
   domainId,
   domainName,
   onChanged,
+  canExport = false,
 }: {
   domainId: string;
   domainName?: string;
   onChanged?: () => void;
+  canExport?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+
+  const exportCsv = async () => {
+    setBusy(true);
+    try {
+      const res: any = await getInboxExport({ data: { domainId } });
+      if (!res?.rows?.length) {
+        toast.error("No created mailboxes to export yet.");
+        return;
+      }
+      downloadCsv(`${domainName ?? "domain"}_inboxes.csv`, buildInboxCsv(res.rows));
+      toast.success(`Exported ${res.rows.length} mailbox${res.rows.length === 1 ? "" : "es"}`);
+    } catch (e: any) {
+      toast.error(e?.message ?? "Export failed");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const run = async (label: string, fn: () => Promise<any>, success: string) => {
     setBusy(true);
@@ -90,6 +112,14 @@ export function DomainActionsMenu({
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => run("Syncing DKIM", () => fetchDkimAndSync({ data: { domainId } }), "DKIM synced")}>
           <ShieldCheck className="h-4 w-4" /> Sync DKIM
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onClick={exportCsv}
+          disabled={!canExport}
+          title={canExport ? undefined : "Available once mailboxes are created"}
+        >
+          <Download className="h-4 w-4" /> Export CSV
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuLabel>Repair</DropdownMenuLabel>
