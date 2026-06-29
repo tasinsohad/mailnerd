@@ -36,6 +36,7 @@ import {
 import { cn } from "@/lib/utils";
 import { MoreHorizontal } from "lucide-react";
 import { HealthCard } from "@/components/HealthCard";
+import { MailcowAdminReset } from "@/components/MailcowAdminReset";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
 
@@ -555,26 +556,11 @@ function DomainDetailsPage() {
             <Key className="h-5 w-5 text-muted-foreground" /> Mailcow Access
           </h2>
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="rounded-lg border border-border p-4 flex flex-col gap-1">
-              <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
-                Admin Panel
-              </div>
-              <a
-                href={`https://${domain.mailcowHostname}/admin`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sm text-primary hover:underline break-all"
-              >
-                https://{domain.mailcowHostname}/admin
-              </a>
-              <div className="mt-2 text-sm">
-                User: <span className="font-mono font-bold">admin</span>
-              </div>
-              <div className="text-sm">
-                Pass: <span className="font-mono font-bold">moohoo</span>{" "}
-                <span className="text-warning text-xs">(default — change after first login)</span>
-              </div>
-            </div>
+            <MailcowAdminReset
+              domainId={id}
+              mailcowHostname={domain.mailcowHostname}
+              currentPassword={domain.mailcowAdminPassword ?? null}
+            />
             <div className="rounded-lg border border-border p-4 flex flex-col gap-1">
               <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
                 Webmail (per mailbox)

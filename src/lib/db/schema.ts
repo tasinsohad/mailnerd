@@ -94,6 +94,7 @@ export const domains = pgTable("domains", {
   cfAccountId: text("cf_account_id"),
   mailcowHostname: text("mailcow_hostname"),
   mailcowApiKey: text("mailcow_api_key"),
+  mailcowAdminPassword: text("mailcow_admin_password"), // current admin-panel password (after reset)
   plannedInboxCount: integer("planned_inbox_count"),
   terminalLogs: text("terminal_logs"),
   health: jsonb("health"), // last deliverability health result (see src/server/health.ts)
