@@ -57,11 +57,11 @@ function ServersPage() {
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button className="bg-primary hover:bg-primary/90 rounded-2xl gap-2">
+            <Button className="bg-primary hover:bg-primary/90 rounded-lg gap-2">
               <Plus className="h-4 w-4" /> Add Server
             </Button>
           </DialogTrigger>
-          <DialogContent className="rounded-3xl">
+          <DialogContent className="rounded-xl">
             <DialogHeader>
               <DialogTitle>Add New Server</DialogTitle>
             </DialogHeader>
@@ -132,7 +132,7 @@ function ServersPage() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : serverList.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-3xl bg-card p-16 text-center ring-1 ring-border">
+        <div className="flex flex-col items-center justify-center gap-3 rounded-xl bg-card p-16 text-center ring-1 ring-border">
           <Server className="h-12 w-12 text-muted-foreground" />
           <p className="text-lg font-medium text-foreground">No servers yet</p>
           <p className="text-sm text-muted-foreground">Add your first VPS host to get started.</p>
@@ -142,11 +142,11 @@ function ServersPage() {
           {serverList.map((s: any) => (
             <div
               key={s.id}
-              className="rounded-3xl bg-card p-6 ring-1 ring-border shadow-sm flex flex-col gap-3"
+              className="rounded-xl bg-card p-6 ring-1 ring-border shadow-sm flex flex-col gap-3"
             >
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-purple-100">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100">
                     <Server className="h-5 w-5 text-purple-600" />
                   </div>
                   <div>

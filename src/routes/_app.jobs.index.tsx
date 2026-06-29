@@ -30,7 +30,7 @@ function JobsPage() {
         </div>
         <Button
           onClick={() => setWizardOpen(true)}
-          className="bg-primary hover:bg-primary/90 rounded-2xl gap-2 shadow-lg shadow-primary/20"
+          className="bg-primary hover:bg-primary/90 rounded-lg gap-2 shadow-lg shadow-primary/20"
         >
           <Plus className="h-4 w-4" /> Add Domains
         </Button>
@@ -43,7 +43,7 @@ function JobsPage() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : batches.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-3xl bg-card p-16 text-center ring-1 ring-border">
+        <div className="flex flex-col items-center justify-center gap-3 rounded-xl bg-card p-16 text-center ring-1 ring-border">
           <FolderGit2 className="h-12 w-12 text-muted-foreground" />
           <p className="text-lg font-medium text-foreground">No jobs yet</p>
           <p className="text-sm text-muted-foreground">Click "Add Domains" to create your first batch.</p>
@@ -90,7 +90,7 @@ function BatchCard({ batch }: { batch: any }) {
     <Link
       to="/jobs/$id"
       params={{ id: batch.id }}
-      className="rounded-3xl bg-card p-6 ring-1 ring-border shadow-sm flex flex-col gap-3 hover:ring-primary/40 hover:shadow-md transition-all group relative"
+      className="rounded-xl bg-card p-6 ring-1 ring-border shadow-sm flex flex-col gap-3 hover:ring-primary/40 hover:shadow-md transition-all group relative"
     >
       <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
         <Button
@@ -108,7 +108,7 @@ function BatchCard({ batch }: { batch: any }) {
         </Button>
       </div>
       <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-success/15">
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-success/15">
           <FolderGit2 className="h-5 w-5 text-primary" />
         </div>
         <div>

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { getOverviewStats } from "@/server/stats";
-import { Globe, Server, Mail, Briefcase, TrendingUp, Activity } from "lucide-react";
+import { Globe, Server, Mail, Briefcase, TrendingUp } from "lucide-react";
 
 export const Route = createFileRoute("/_app/")({
   component: IndexPage,
@@ -11,22 +11,22 @@ function StatCard({
   label,
   value,
   icon: Icon,
-  color,
 }: {
   label: string;
   value: number;
   icon: any;
-  color: string;
 }) {
   return (
-    <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-3">
+    <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/40">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-muted-foreground">{label}</span>
-        <div className={`flex h-10 w-10 items-center justify-center rounded-2xl ${color}`}>
-          <Icon className="h-5 w-5 text-white" />
-        </div>
+        <span className="ident text-[11px] uppercase tracking-[0.15em] text-muted-foreground">
+          {label}
+        </span>
+        <Icon className="h-4 w-4 text-muted-foreground" />
       </div>
-      <div className="text-4xl font-bold text-foreground">{value.toLocaleString()}</div>
+      <div className="font-display text-4xl font-semibold tabular-nums text-foreground">
+        {value.toLocaleString()}
+      </div>
     </div>
   );
 }
@@ -38,58 +38,40 @@ function IndexPage() {
   });
 
   return (
-    <div className="flex flex-col gap-8 p-8">
+    <div className="mx-auto flex max-w-6xl flex-col gap-8 p-8">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Overview</h1>
-        <p className="text-sm text-muted-foreground mt-1">Your SMTP Forge at a glance</p>
+        <div className="ident text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+          Control console
+        </div>
+        <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground">
+          Overview
+        </h1>
       </div>
 
       {isLoading ? (
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
           {[...Array(4)].map((_, i) => (
-            <div
-              key={i}
-              className="rounded-3xl bg-card p-6 h-32 animate-pulse ring-1 ring-border"
-            />
+            <div key={i} className="h-32 animate-pulse rounded-xl border border-border bg-card" />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-          <StatCard
-            label="Total Domains"
-            value={stats?.totalDomains ?? 0}
-            icon={Globe}
-            color="bg-primary"
-          />
-          <StatCard
-            label="Total Inboxes"
-            value={stats?.totalInboxes ?? 0}
-            icon={Mail}
-            color="bg-primary"
-          />
-          <StatCard
-            label="Servers"
-            value={stats?.totalServers ?? 0}
-            icon={Server}
-            color="bg-primary"
-          />
-          <StatCard
-            label="Active Jobs"
-            value={stats?.activeJobs ?? 0}
-            icon={Briefcase}
-            color="bg-orange-500"
-          />
+        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+          <StatCard label="Domains" value={stats?.totalDomains ?? 0} icon={Globe} />
+          <StatCard label="Mailboxes" value={stats?.totalInboxes ?? 0} icon={Mail} />
+          <StatCard label="Servers" value={stats?.totalServers ?? 0} icon={Server} />
+          <StatCard label="Active jobs" value={stats?.activeJobs ?? 0} icon={Briefcase} />
         </div>
       )}
 
-      <div className="rounded-3xl bg-card p-8 shadow-sm ring-1 ring-border flex flex-col items-center justify-center gap-4 text-center min-h-[200px]">
-        <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-primary/10">
-          <TrendingUp className="h-8 w-8 text-primary" />
+      <div className="flex min-h-[220px] flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border bg-card/40 p-8 text-center">
+        <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20">
+          <TrendingUp className="h-7 w-7 text-primary" />
         </div>
         <div>
-          <h2 className="text-lg font-semibold text-foreground">Welcome to SMTP Forge</h2>
-          <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-            Add servers and domains to start provisioning mailboxes at scale.
+          <h2 className="font-display text-lg font-semibold text-foreground">Provision at scale</h2>
+          <p className="mx-auto mt-1.5 max-w-sm text-sm text-muted-foreground">
+            Add a server and domains, then run a job to spin up mail servers and create
+            mailboxes — three domains at a time, the rest queued.
           </p>
         </div>
       </div>

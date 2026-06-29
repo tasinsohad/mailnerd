@@ -84,7 +84,7 @@ function SettingsPage() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : isError ? (
-        <div className="rounded-3xl bg-destructive/10/50 p-8 ring-1 ring-red-200/50 flex flex-col gap-5">
+        <div className="rounded-xl bg-destructive/10/50 p-8 ring-1 ring-red-200/50 flex flex-col gap-5">
           <div>
             <h2 className="text-lg font-semibold text-red-900">Database Connection Failed</h2>
             <p className="text-sm text-destructive/80 leading-relaxed mt-1">
@@ -103,9 +103,9 @@ function SettingsPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-6">
-          <div className="rounded-3xl bg-card p-8 shadow-sm ring-1 ring-border flex flex-col gap-6">
+          <div className="rounded-xl bg-card p-8 shadow-sm ring-1 ring-border flex flex-col gap-6">
             <div className="flex items-center gap-3 border-b border-border pb-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#F48120]/10">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#F48120]/10">
                 <Cloud className="h-5 w-5 text-[#F48120]" />
               </div>
               <div>

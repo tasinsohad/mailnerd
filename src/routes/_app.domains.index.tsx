@@ -64,14 +64,14 @@ function DomainsPage() {
         <div className="flex gap-3">
           <Button
             onClick={() => setWizardOpen(true)}
-            className="bg-primary hover:bg-primary/90 rounded-2xl gap-2 shadow-lg shadow-primary/20"
+            className="bg-primary hover:bg-primary/90 rounded-lg gap-2 shadow-lg shadow-primary/20"
           >
             <Plus className="h-4 w-4" /> Add Domains
           </Button>
 
           {batches.length > 0 && (
             <Select value={batchFilter} onValueChange={setBatchFilter}>
-              <SelectTrigger className="w-44 rounded-2xl">
+              <SelectTrigger className="w-44 rounded-lg">
                 <SelectValue placeholder="All batches" />
               </SelectTrigger>
               <SelectContent>
@@ -94,7 +94,7 @@ function DomainsPage() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : domains.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-3xl bg-card p-16 text-center ring-1 ring-border">
+        <div className="flex flex-col items-center justify-center gap-3 rounded-xl bg-card p-16 text-center ring-1 ring-border">
           <Globe className="h-12 w-12 text-muted-foreground" />
           <p className="text-lg font-medium text-foreground">No domains yet</p>
           <p className="text-sm text-muted-foreground">Use "Add Domains" to get started.</p>
@@ -106,7 +106,7 @@ function DomainsPage() {
               key={d.id}
               to="/domains/$id"
               params={{ id: d.id }}
-              className="flex items-center justify-between rounded-2xl bg-card px-5 py-4 ring-1 ring-border shadow-sm hover:shadow-md transition-all group"
+              className="flex items-center justify-between rounded-lg bg-card px-5 py-4 ring-1 ring-border shadow-sm hover:shadow-md transition-all group"
             >
               <div className="flex items-center gap-4">
                 <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10">

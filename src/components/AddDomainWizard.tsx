@@ -431,12 +431,12 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
   return (
     <>
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl rounded-[2.5rem] p-0 overflow-hidden border-none shadow-2xl">
+      <DialogContent className="max-w-3xl rounded-lg p-0 overflow-hidden border-none shadow-lg">
         {loading && <MatrixAnimation />}
         <DialogHeader className="p-8 bg-[#23242A] text-white">
           <div className="flex items-center justify-between w-full">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-white">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-white">
                 <Wand2 className="h-5 w-5" />
               </div>
               <div>
@@ -458,7 +458,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
         <div className="bg-card min-h-[400px] flex flex-col">
           {step === 0 && (
             <div className="p-8 flex flex-col gap-8 flex-1">
-              <div className="flex items-center gap-4 p-4 bg-primary/10/50 rounded-2xl border border-blue-100">
+              <div className="flex items-center gap-4 p-4 bg-primary/10/50 rounded-lg border border-blue-100">
                 <FolderOpen className="h-5 w-5 text-primary" />
                 <div className="flex-1">
                   <h3 className="font-semibold text-sm text-foreground">Load Template (Optional)</h3>
@@ -509,8 +509,8 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 </div>
               )}
 
-              <div className="bg-success/10/50 border border-green-100 rounded-3xl p-6 flex items-start gap-4">
-                <div className="h-10 w-10 rounded-2xl bg-primary text-white flex items-center justify-center shrink-0">
+              <div className="bg-success/10/50 border border-green-100 rounded-xl p-6 flex items-start gap-4">
+                <div className="h-10 w-10 rounded-lg bg-primary text-white flex items-center justify-center shrink-0">
                   <Wand2 className="h-5 w-5" />
                 </div>
                 <div>
@@ -545,7 +545,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                   <Textarea
                     value={prefixesText}
                     onChange={(e) => setPrefixesText(e.target.value)}
-                    className="text-xs h-36 rounded-[1.5rem] border-border bg-muted/50 p-4 focus:bg-card transition-all leading-relaxed resize-none shadow-inner"
+                    className="text-xs h-36 rounded-xl border-border bg-muted/50 p-4 focus:bg-card transition-all leading-relaxed resize-none shadow-inner"
                     placeholder="mail&#10;web&#10;app&#10;dev..."
                   />
                 </div>
@@ -564,7 +564,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                   <Textarea
                     value={namesText}
                     onChange={(e) => setNamesText(e.target.value)}
-                    className="text-xs h-36 rounded-[1.5rem] border-border bg-muted/50 p-4 focus:bg-card transition-all leading-relaxed resize-none shadow-inner"
+                    className="text-xs h-36 rounded-xl border-border bg-muted/50 p-4 focus:bg-card transition-all leading-relaxed resize-none shadow-inner"
                     placeholder="John Smith&#10;Mary Johnson&#10;Michael Brown..."
                   />
                 </div>
@@ -572,7 +572,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
 
               {savingTemplate && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                  <div className="bg-card rounded-2xl p-6 w-96 shadow-2xl">
+                  <div className="bg-card rounded-lg p-6 w-96 shadow-lg">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="font-semibold">Save Template</h3>
                       <Button variant="ghost" size="sm" onClick={() => setSavingTemplate(false)}>
@@ -615,7 +615,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                   placeholder="e.g. Winter Campaign 2024"
                   value={batchName}
                   onChange={(e) => setBatchName(e.target.value)}
-                  className="rounded-2xl border-border bg-muted/50 focus:bg-card h-12 px-5 transition-all shadow-sm"
+                  className="rounded-lg border-border bg-muted/50 focus:bg-card h-12 px-5 transition-all shadow-sm"
                 />
               </div>
               <div className="flex flex-col gap-3">
@@ -639,7 +639,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                       const domains = parseList(domainList);
                       if (domains.length > 0) validateMutation.mutate(domains);
                     }}
-                    className="min-h-[220px] rounded-[1.5rem] border-border bg-muted/50 focus:bg-card p-5 transition-all resize-none shadow-inner leading-relaxed pr-12"
+                    className="min-h-[220px] rounded-xl border-border bg-muted/50 focus:bg-card p-5 transition-all resize-none shadow-inner leading-relaxed pr-12"
                     required
                   />
                   <div className="absolute right-4 top-4">
@@ -650,7 +650,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 </div>
 
                 {validationResults.length > 0 && (
-                  <div className="flex flex-wrap gap-2 p-4 bg-muted/50 rounded-[1.5rem] border border-border/50">
+                  <div className="flex flex-wrap gap-2 p-4 bg-muted/50 rounded-xl border border-border/50">
                     {validationResults.map((v, i) => (
                       <div
                         key={i}
@@ -678,7 +678,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
             <div className="flex-1 flex flex-col min-h-0">
               {/* Global Range Inputs */}
               <div className="p-8 pb-4 flex flex-col gap-6">
-                <div className="bg-success/10/50 border border-green-100 rounded-3xl p-6">
+                <div className="bg-success/10/50 border border-green-100 rounded-xl p-6">
                   <h3 className="font-semibold text-foreground text-sm mb-4">
                     Global Range Settings
                   </h3>
@@ -804,7 +804,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
           {step === 3 && (
             <div className="p-8 flex flex-col gap-6 flex-1">
               <div className="text-center">
-                <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 mb-4">
+                <div className="inline-flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 mb-4">
                   <Wand2 className="h-6 w-6 text-primary" />
                 </div>
                 <h3 className="text-xl font-bold text-foreground">Planning Preview</h3>
@@ -863,7 +863,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 </table>
               </div>
 
-              <div className="bg-muted rounded-2xl p-4 space-y-2">
+              <div className="bg-muted rounded-lg p-4 space-y-2">
                 <div className="text-xs font-bold text-muted-foreground uppercase">Summary</div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Domains</span>
@@ -888,7 +888,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
               type="button"
               variant="ghost"
               onClick={() => (step === 0 ? onOpenChange(false) : setStep(step - 1))}
-              className="rounded-2xl text-muted-foreground"
+              className="rounded-lg text-muted-foreground"
             >
               {step === 0 ? "Cancel" : "Back"}
             </Button>
@@ -897,7 +897,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
               <Button
                 type="button"
                 onClick={handleNext}
-                className="bg-[#23242A] hover:bg-black text-white rounded-2xl px-8 gap-2 shadow-lg"
+                className="bg-[#23242A] hover:bg-black text-white rounded-lg px-8 gap-2 shadow-lg"
               >
                 Next Step
               </Button>
@@ -906,7 +906,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 type="button"
                 onClick={handleSubmit}
                 disabled={loading}
-                className="bg-primary hover:bg-primary/90 rounded-2xl px-8 gap-2 shadow-lg shadow-primary/20"
+                className="bg-primary hover:bg-primary/90 rounded-lg px-8 gap-2 shadow-lg shadow-primary/20"
               >
                 {loading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -922,7 +922,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
     </Dialog>
     
     <Dialog open={showDnsPreview} onOpenChange={setShowDnsPreview}>
-      <DialogContent className="max-w-4xl max-h-[80vh] flex flex-col rounded-2xl p-0">
+      <DialogContent className="max-w-4xl max-h-[80vh] flex flex-col rounded-lg p-0">
         <DialogHeader className="p-6 bg-muted border-b">
           <DialogTitle>DNS Records Preview</DialogTitle>
           <p className="text-sm text-muted-foreground mt-1">These records will be pushed to Cloudflare</p>

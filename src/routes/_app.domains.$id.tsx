@@ -448,7 +448,7 @@ function DomainDetailsPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Link to="/domains">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-card shadow-sm ring-1 ring-border hover:bg-muted transition-colors">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-card shadow-sm ring-1 ring-border hover:bg-muted transition-colors">
               <ArrowLeft className="h-5 w-5 text-muted-foreground" />
             </div>
           </Link>
@@ -514,19 +514,19 @@ function DomainDetailsPage() {
       </div>
 
       <div className="grid gap-6 md:grid-cols-3">
-        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
           <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
             Total Inboxes
           </div>
           <div className="text-3xl font-black text-primary">{plan?.totalInboxes || 0}</div>
           <div className="text-[10px] text-muted-foreground">Planned across all subdomains</div>
         </div>
-        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
           <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Subdomains</div>
           <div className="text-3xl font-black text-primary">{plan?.subdomainCount || 0}</div>
           <div className="text-[10px] text-muted-foreground">Unique routing prefixes</div>
         </div>
-        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
           <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
             Avg Per Subdomain
           </div>
@@ -538,12 +538,12 @@ function DomainDetailsPage() {
       </div>
 
       {domain.mailcowHostname && (
-        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
+        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Key className="h-5 w-5 text-muted-foreground" /> Mailcow Access
           </h2>
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="rounded-2xl border border-border p-4 flex flex-col gap-1">
+            <div className="rounded-lg border border-border p-4 flex flex-col gap-1">
               <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
                 Admin Panel
               </div>
@@ -563,7 +563,7 @@ function DomainDetailsPage() {
                 <span className="text-warning text-xs">(default — change after first login)</span>
               </div>
             </div>
-            <div className="rounded-2xl border border-border p-4 flex flex-col gap-1">
+            <div className="rounded-lg border border-border p-4 flex flex-col gap-1">
               <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
                 Webmail (per mailbox)
               </div>
@@ -584,7 +584,7 @@ function DomainDetailsPage() {
       )}
 
       <div className="grid gap-6 md:grid-cols-2">
-        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4 relative">
+        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4 relative">
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-semibold flex items-center gap-2">
               <Server className="h-5 w-5 text-muted-foreground" /> Deployment Target
@@ -670,7 +670,7 @@ function DomainDetailsPage() {
             </div>
           ) : (
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-purple-100">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100">
                 <Server className="h-5 w-5 text-purple-600" />
               </div>
               <div>
@@ -690,7 +690,7 @@ function DomainDetailsPage() {
           )}
 
           {domain.ipAddress && (
-            <div className="mt-2 rounded-2xl bg-warning/10 border border-warning/30 px-4 py-3 text-sm">
+            <div className="mt-2 rounded-lg bg-warning/10 border border-warning/30 px-4 py-3 text-sm">
               <div className="font-semibold text-warning flex items-center gap-1.5">
                 <Network className="h-4 w-4" /> Set Reverse DNS (PTR) — required for deliverability
               </div>
@@ -707,7 +707,7 @@ function DomainDetailsPage() {
           )}
         </div>
 
-        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
+        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Network className="h-5 w-5 text-muted-foreground" /> Subdomain Breakdown
           </h2>
@@ -740,7 +740,7 @@ function DomainDetailsPage() {
       </div>
 
       <div className="grid gap-6 md:grid-cols-1">
-        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
+        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Globe className="h-5 w-5 text-muted-foreground" /> DNS Blueprint
           </h2>
@@ -770,7 +770,7 @@ function DomainDetailsPage() {
       </div>
 
       {(domain.status === "configuring" || domain.status === "provisioning" || domain.status === "failed" || domain.status === "error" || logs.length > 0) && (
-        <div className="rounded-3xl bg-black overflow-hidden shadow-xl border border-gray-800 flex flex-col">
+        <div className="rounded-xl bg-black overflow-hidden shadow-xl border border-gray-800 flex flex-col">
           <div className="bg-gray-900 px-6 py-4 flex justify-between items-center border-b border-gray-800">
             <div className="flex items-center gap-3">
               <Terminal className="w-5 h-5 text-muted-foreground" />
@@ -800,7 +800,7 @@ function DomainDetailsPage() {
         </div>
       )}
 
-      <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
+      <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Mail className="h-5 w-5 text-muted-foreground" /> Planned Inboxes by Subdomain
@@ -830,7 +830,7 @@ function DomainDetailsPage() {
             })}
           </div>
         ) : (
-          <div className="text-sm text-muted-foreground italic py-8 text-center bg-muted rounded-2xl border border-dashed border-border">
+          <div className="text-sm text-muted-foreground italic py-8 text-center bg-muted rounded-lg border border-dashed border-border">
             No inboxes planned for this domain.
           </div>
         )}

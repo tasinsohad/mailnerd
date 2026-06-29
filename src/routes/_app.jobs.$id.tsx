@@ -251,7 +251,7 @@ function JobPipelinePage() {
         <div className="flex items-center gap-4">
           {step === "VIEW" ? (
             <Link to="/jobs">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-card shadow-sm ring-1 ring-border hover:bg-muted transition-colors">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-card shadow-sm ring-1 ring-border hover:bg-muted transition-colors">
                 <ArrowLeft className="h-5 w-5 text-muted-foreground" />
               </div>
             </Link>
@@ -285,7 +285,7 @@ function JobPipelinePage() {
             <Button
               variant="outline"
               onClick={handleExportCsv}
-              className="h-11 px-4 rounded-2xl border-border text-muted-foreground hover:bg-muted"
+              className="h-11 px-4 rounded-lg border-border text-muted-foreground hover:bg-muted"
             >
               <Download className="h-4 w-4 mr-2" />
               Export CSV
@@ -294,7 +294,7 @@ function JobPipelinePage() {
               variant="outline"
               onClick={handleBatchRecreateMailboxes}
               disabled={batchBusy}
-              className="h-11 px-4 rounded-2xl border-warning/30 text-warning hover:bg-warning/10"
+              className="h-11 px-4 rounded-lg border-warning/30 text-warning hover:bg-warning/10"
               title="Delete & recreate every mailbox in this job with fresh passwords"
             >
               {batchBusy ? (
@@ -308,7 +308,7 @@ function JobPipelinePage() {
               variant="outline"
               onClick={handleBatchWipeReprovision}
               disabled={batchBusy}
-              className="h-11 px-4 rounded-2xl border-destructive/30 text-destructive hover:bg-destructive/10"
+              className="h-11 px-4 rounded-lg border-destructive/30 text-destructive hover:bg-destructive/10"
               title="Wipe Docker/Mailcow and re-provision every server in this job from scratch"
             >
               <Trash2 className="h-4 w-4 mr-2" />
@@ -318,7 +318,7 @@ function JobPipelinePage() {
               variant="outline"
               onClick={handleDelete}
               disabled={deleteMutation.isPending}
-              className="h-11 px-4 rounded-2xl border-destructive/30 text-destructive hover:bg-destructive/10"
+              className="h-11 px-4 rounded-lg border-destructive/30 text-destructive hover:bg-destructive/10"
             >
               {deleteMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -331,7 +331,7 @@ function JobPipelinePage() {
               <Button
                 variant="outline"
                 onClick={() => setStep("SERVER_SETUP")}
-                className="h-11 px-4 rounded-2xl border-warning/30 text-warning hover:bg-warning/10"
+                className="h-11 px-4 rounded-lg border-warning/30 text-warning hover:bg-warning/10"
               >
                 <Server className="h-4 w-4 mr-2" />
                 Go to Server Setup
@@ -339,7 +339,7 @@ function JobPipelinePage() {
             )}
             <Button
               onClick={() => setStep("PRE_FLIGHT")}
-              className="h-11 px-8 rounded-2xl bg-primary hover:bg-primary/90 text-white shadow-lg"
+              className="h-11 px-8 rounded-lg bg-primary hover:bg-primary/90 text-white shadow-lg"
             >
               Start Provisioning Pipeline
             </Button>
@@ -453,21 +453,21 @@ function ViewStep({
   return (
     <div className="grid gap-6">
       <div className="grid gap-6 md:grid-cols-3">
-        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
           <div className="text-xs font-bold text-muted-foreground uppercase">Total Domains</div>
           <div className="text-3xl font-black text-primary">{domains.length}</div>
         </div>
-        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
           <div className="text-xs font-bold text-muted-foreground uppercase">Total Inboxes</div>
           <div className="text-3xl font-black text-primary">{inboxes.length}</div>
         </div>
-        <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
           <div className="text-xs font-bold text-muted-foreground uppercase">DNS Records</div>
           <div className="text-3xl font-black text-purple-500">{records.length}</div>
         </div>
       </div>
 
-      <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border">
+      <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border">
         <h3 className="text-lg font-bold text-foreground mb-4">Domains in Job</h3>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -524,7 +524,7 @@ function PreFlightStep({
   };
 
   return (
-    <div className="flex flex-col gap-4 bg-card rounded-3xl p-6 shadow-sm ring-1 ring-border">
+    <div className="flex flex-col gap-4 bg-card rounded-xl p-6 shadow-sm ring-1 ring-border">
       <Tabs
         defaultValue="dns"
         onValueChange={(v) => {
@@ -694,7 +694,7 @@ function DnsPushStep({
   ).length;
 
   return (
-    <div className="flex flex-col gap-6 bg-card rounded-3xl p-6 shadow-sm ring-1 ring-border">
+    <div className="flex flex-col gap-6 bg-card rounded-xl p-6 shadow-sm ring-1 ring-border">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold">Cloudflare DNS Push</h2>
         <div className="text-sm text-muted-foreground">
@@ -877,7 +877,7 @@ function TerminalWindow({ domain }: { domain: any }) {
   if (status === "Ready") statusColor = "bg-green-500";
 
   return (
-    <div className="flex flex-col bg-black rounded-lg overflow-hidden shadow-2xl border border-gray-800">
+    <div className="flex flex-col bg-black rounded-lg overflow-hidden shadow-lg border border-gray-800">
       <div className="bg-gray-900 px-4 py-2 flex justify-between items-center border-b border-gray-800">
         <div className="flex items-center gap-3">
           <Terminal className="w-4 h-4 text-muted-foreground" />
