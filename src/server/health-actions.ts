@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireAuth } from "@/lib/auth";
 import { z } from "zod";
-import { domains, plannedInboxes, domainPlans } from "@/lib/db/schema";
+import { domains, plannedInboxes } from "@/lib/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { checkDomainHealth, type DomainHealth } from "./health";
 
@@ -13,11 +13,10 @@ async function runOne(db: any, domain: any): Promise<DomainHealth> {
     .where(eq(plannedInboxes.domainId, domain.id));
   const subdomains = Array.from(new Set(inboxes.map((i: any) => String(i.subdomainFqdn)))) as string[];
 
-  let plannedInboxCount = domain.plannedInboxCount ?? 0;
-  if (!plannedInboxCount) {
-    const plan = await db.query.domainPlans.findFirst({ where: eq(domainPlans.domainId, domain.id) });
-    plannedInboxCount = plan?.totalInboxes ?? inboxes.length;
-  }
+  // The real mailbox target is the number of inboxes we actually generated (one mailbox each).
+  // domainPlans.totalInboxes is the *aspirational* figure before planDomain caps it to unique
+  // name×prefix combos, so it overcounts (e.g. plan 37 but only 32 unique inboxes generated).
+  const plannedInboxCount = inboxes.length;
 
   const health = await checkDomainHealth({
     name: domain.name,

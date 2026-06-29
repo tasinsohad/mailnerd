@@ -419,28 +419,41 @@ export async function syncDkim(
         ),
       });
 
-      let cfRes;
       let isNew = false;
       const body = JSON.stringify({ type: "TXT", name: fullRecName, content: cfTxtContent("TXT", recordContent), ttl: 1 });
       const headers = { Authorization: `Bearer ${secrets.cfApiToken}`, "Content-Type": "application/json" };
+      const createUrl = `https://api.cloudflare.com/client/v4/zones/${cfZoneId}/dns_records`;
+      let cfRes: Response;
+      let cfJson: any;
       if (dnsRec?.cfRecordId) {
-        cfRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${cfZoneId}/dns_records/${dnsRec.cfRecordId}`, { method: "PUT", headers, body });
+        cfRes = await fetch(`${createUrl}/${dnsRec.cfRecordId}`, { method: "PUT", headers, body });
+        cfJson = await cfRes.json();
+        // Stale record id (record was removed in Cloudflare) — recreate it instead of failing.
+        if (!cfJson.success) {
+          isNew = true;
+          cfRes = await fetch(createUrl, { method: "POST", headers, body });
+          cfJson = await cfRes.json();
+        }
       } else {
         isNew = true;
-        cfRes = await fetch(`https://api.cloudflare.com/client/v4/zones/${cfZoneId}/dns_records`, { method: "POST", headers, body });
+        cfRes = await fetch(createUrl, { method: "POST", headers, body });
+        cfJson = await cfRes.json();
       }
-      const cfJson = (await cfRes.json()) as any;
       if (cfJson.success && isNew) {
-        await db.insert(dnsRecords).values({
-          userId,
-          domainId: domain.id,
-          type: "TXT",
-          name: recName,
-          content: recordContent,
-          ttl: 1,
-          cfRecordId: cfJson.result.id,
-          status: "active",
-        });
+        if (dnsRec) {
+          await db.update(dnsRecords).set({ content: recordContent, cfRecordId: cfJson.result.id, status: "active" }).where(eq(dnsRecords.id, dnsRec.id));
+        } else {
+          await db.insert(dnsRecords).values({
+            userId,
+            domainId: domain.id,
+            type: "TXT",
+            name: recName,
+            content: recordContent,
+            ttl: 1,
+            cfRecordId: cfJson.result.id,
+            status: "active",
+          });
+        }
       } else if (cfJson.success && dnsRec) {
         await db.update(dnsRecords).set({ content: recordContent }).where(eq(dnsRecords.id, dnsRec.id));
       }

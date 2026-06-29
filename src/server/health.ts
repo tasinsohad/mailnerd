@@ -6,14 +6,28 @@ import { mailcowRequest } from "./mailcow-helpers";
 // (they use the OS resolver). DoH uses the same HTTPS transport that already works here, so
 // the DNS checks reflect reality. Returns the answer `data` strings for the record type.
 const DOH_TYPE: Record<string, number> = { A: 1, MX: 15, TXT: 16, PTR: 12 };
-async function doh(name: string, type: "A" | "MX" | "TXT" | "PTR", timeoutMs = 6000): Promise<string[]> {
-  const url = `https://dns.google/resolve?name=${encodeURIComponent(name)}&type=${type}`;
+const DOH_RESOLVERS = ["https://dns.google/resolve", "https://cloudflare-dns.com/dns-query"];
+
+async function dohOne(base: string, name: string, type: "A" | "MX" | "TXT" | "PTR", timeoutMs: number): Promise<string[]> {
+  const url = `${base}?name=${encodeURIComponent(name)}&type=${type}`;
   const res = await withTimeout(fetch(url, { headers: { accept: "application/dns-json" } }), timeoutMs);
   if (!res.ok) throw new Error(`DoH ${res.status}`);
   const json: any = await res.json();
   // Status 0 = NOERROR, 3 = NXDOMAIN. Anything without Answer means "no such record".
   if (json.Status !== 0 || !Array.isArray(json.Answer)) return [];
   return json.Answer.filter((a: any) => a.type === DOH_TYPE[type]).map((a: any) => String(a.data));
+}
+
+// Query one resolver; if it returns nothing (genuinely missing OR just cache lag right after a
+// DNS change), confirm against a second resolver before concluding "missing". This stops freshly
+// pushed records (e.g. DKIM) from flapping as failed while they propagate.
+async function doh(name: string, type: "A" | "MX" | "TXT" | "PTR", timeoutMs = 6000): Promise<string[]> {
+  const first = await dohOne(DOH_RESOLVERS[0], name, type, timeoutMs).catch(() => null);
+  if (first && first.length > 0) return first;
+  const second = await dohOne(DOH_RESOLVERS[1], name, type, timeoutMs).catch(() => null);
+  if (second && second.length > 0) return second;
+  if (first === null && second === null) throw new Error("DoH unavailable");
+  return [];
 }
 
 // TXT answers come back wrapped in quotes and possibly split into chunks; normalise.
@@ -173,8 +187,12 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
       await Promise.all(
         DNSBLS.map(async (bl) => {
           try {
-            const a = await doh(`${rev}.${bl}`, "A", 5000);
-            if (a.length > 0) listings.push(bl); // answer => listed
+            // Single resolver, no propagation fallback: DNSBLs return error codes for repeat/
+            // public-resolver queries, and a fallback would just amplify them.
+            const a = await dohOne(DOH_RESOLVERS[0], `${rev}.${bl}`, "A", 5000);
+            // A genuine listing is 127.0.0.x. Codes like 127.255.255.x mean "query blocked /
+            // public resolver / rate-limited" — NOT a listing. Ignore those (false positives).
+            if (a.some((ip) => /^127\.0\.0\.\d{1,3}$/.test(ip))) listings.push(bl);
           } catch {
             /* query failed => treat as not listed */
           }
