@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getDomainDetails, pushDnsToCloudflare, updateDomain, repairDomainDns } from "@/server/domains";
 import { provisionServer } from "@/server/provisioning";
 import { setupMailcowDomain, fetchDkimAndSync } from "@/server/mailcow";
+import { regeneratePlan } from "@/server/plans";
 import {
   Globe,
   Server,
@@ -22,6 +23,7 @@ import {
   Terminal,
   RefreshCw,
   Trash2,
+  ListPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -260,6 +262,50 @@ function DomainDetailsPage() {
       )
     ) {
       recreateMailboxesMutation.mutate();
+    }
+  };
+
+  // Regenerate the inbox plan from the saved prefixes/names snapshot. Used to fix domains that
+  // were planned before the planner count fix (e.g. 28 requested but only 8 generated). Replaces
+  // the planned inboxes only — Mailcow is untouched until "Recreate mailboxes" runs.
+  const regeneratePlanMutation = useMutation({
+    mutationFn: () => {
+      toast.loading("Regenerating inbox plan...", { id: "replan" });
+      return regeneratePlan({
+        data: {
+          domainId: id,
+          totalInboxes: plan?.totalInboxes ?? 0,
+          prefixes: plan?.prefixesSnapshot ?? [],
+          names: plan?.namesSnapshot ?? [],
+        },
+      });
+    },
+    onSuccess: (res: any) => {
+      if (res?.error) toast.error(res.error, { id: "replan" });
+      else
+        toast.success(
+          `Plan regenerated to ${plan?.totalInboxes ?? 0} inboxes. Run "Recreate mailboxes" to create them.`,
+          { id: "replan", duration: 9000 },
+        );
+      qc.invalidateQueries({ queryKey: ["domain", id] });
+    },
+    onError: (err: any) => toast.error(err.message, { id: "replan" }),
+  });
+
+  const handleRegeneratePlan = () => {
+    if (!plan?.prefixesSnapshot?.length || !plan?.namesSnapshot?.length) {
+      toast.error("No saved prefixes/names to regenerate from — re-add the domain instead.");
+      return;
+    }
+    if (
+      confirm(
+        `Regenerate the inbox plan for ${plan?.totalInboxes ?? 0} inboxes?\n\n` +
+          `This REPLACES the current ${inboxes.length} planned inboxes with a freshly generated set ` +
+          `(new email addresses). Mailcow is not changed yet — afterward run "Recreate mailboxes" to ` +
+          `create the full set with fresh passwords.\n\nContinue?`,
+      )
+    ) {
+      regeneratePlanMutation.mutate();
     }
   };
 
@@ -506,6 +552,9 @@ function DomainDetailsPage() {
               </DropdownMenuItem>
               <DropdownMenuItem onClick={handleRecreateMailboxes} disabled={recreateMailboxesMutation.isPending}>
                 <RefreshCw className="h-4 w-4" /> Recreate mailboxes
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleRegeneratePlan} disabled={regeneratePlanMutation.isPending}>
+                <ListPlus className="h-4 w-4" /> Regenerate inbox plan
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
