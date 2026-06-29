@@ -642,7 +642,7 @@ function DomainDetailsPage() {
                   type="password"
                   value={sshPassword}
                   onChange={(e) => setSshPassword(e.target.value)}
-                  placeholder="SSH Password"
+                  placeholder="Leave blank to keep current"
                   className="h-9 text-xs rounded-xl"
                 />
               </div>

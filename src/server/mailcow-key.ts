@@ -13,9 +13,15 @@ type Domain = any;
 export async function mailcowApiWorks(domain: Domain): Promise<boolean> {
   if (!domain?.mailcowHostname || !domain?.mailcowApiKey) return false;
   try {
-    const res = await mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all", undefined, {
-      timeoutMs: 10000,
-    });
+    const res = await mailcowRequest(
+      domain.mailcowHostname,
+      domain.mailcowApiKey,
+      "get/domain/all",
+      undefined,
+      {
+        timeoutMs: 10000,
+      },
+    );
     return res.status === 200 && typeof res.json !== "string";
   } catch {
     return false;
@@ -33,7 +39,12 @@ export async function syncApiKeyFromServer(db: Db, domain: Domain): Promise<stri
 
   const ssh = new NodeSSH();
   try {
-    await ssh.connect({ host: ipAddress, username: sshUser, password: sshPassword || undefined, readyTimeout: 20000 });
+    await ssh.connect({
+      host: ipAddress,
+      username: sshUser,
+      password: sshPassword || undefined,
+      readyTimeout: 20000,
+    });
     const res = await ssh.execCommand(
       'grep "^API_KEY=" /opt/mailcow-dockerized/mailcow.conf | head -1 | cut -d= -f2',
     );
@@ -51,7 +62,10 @@ export async function syncApiKeyFromServer(db: Db, domain: Domain): Promise<stri
 // Ensure the domain has a WORKING Mailcow key before mailbox operations. If the current key
 // fails, re-read it from the server and retry. Returns a domain object with the working key
 // (possibly updated), or the original if it already worked / couldn't be repaired.
-export async function ensureWorkingApiKey(db: Db, domain: Domain): Promise<{ domain: Domain; repaired: boolean }> {
+export async function ensureWorkingApiKey(
+  db: Db,
+  domain: Domain,
+): Promise<{ domain: Domain; repaired: boolean }> {
   if (await mailcowApiWorks(domain)) return { domain, repaired: false };
   const fresh = await syncApiKeyFromServer(db, domain);
   if (fresh && fresh !== domain.mailcowApiKey) {

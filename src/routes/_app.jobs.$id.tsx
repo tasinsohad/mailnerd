@@ -325,7 +325,7 @@ function EditableDomainRow({ domain }: { domain: any }) {
         <td className="p-4 font-mono text-xs text-muted-foreground">{domain.ipAddress || "-"}</td>
         <td className="p-4 font-mono text-xs text-muted-foreground">{domain.sshUser || "-"}</td>
         <td className="p-4 font-mono text-xs text-muted-foreground italic">
-          {domain.sshPassword ? "••••••••" : "Not set"}
+          {domain.hasSshPassword ? "••••••••" : "Not set"}
         </td>
         <td className="p-4">
           <div className="flex items-center justify-end gap-1">
@@ -360,7 +360,7 @@ function EditableDomainRow({ domain }: { domain: any }) {
         <Input value={sshUser} onChange={(e) => setSshUser(e.target.value)} className="h-9 text-sm font-mono rounded-xl" />
       </td>
       <td className="p-3">
-        <Input type="password" value={sshPassword} onChange={(e) => setSshPassword(e.target.value)} className="h-9 text-sm font-mono rounded-xl" placeholder="Password" />
+        <Input type="password" value={sshPassword} onChange={(e) => setSshPassword(e.target.value)} className="h-9 text-sm font-mono rounded-xl" placeholder="Blank = keep current" />
       </td>
       <td className="p-3 text-right">
         <div className="flex justify-end gap-2">

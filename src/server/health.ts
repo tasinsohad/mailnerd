@@ -8,9 +8,17 @@ import { mailcowRequest } from "./mailcow-helpers";
 const DOH_TYPE: Record<string, number> = { A: 1, MX: 15, TXT: 16, PTR: 12 };
 const DOH_RESOLVERS = ["https://dns.google/resolve", "https://cloudflare-dns.com/dns-query"];
 
-async function dohOne(base: string, name: string, type: "A" | "MX" | "TXT" | "PTR", timeoutMs: number): Promise<string[]> {
+async function dohOne(
+  base: string,
+  name: string,
+  type: "A" | "MX" | "TXT" | "PTR",
+  timeoutMs: number,
+): Promise<string[]> {
   const url = `${base}?name=${encodeURIComponent(name)}&type=${type}`;
-  const res = await withTimeout(fetch(url, { headers: { accept: "application/dns-json" } }), timeoutMs);
+  const res = await withTimeout(
+    fetch(url, { headers: { accept: "application/dns-json" } }),
+    timeoutMs,
+  );
   if (!res.ok) throw new Error(`DoH ${res.status}`);
   const json: any = await res.json();
   // Status 0 = NOERROR, 3 = NXDOMAIN. Anything without Answer means "no such record".
@@ -21,7 +29,11 @@ async function dohOne(base: string, name: string, type: "A" | "MX" | "TXT" | "PT
 // Query one resolver; if it returns nothing (genuinely missing OR just cache lag right after a
 // DNS change), confirm against a second resolver before concluding "missing". This stops freshly
 // pushed records (e.g. DKIM) from flapping as failed while they propagate.
-async function doh(name: string, type: "A" | "MX" | "TXT" | "PTR", timeoutMs = 6000): Promise<string[]> {
+async function doh(
+  name: string,
+  type: "A" | "MX" | "TXT" | "PTR",
+  timeoutMs = 6000,
+): Promise<string[]> {
   const first = await dohOne(DOH_RESOLVERS[0], name, type, timeoutMs).catch(() => null);
   if (first && first.length > 0) return first;
   const second = await dohOne(DOH_RESOLVERS[1], name, type, timeoutMs).catch(() => null);
@@ -104,14 +116,40 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
     const ips = await doh(mailHost, "A");
     if (ips.length === 0) throw new Error("no A record");
     if (ips.some((ip) => isCloudflareIp(ip))) {
-      add({ id: "mailhost", label: "Mail host DNS", status: "fail", detail: `${mailHost} is Cloudflare-proxied (${ips[0]}) — the Mailcow API and mail can't be reached.`, fix: "Un-proxy the mail host (set it DNS-only).", action: "fixDns" });
+      add({
+        id: "mailhost",
+        label: "Mail host DNS",
+        status: "fail",
+        detail: `${mailHost} is Cloudflare-proxied (${ips[0]}) — the Mailcow API and mail can't be reached.`,
+        fix: "Un-proxy the mail host (set it DNS-only).",
+        action: "fixDns",
+      });
     } else if (ipAddress && !ips.includes(ipAddress)) {
-      add({ id: "mailhost", label: "Mail host DNS", status: "fail", detail: `${mailHost} → ${ips.join(", ")}, but the server is ${ipAddress}.`, fix: "Push DNS so the mail host points to the server.", action: "pushDns" });
+      add({
+        id: "mailhost",
+        label: "Mail host DNS",
+        status: "fail",
+        detail: `${mailHost} → ${ips.join(", ")}, but the server is ${ipAddress}.`,
+        fix: "Push DNS so the mail host points to the server.",
+        action: "pushDns",
+      });
     } else {
-      add({ id: "mailhost", label: "Mail host DNS", status: "ok", detail: `${mailHost} → ${ips.join(", ")}` });
+      add({
+        id: "mailhost",
+        label: "Mail host DNS",
+        status: "ok",
+        detail: `${mailHost} → ${ips.join(", ")}`,
+      });
     }
   } catch {
-    add({ id: "mailhost", label: "Mail host DNS", status: "fail", detail: `${mailHost} does not resolve.`, fix: "Push DNS to create the mail host A record.", action: "pushDns" });
+    add({
+      id: "mailhost",
+      label: "Mail host DNS",
+      status: "fail",
+      detail: `${mailHost} does not resolve.`,
+      fix: "Push DNS to create the mail host A record.",
+      action: "pushDns",
+    });
   }
 
   // 2. Reverse DNS (PTR).
@@ -120,15 +158,37 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
       const revName = ipAddress.split(".").reverse().join(".") + ".in-addr.arpa";
       const ptr = (await doh(revName, "PTR")).map((h) => h.replace(/\.$/, ""));
       if (ptr.some((h) => h.toLowerCase() === mailHost.toLowerCase())) {
-        add({ id: "ptr", label: "Reverse DNS (PTR)", status: "ok", detail: `${ipAddress} → ${ptr[0]}` });
+        add({
+          id: "ptr",
+          label: "Reverse DNS (PTR)",
+          status: "ok",
+          detail: `${ipAddress} → ${ptr[0]}`,
+        });
       } else {
-        add({ id: "ptr", label: "Reverse DNS (PTR)", status: "fail", detail: `PTR is ${ptr.join(", ") || "unset"}, expected ${mailHost}.`, fix: `Set reverse DNS for ${ipAddress} to ${mailHost} in your VPS provider's panel.` });
+        add({
+          id: "ptr",
+          label: "Reverse DNS (PTR)",
+          status: "fail",
+          detail: `PTR is ${ptr.join(", ") || "unset"}, expected ${mailHost}.`,
+          fix: `Set reverse DNS for ${ipAddress} to ${mailHost} in your VPS provider's panel.`,
+        });
       }
     } catch {
-      add({ id: "ptr", label: "Reverse DNS (PTR)", status: "fail", detail: `No PTR record for ${ipAddress}.`, fix: `Set reverse DNS for ${ipAddress} to ${mailHost} in your VPS provider's panel.` });
+      add({
+        id: "ptr",
+        label: "Reverse DNS (PTR)",
+        status: "fail",
+        detail: `No PTR record for ${ipAddress}.`,
+        fix: `Set reverse DNS for ${ipAddress} to ${mailHost} in your VPS provider's panel.`,
+      });
     }
   } else {
-    add({ id: "ptr", label: "Reverse DNS (PTR)", status: "skip", detail: "No server IP configured." });
+    add({
+      id: "ptr",
+      label: "Reverse DNS (PTR)",
+      status: "skip",
+      detail: "No server IP configured.",
+    });
   }
 
   // 3-6. Per-subdomain records (MX, SPF, DKIM, DMARC) — aggregated.
@@ -150,34 +210,79 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
       }),
     );
     const okN = results.filter(Boolean).length;
-    if (okN === subs.length) add({ id, label, status: "ok", detail: `Present on all ${subs.length} subdomains.` });
-    else if (okN === 0) add({ id, label, status: "fail", detail: `Missing on all ${subs.length} subdomains.`, fix, action });
-    else add({ id, label, status: "warn", detail: `Present on ${okN}/${subs.length} subdomains.`, fix, action });
+    if (okN === subs.length)
+      add({ id, label, status: "ok", detail: `Present on all ${subs.length} subdomains.` });
+    else if (okN === 0)
+      add({
+        id,
+        label,
+        status: "fail",
+        detail: `Missing on all ${subs.length} subdomains.`,
+        fix,
+        action,
+      });
+    else
+      add({
+        id,
+        label,
+        status: "warn",
+        detail: `Present on ${okN}/${subs.length} subdomains.`,
+        fix,
+        action,
+      });
   };
 
-  await agg("mx", "MX records", async (s) => {
-    const mx = await doh(s, "MX");
-    return mx.some((m) => (m.trim().split(/\s+/).pop() || "").toLowerCase().replace(/\.$/, "") === mailHost.toLowerCase());
-  }, "Push DNS to set MX → mail host.", "pushDns");
+  await agg(
+    "mx",
+    "MX records",
+    async (s) => {
+      const mx = await doh(s, "MX");
+      return mx.some(
+        (m) =>
+          (m.trim().split(/\s+/).pop() || "").toLowerCase().replace(/\.$/, "") ===
+          mailHost.toLowerCase(),
+      );
+    },
+    "Push DNS to set MX → mail host.",
+    "pushDns",
+  );
 
-  await agg("spf", "SPF", async (s) => {
-    const txt = await doh(s, "TXT");
-    return txt.some((t) => txtValue(t).toLowerCase().includes("v=spf1"));
-  }, "Push DNS to publish SPF.", "pushDns");
+  await agg(
+    "spf",
+    "SPF",
+    async (s) => {
+      const txt = await doh(s, "TXT");
+      return txt.some((t) => txtValue(t).toLowerCase().includes("v=spf1"));
+    },
+    "Push DNS to publish SPF.",
+    "pushDns",
+  );
 
-  await agg("dkim", "DKIM", async (s) => {
-    const prefix = s.split(".")[0];
-    const txt = await doh(`dkim._domainkey.${prefix}.${name}`, "TXT");
-    return txt.some((t) => {
-      const v = txtValue(t).toLowerCase();
-      return v.includes("v=dkim1") && v.includes("p=");
-    });
-  }, "Run Sync DKIM to publish the DKIM key.", "syncDkim");
+  await agg(
+    "dkim",
+    "DKIM",
+    async (s) => {
+      const prefix = s.split(".")[0];
+      const txt = await doh(`dkim._domainkey.${prefix}.${name}`, "TXT");
+      return txt.some((t) => {
+        const v = txtValue(t).toLowerCase();
+        return v.includes("v=dkim1") && v.includes("p=");
+      });
+    },
+    "Run Sync DKIM to publish the DKIM key.",
+    "syncDkim",
+  );
 
-  await agg("dmarc", "DMARC", async (s) => {
-    const txt = await doh(`_dmarc.${s}`, "TXT");
-    return txt.some((t) => txtValue(t).toLowerCase().includes("v=dmarc1"));
-  }, "Push DNS to publish DMARC.", "pushDns");
+  await agg(
+    "dmarc",
+    "DMARC",
+    async (s) => {
+      const txt = await doh(`_dmarc.${s}`, "TXT");
+      return txt.some((t) => txtValue(t).toLowerCase().includes("v=dmarc1"));
+    },
+    "Push DNS to publish DMARC.",
+    "pushDns",
+  );
 
   // 7. Blacklist / IP reputation.
   if (ipAddress) {
@@ -198,71 +303,216 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
           }
         }),
       );
-      if (listings.length === 0) add({ id: "blacklist", label: "IP reputation", status: "ok", detail: `${ipAddress} not on Spamhaus / Barracuda / SpamCop.` });
-      else add({ id: "blacklist", label: "IP reputation", status: "fail", detail: `${ipAddress} listed on: ${listings.join(", ")}.`, fix: "Request delisting at the listing provider and warm up the IP (send gently)." });
+      if (listings.length === 0)
+        add({
+          id: "blacklist",
+          label: "IP reputation",
+          status: "ok",
+          detail: `${ipAddress} not on Spamhaus / Barracuda / SpamCop.`,
+        });
+      else
+        add({
+          id: "blacklist",
+          label: "IP reputation",
+          status: "fail",
+          detail: `${ipAddress} listed on: ${listings.join(", ")}.`,
+          fix: "Request delisting at the listing provider and warm up the IP (send gently).",
+        });
     } catch {
-      add({ id: "blacklist", label: "IP reputation", status: "skip", detail: "Could not query blacklists." });
+      add({
+        id: "blacklist",
+        label: "IP reputation",
+        status: "skip",
+        detail: "Could not query blacklists.",
+      });
     }
   } else {
-    add({ id: "blacklist", label: "IP reputation", status: "skip", detail: "No server IP configured." });
+    add({
+      id: "blacklist",
+      label: "IP reputation",
+      status: "skip",
+      detail: "No server IP configured.",
+    });
   }
 
   // 8. TLS certificate on the mail host.
   await new Promise<void>((resolve) => {
     let done = false;
-    const finish = (i: Indicator) => { if (!done) { done = true; add(i); resolve(); } };
-    const socket = tls.connect({ host: mailHost, port: 443, servername: mailHost, rejectUnauthorized: false, timeout: 6000 }, () => {
-      const cert = socket.getPeerCertificate();
-      const issuer = (cert?.issuer?.O || "").toString();
-      const validTo = cert?.valid_to ? new Date(cert.valid_to) : null;
-      socket.end();
-      if (issuer.toLowerCase().includes("mailcow") || issuer === "") {
-        finish({ id: "tls", label: "TLS certificate", status: "warn", detail: "Self-signed cert in use (Let's Encrypt not issued yet).", fix: "Ensure DNS resolves + port 80 is open; ACME retries every 30 min." });
-      } else if (validTo && validTo.getTime() < Date.now()) {
-        finish({ id: "tls", label: "TLS certificate", status: "fail", detail: `Certificate expired ${validTo.toDateString()}.`, fix: "Re-provision or check ACME on the server." });
-      } else {
-        finish({ id: "tls", label: "TLS certificate", status: "ok", detail: `Valid cert from ${issuer}${validTo ? `, expires ${validTo.toDateString()}` : ""}.` });
+    const finish = (i: Indicator) => {
+      if (!done) {
+        done = true;
+        add(i);
+        resolve();
       }
+    };
+    const socket = tls.connect(
+      { host: mailHost, port: 443, servername: mailHost, rejectUnauthorized: false, timeout: 6000 },
+      () => {
+        const cert = socket.getPeerCertificate();
+        const issuer = (cert?.issuer?.O || "").toString();
+        const validTo = cert?.valid_to ? new Date(cert.valid_to) : null;
+        socket.end();
+        if (issuer.toLowerCase().includes("mailcow") || issuer === "") {
+          finish({
+            id: "tls",
+            label: "TLS certificate",
+            status: "warn",
+            detail: "Self-signed cert in use (Let's Encrypt not issued yet).",
+            fix: "Ensure DNS resolves + port 80 is open; ACME retries every 30 min.",
+          });
+        } else if (validTo && validTo.getTime() < Date.now()) {
+          finish({
+            id: "tls",
+            label: "TLS certificate",
+            status: "fail",
+            detail: `Certificate expired ${validTo.toDateString()}.`,
+            fix: "Re-provision or check ACME on the server.",
+          });
+        } else {
+          finish({
+            id: "tls",
+            label: "TLS certificate",
+            status: "ok",
+            detail: `Valid cert from ${issuer}${validTo ? `, expires ${validTo.toDateString()}` : ""}.`,
+          });
+        }
+      },
+    );
+    socket.on("error", () =>
+      finish({
+        id: "tls",
+        label: "TLS certificate",
+        status: "fail",
+        detail: `Could not connect to ${mailHost}:443.`,
+        fix: "Check the server is up and the mail host resolves to it.",
+      }),
+    );
+    socket.on("timeout", () => {
+      socket.destroy();
+      finish({
+        id: "tls",
+        label: "TLS certificate",
+        status: "fail",
+        detail: `Timed out connecting to ${mailHost}:443.`,
+        fix: "Check the server is reachable (and not Cloudflare-proxied).",
+      });
     });
-    socket.on("error", () => finish({ id: "tls", label: "TLS certificate", status: "fail", detail: `Could not connect to ${mailHost}:443.`, fix: "Check the server is up and the mail host resolves to it." }));
-    socket.on("timeout", () => { socket.destroy(); finish({ id: "tls", label: "TLS certificate", status: "fail", detail: `Timed out connecting to ${mailHost}:443.`, fix: "Check the server is reachable (and not Cloudflare-proxied)." }); });
   });
 
   // 9-10. Mailcow containers + mailbox count.
   if (mailcowHostname && mailcowApiKey) {
     try {
-      const { json } = await mailcowRequest(mailcowHostname, mailcowApiKey, "get/status/containers", undefined, { timeoutMs: 8000 });
+      const { json } = await mailcowRequest(
+        mailcowHostname,
+        mailcowApiKey,
+        "get/status/containers",
+        undefined,
+        { timeoutMs: 8000 },
+      );
       if (json && typeof json === "object" && !Array.isArray(json)) {
         const containers = Object.values(json as Record<string, any>);
         const running = containers.filter((c) => c?.state === "running").length;
         if (containers.length > 0 && running === containers.length)
-          add({ id: "mailcow", label: "Mailcow services", status: "ok", detail: `${running}/${containers.length} containers running.` });
+          add({
+            id: "mailcow",
+            label: "Mailcow services",
+            status: "ok",
+            detail: `${running}/${containers.length} containers running.`,
+          });
         else if (containers.length > 0)
-          add({ id: "mailcow", label: "Mailcow services", status: "fail", detail: `${running}/${containers.length} containers running.`, fix: "Re-provision the server.", action: "provision" });
+          add({
+            id: "mailcow",
+            label: "Mailcow services",
+            status: "fail",
+            detail: `${running}/${containers.length} containers running.`,
+            fix: "Re-provision the server.",
+            action: "provision",
+          });
         else
-          add({ id: "mailcow", label: "Mailcow services", status: "fail", detail: "Mailcow API reachable but returned no containers.", fix: "Re-provision the server.", action: "provision" });
+          add({
+            id: "mailcow",
+            label: "Mailcow services",
+            status: "fail",
+            detail: "Mailcow API reachable but returned no containers.",
+            fix: "Re-provision the server.",
+            action: "provision",
+          });
       } else {
-        add({ id: "mailcow", label: "Mailcow services", status: "fail", detail: "Mailcow API unreachable or unauthorized.", fix: "Check the mail host (un-proxy) / re-provision.", action: "fixDns" });
+        add({
+          id: "mailcow",
+          label: "Mailcow services",
+          status: "fail",
+          detail: "Mailcow API unreachable or unauthorized.",
+          fix: "Check the mail host (un-proxy) / re-provision.",
+          action: "fixDns",
+        });
       }
     } catch {
-      add({ id: "mailcow", label: "Mailcow services", status: "fail", detail: "Mailcow API unreachable.", fix: "Check the mail host (un-proxy) / re-provision.", action: "fixDns" });
+      add({
+        id: "mailcow",
+        label: "Mailcow services",
+        status: "fail",
+        detail: "Mailcow API unreachable.",
+        fix: "Check the mail host (un-proxy) / re-provision.",
+        action: "fixDns",
+      });
     }
 
     try {
-      const { json } = await mailcowRequest(mailcowHostname, mailcowApiKey, "get/mailbox/all", undefined, { timeoutMs: 8000 });
+      const { json } = await mailcowRequest(
+        mailcowHostname,
+        mailcowApiKey,
+        "get/mailbox/all",
+        undefined,
+        { timeoutMs: 8000 },
+      );
       const count = Array.isArray(json) ? json.length : 0;
       if (plannedInboxCount > 0 && count >= plannedInboxCount)
-        add({ id: "mailboxes", label: "Mailboxes", status: "ok", detail: `${count} of ${plannedInboxCount} planned mailboxes exist.` });
+        add({
+          id: "mailboxes",
+          label: "Mailboxes",
+          status: "ok",
+          detail: `${count} of ${plannedInboxCount} planned mailboxes exist.`,
+        });
       else if (count > 0)
-        add({ id: "mailboxes", label: "Mailboxes", status: "warn", detail: `${count} of ${plannedInboxCount || "?"} planned mailboxes exist.`, fix: "Run Set up / Recreate mailboxes.", action: "recreate" });
+        add({
+          id: "mailboxes",
+          label: "Mailboxes",
+          status: "warn",
+          detail: `${count} of ${plannedInboxCount || "?"} planned mailboxes exist.`,
+          fix: "Run Set up / Recreate mailboxes.",
+          action: "recreate",
+        });
       else
-        add({ id: "mailboxes", label: "Mailboxes", status: "fail", detail: `No mailboxes exist (planned ${plannedInboxCount || "?"}).`, fix: "Run Set up mailboxes.", action: "recreate" });
+        add({
+          id: "mailboxes",
+          label: "Mailboxes",
+          status: "fail",
+          detail: `No mailboxes exist (planned ${plannedInboxCount || "?"}).`,
+          fix: "Run Set up mailboxes.",
+          action: "recreate",
+        });
     } catch {
-      add({ id: "mailboxes", label: "Mailboxes", status: "skip", detail: "Could not query mailboxes." });
+      add({
+        id: "mailboxes",
+        label: "Mailboxes",
+        status: "skip",
+        detail: "Could not query mailboxes.",
+      });
     }
   } else {
-    add({ id: "mailcow", label: "Mailcow services", status: "skip", detail: "Server not provisioned yet." });
-    add({ id: "mailboxes", label: "Mailboxes", status: "skip", detail: "Server not provisioned yet." });
+    add({
+      id: "mailcow",
+      label: "Mailcow services",
+      status: "skip",
+      detail: "Server not provisioned yet.",
+    });
+    add({
+      id: "mailboxes",
+      label: "Mailboxes",
+      status: "skip",
+      detail: "Server not provisioned yet.",
+    });
   }
 
   const { status, score } = rollUp(ind);

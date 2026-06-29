@@ -21,6 +21,17 @@ import { pushDns as pipelinePushDns, unproxyDns } from "./pipeline";
 export { cfTxtContent };
 export { resolveAndSaveCfZoneId };
 
+// Strip server-only secrets before a domain row is sent to the browser. mailcowApiKey is never
+// used client-side; sshPassword is replaced with a boolean so edit forms can show "set" without
+// leaking the value. (Responses are userId-scoped, but these are cacheable GETs and the app is
+// deployable, so secrets must not leave the server.)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function publicDomain<T extends Record<string, any>>(d: T | null | undefined) {
+  if (!d) return d;
+  const { mailcowApiKey: _k, sshPassword, ...rest } = d;
+  return { ...rest, hasSshPassword: Boolean(sshPassword) };
+}
+
 // Validation schemas
 const validateDomainsSchema = z.object({
   domains: z.array(z.string().min(1).max(255)),
@@ -118,7 +129,7 @@ export const listDomains = createServerFn({ method: "GET" })
       }
 
       return rows.map((r: any) => ({
-        ...r,
+        ...publicDomain(r),
         batchName: r.batchId ? batchName.get(r.batchId) ?? null : null,
         plannedInboxCount: inboxCount.get(r.id) ?? 0,
         createdInboxCount: createdCount.get(r.id) ?? 0,
@@ -136,9 +147,10 @@ export const getDomain = createServerFn({ method: "GET" })
     if (!db) return null;
 
     try {
-      return await db.query.domains.findFirst({
+      const row = await db.query.domains.findFirst({
         where: and(eq(domains.id, data.id), eq(domains.userId, userId)),
       });
+      return publicDomain(row);
     } catch {
       return null;
     }
@@ -153,6 +165,12 @@ export const updateDomain = createServerFn({ method: "POST" })
 
     try {
       const { id, ...rest } = data;
+
+      // Edit forms no longer pre-fill the SSH password (it's not sent to the client anymore),
+      // so an empty value means "leave unchanged" — never overwrite the stored secret with "".
+      if (rest.sshPassword === "" || rest.sshPassword == null) {
+        delete (rest as { sshPassword?: unknown }).sshPassword;
+      }
 
       const oldDomain = await db.query.domains.findFirst({
         where: and(eq(domains.id, id), eq(domains.userId, userId)),
@@ -390,7 +408,7 @@ export const getDomainDetails = createServerFn({ method: "GET" })
         where: eq(domainPlans.domainId, domain.id),
       });
 
-      return { domain, records, inboxes, plan };
+      return { domain: publicDomain(domain), records, inboxes, plan };
     } catch {
       return null;
     }
@@ -477,7 +495,7 @@ export const getBatchDetails = createServerFn({ method: "GET" })
           ? await db.select().from(dnsRecords).where(inArray(dnsRecords.domainId, domainIds))
           : [];
 
-      return { batch, domains: domainRows, inboxes, records };
+      return { batch, domains: domainRows.map((d: any) => publicDomain(d)), inboxes, records };
     } catch {
       return null;
     }

@@ -55,8 +55,18 @@ export function JobHealthSummary({ batchId, domains }: { batchId: string; domain
           </span>
         ))}
       </div>
-      <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => recheck.mutate()} disabled={recheck.isPending}>
-        {recheck.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-9 gap-1.5"
+        onClick={() => recheck.mutate()}
+        disabled={recheck.isPending}
+      >
+        {recheck.isPending ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <RefreshCw className="h-4 w-4" />
+        )}
         Re-check job
       </Button>
     </div>

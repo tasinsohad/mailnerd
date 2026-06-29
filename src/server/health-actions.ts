@@ -11,7 +11,9 @@ async function runOne(db: any, domain: any): Promise<DomainHealth> {
     .select()
     .from(plannedInboxes)
     .where(eq(plannedInboxes.domainId, domain.id));
-  const subdomains = Array.from(new Set(inboxes.map((i: any) => String(i.subdomainFqdn)))) as string[];
+  const subdomains = Array.from(
+    new Set(inboxes.map((i: any) => String(i.subdomainFqdn))),
+  ) as string[];
 
   // The real mailbox target is the number of inboxes we actually generated (one mailbox each).
   // domainPlans.totalInboxes is the *aspirational* figure before planDomain caps it to unique
@@ -48,7 +50,9 @@ function summarize(rows: any[]) {
       }
     }
   }
-  const topIssues = Object.values(issueTally).sort((a, b) => b.count - a.count).slice(0, 5);
+  const topIssues = Object.values(issueTally)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
   return { total: rows.length, counts, topIssues };
 }
 
@@ -117,12 +121,19 @@ export const getHealthOverview = createServerFn({ method: "GET" })
   .middleware([requireAuth])
   .handler(async ({ context }) => {
     const { db, userId } = context as any;
-    if (!db) return { total: 0, counts: { healthy: 0, warning: 0, critical: 0, unknown: 0 }, topIssues: [], lastCheckedAt: null };
+    if (!db)
+      return {
+        total: 0,
+        counts: { healthy: 0, warning: 0, critical: 0, unknown: 0 },
+        topIssues: [],
+        lastCheckedAt: null,
+      };
     const rows = await db.select().from(domains).where(eq(domains.userId, userId));
-    const lastCheckedAt = rows
-      .map((r: any) => r.healthCheckedAt)
-      .filter(Boolean)
-      .sort()
-      .pop() ?? null;
+    const lastCheckedAt =
+      rows
+        .map((r: any) => r.healthCheckedAt)
+        .filter(Boolean)
+        .sort()
+        .pop() ?? null;
     return { ...summarize(rows), lastCheckedAt };
   });

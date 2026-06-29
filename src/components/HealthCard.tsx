@@ -98,7 +98,9 @@ export function HealthCard({
       <div className="flex items-center gap-3 border-b border-border px-6 py-4">
         <ShieldCheck className="h-5 w-5 text-muted-foreground" />
         <div className="flex-1">
-          <h2 className="font-display text-base font-semibold text-foreground">Deliverability health</h2>
+          <h2 className="font-display text-base font-semibold text-foreground">
+            Deliverability health
+          </h2>
           <div className="text-xs text-muted-foreground">
             {checkedAt ? `Checked ${new Date(checkedAt).toLocaleString()}` : "Not checked yet"}
           </div>
@@ -110,7 +112,13 @@ export function HealthCard({
             <span className="ident text-muted-foreground">{health.score}%</span>
           </span>
         )}
-        <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={recheck} disabled={busy}>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 gap-1.5"
+          onClick={recheck}
+          disabled={busy}
+        >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           Re-check
         </Button>
@@ -129,13 +137,30 @@ export function HealthCard({
             return (
               <li key={ind.id} className="px-6 py-3">
                 <div className="flex items-center gap-3">
-                  <span className={cn("status-dot", DOT[ind.status], ind.status === "fail" && "status-dot--pulse")} />
-                  <span className="w-40 shrink-0 text-sm font-medium text-foreground">{ind.label}</span>
-                  <span className="flex-1 truncate text-sm text-muted-foreground" title={ind.detail}>
+                  <span
+                    className={cn(
+                      "status-dot",
+                      DOT[ind.status],
+                      ind.status === "fail" && "status-dot--pulse",
+                    )}
+                  />
+                  <span className="w-40 shrink-0 text-sm font-medium text-foreground">
+                    {ind.label}
+                  </span>
+                  <span
+                    className="flex-1 truncate text-sm text-muted-foreground"
+                    title={ind.detail}
+                  >
                     {ind.detail}
                   </span>
                   {ind.action && ind.status !== "ok" && ind.status !== "skip" && (
-                    <Button size="sm" variant="outline" className="h-8" disabled={busy} onClick={() => runFix(ind.action!)}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8"
+                      disabled={busy}
+                      onClick={() => runFix(ind.action!)}
+                    >
                       {ACTION_LABEL[ind.action]}
                     </Button>
                   )}
@@ -145,7 +170,9 @@ export function HealthCard({
                       className="text-muted-foreground hover:text-foreground"
                       title="How to fix"
                     >
-                      <ChevronDown className={cn("h-4 w-4 transition-transform", isOpen && "rotate-180")} />
+                      <ChevronDown
+                        className={cn("h-4 w-4 transition-transform", isOpen && "rotate-180")}
+                      />
                     </button>
                   )}
                 </div>

@@ -52,7 +52,9 @@ export function MailcowAdminReset({
 
   return (
     <div className="rounded-lg border border-border p-4 flex flex-col gap-1">
-      <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Admin Panel</div>
+      <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+        Admin Panel
+      </div>
       <a
         href={`https://${mailcowHostname}/admin`}
         target="_blank"
@@ -67,10 +69,18 @@ export function MailcowAdminReset({
       <div className="flex items-center gap-2 text-sm">
         <span>Pass:</span>
         <span className="font-mono font-bold">{show ? displayPassword : "••••••••"}</span>
-        <button onClick={() => setShow((s) => !s)} className="text-muted-foreground hover:text-foreground" title={show ? "Hide" : "Show"}>
+        <button
+          onClick={() => setShow((s) => !s)}
+          className="text-muted-foreground hover:text-foreground"
+          title={show ? "Hide" : "Show"}
+        >
           {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
         </button>
-        <button onClick={() => copy(displayPassword)} className="text-muted-foreground hover:text-foreground" title="Copy">
+        <button
+          onClick={() => copy(displayPassword)}
+          className="text-muted-foreground hover:text-foreground"
+          title="Copy"
+        >
           <Copy className="h-3.5 w-3.5" />
         </button>
         {!currentPassword && <span className="text-warning text-xs">(default)</span>}
