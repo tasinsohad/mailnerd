@@ -139,6 +139,7 @@ export const domainPlans = pgTable("domain_plans", {
   status: text("status").notNull().default("planned"),
   prefixesSnapshot: text("prefixes_snapshot").array(),
   namesSnapshot: text("names_snapshot").array(),
+  placement: text("placement"), // "subdomain" | "main" | "both" (null = subdomain, legacy)
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

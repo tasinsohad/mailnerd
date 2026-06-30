@@ -51,6 +51,10 @@ const PREFIX_WEIGHTS: Record<string, number> = {
   assets: 2,
 };
 
+// Where mailboxes live: on the root/main domain (user@example.com), on subdomains
+// (user@web.example.com), or split across both.
+export type MailboxPlacement = "subdomain" | "main" | "both";
+
 export interface PlanInput {
   totalInboxes: number;
   prefixes: string[];
@@ -58,6 +62,7 @@ export interface PlanInput {
   minSubdomains?: number;
   maxSubdomains?: number;
   targetPerSubdomain?: number;
+  placement?: MailboxPlacement; // default "subdomain" (unchanged behaviour)
 }
 
 export interface PlannedInbox {
@@ -131,6 +136,17 @@ export function generateDnsRecords(
   // Subdomain template
   const uniqueSubdomains = [...new Set(plan.inboxes.map((ib) => ib.subdomainPrefix))];
   for (const sub of uniqueSubdomains) {
+    // Apex / main-domain mailboxes: the root A and root _dmarc are already added above, so here
+    // we only add the records the apex needs to send/receive mail (MX, SPF, autodiscovery).
+    if (sub === "@") {
+      records.push({ type: "MX", name: "@", content: `mail.${domainName}`, ttl: 1, priority: 10 });
+      records.push({ type: "TXT", name: "@", content: `v=spf1 ip4:${serverIp} -all`, ttl: 1 });
+      records.push({ type: "CNAME", name: "autodiscover", content: `mail.${domainName}`, ttl: 1, proxied: false });
+      records.push({ type: "CNAME", name: "autoconfig", content: `mail.${domainName}`, ttl: 1, proxied: false });
+      records.push({ type: "SRV", name: `_autodiscover._tcp`, content: `0 443 mail.${domainName}`, priority: 0, ttl: 1 });
+      continue;
+    }
+
     records.push({
       type: "A",
       name: sub,
@@ -312,21 +328,23 @@ const RESERVED_PREFIXES = new Set([
 
 export function planDomain(domain: string, input: PlanInput): DomainPlan {
   const { totalInboxes, names } = input;
+  const placement: MailboxPlacement = input.placement ?? "subdomain";
   // Strip reserved names so `mail` (etc.) can never become a sending subdomain.
   const prefixes = input.prefixes.filter((p) => !RESERVED_PREFIXES.has(p.toLowerCase().trim()));
   if (totalInboxes < 1) {
     return { domain, totalInboxes: 0, subdomainCount: 0, subdomainDistribution: {}, inboxes: [] };
   }
-  if (prefixes.length === 0) throw new Error("No usable subdomain prefixes provided (after removing reserved names)");
+  const usesSubdomains = placement !== "main";
+  // Subdomains only required when we actually place mailboxes on them.
+  if (usesSubdomains && prefixes.length === 0)
+    throw new Error("No usable subdomain prefixes provided (after removing reserved names)");
   if (names.length === 0) throw new Error("No names provided");
 
   const minAllowed = input.minSubdomains ?? 1;
   const maxAllowed = input.maxSubdomains ?? 15;
 
   let subdomainCount = randInt(minAllowed, maxAllowed);
-
   if (subdomainCount > prefixes.length) subdomainCount = prefixes.length;
-
   // Ensure enough subdomains to spread the inboxes naturally (~8 each). With too few, all
   // inboxes still get placed (naturalSplit packs more per subdomain), but we prefer a real
   // spread when we have the prefixes for it. Bounded by available prefixes and maxAllowed.
@@ -336,10 +354,19 @@ export function planDomain(domain: string, input: PlanInput): DomainPlan {
   }
   // Never plan more subdomains than inboxes (would leave empty subdomains).
   if (subdomainCount > totalInboxes) subdomainCount = totalInboxes;
+  if (subdomainCount < 1) subdomainCount = Math.min(1, prefixes.length);
 
-  const chosenPrefixes = sampleUnique(prefixes, subdomainCount);
+  const chosenPrefixes = usesSubdomains ? sampleUnique(prefixes, subdomainCount) : [];
 
-  const counts = naturalSplit(totalInboxes, subdomainCount);
+  // Distribution targets = the mail domains mailboxes are spread across. The root/main domain
+  // is the apex (prefix "@", fqdn = the domain itself); subdomains are prefix.domain.
+  const targets: { prefix: string; fqdn: string }[] = [];
+  if (placement === "main" || placement === "both") targets.push({ prefix: "@", fqdn: domain });
+  if (placement === "subdomain" || placement === "both")
+    for (const p of chosenPrefixes) targets.push({ prefix: p, fqdn: `${p}.${domain}` });
+  if (targets.length === 0) targets.push({ prefix: "@", fqdn: domain }); // safety net
+
+  const counts = naturalSplit(totalInboxes, targets.length);
 
   const shuffledNames = shuffle(names);
   const shuffledFormats = shuffle([...FORMATS]);
@@ -351,9 +378,9 @@ export function planDomain(domain: string, input: PlanInput): DomainPlan {
   let namePool = [...shuffledNames];
   let formatPool = [...shuffledFormats];
 
-  for (let i = 0; i < chosenPrefixes.length; i++) {
-    const prefix = chosenPrefixes[i];
-    const fqdn = `${prefix}.${domain}`;
+  for (let i = 0; i < targets.length; i++) {
+    const prefix = targets[i].prefix;
+    const fqdn = targets[i].fqdn;
     const subSeen = new Set<string>();
     subdomainDistribution[prefix] = 0;
 
@@ -421,7 +448,8 @@ export function planDomain(domain: string, input: PlanInput): DomainPlan {
     }
   }
 
-  return { domain, totalInboxes, subdomainCount, subdomainDistribution, inboxes };
+  // Report the number of mail domains actually used (apex counts as one).
+  return { domain, totalInboxes, subdomainCount: targets.length, subdomainDistribution, inboxes };
 }
 
 // Distribute `total` inboxes across `buckets` subdomains. INVARIANT: the returned counts ALWAYS

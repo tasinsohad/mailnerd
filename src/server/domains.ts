@@ -279,6 +279,7 @@ const addDomainsWizardSchema = z.object({
   prefixes: z.array(z.string()).optional(),
   names: z.array(z.string()).optional(),
   templateId: z.string().uuid().optional(),
+  placement: z.enum(["subdomain", "main", "both"]).optional(),
 });
 
 export const addDomainsWizardAction = createServerFn({ method: "POST" })
@@ -291,6 +292,7 @@ export const addDomainsWizardAction = createServerFn({ method: "POST" })
     try {
       const prefixes = data.prefixes ?? ["mail", "contact", "hello", "team", "support", "info"];
       const names = data.names ?? ["Alice Johnson", "John Doe", "Marco", "Sofia Rossi"];
+      const placement = data.placement ?? "subdomain";
 
       const [batch] = await db
         .insert(domainBatches)
@@ -311,6 +313,7 @@ export const addDomainsWizardAction = createServerFn({ method: "POST" })
             names,
             minSubdomains: 1,
             maxSubdomains: row.plannedSubdomainCount ?? 15,
+            placement,
           });
 
           const [domain] = await db
@@ -336,6 +339,7 @@ export const addDomainsWizardAction = createServerFn({ method: "POST" })
               status: "planned",
               prefixesSnapshot: prefixes,
               namesSnapshot: names,
+              placement,
             })
             .returning();
 

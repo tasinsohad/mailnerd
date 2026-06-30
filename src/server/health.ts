@@ -262,8 +262,9 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
     "dkim",
     "DKIM",
     async (s) => {
-      const prefix = s.split(".")[0];
-      const txt = await doh(`dkim._domainkey.${prefix}.${name}`, "TXT");
+      // Apex mail domain (s === root): record is dkim._domainkey.<domain>. Subdomain: dkim._domainkey.<label>.<domain>.
+      const recName = s === name ? `dkim._domainkey.${name}` : `dkim._domainkey.${s.split(".")[0]}.${name}`;
+      const txt = await doh(recName, "TXT");
       return txt.some((t) => {
         const v = txtValue(t).toLowerCase();
         return v.includes("v=dkim1") && v.includes("p=");

@@ -34,6 +34,43 @@ describe("planDomain generates exactly the requested number of inboxes", () => {
     }
   });
 
+  it("placement 'main' puts every mailbox on the apex domain", () => {
+    const plan = planDomain("example.com", {
+      totalInboxes: 20,
+      prefixes: ["web", "app"],
+      names: NAMES,
+      placement: "main",
+    });
+    expect(plan.inboxes.length).toBe(20);
+    // every email is user@example.com (no subdomain), prefix marked "@"
+    expect(plan.inboxes.every((i) => i.subdomainFqdn === "example.com")).toBe(true);
+    expect(plan.inboxes.every((i) => i.email.endsWith("@example.com"))).toBe(true);
+    expect(plan.inboxes.every((i) => i.subdomainPrefix === "@")).toBe(true);
+  });
+
+  it("placement 'both' uses the apex AND subdomains, still hitting the exact count", () => {
+    const plan = planDomain("example.com", {
+      totalInboxes: 30,
+      prefixes: MANY_PREFIXES,
+      names: NAMES,
+      placement: "both",
+    });
+    expect(plan.inboxes.length).toBe(30);
+    const fqdns = new Set(plan.inboxes.map((i) => i.subdomainFqdn));
+    expect(fqdns.has("example.com")).toBe(true); // apex used
+    expect([...fqdns].some((f) => f !== "example.com")).toBe(true); // a subdomain used too
+  });
+
+  it("placement 'subdomain' (default) never uses the apex", () => {
+    const plan = planDomain("example.com", {
+      totalInboxes: 15,
+      prefixes: MANY_PREFIXES,
+      names: NAMES,
+      placement: "subdomain",
+    });
+    expect(plan.inboxes.every((i) => i.subdomainFqdn !== "example.com")).toBe(true);
+  });
+
   it("generates unique email addresses", () => {
     const plan = planDomain("example.com", {
       totalInboxes: 50,

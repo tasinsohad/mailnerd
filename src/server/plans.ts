@@ -70,6 +70,7 @@ export const regeneratePlan = createServerFn({ method: "POST" })
         totalInboxes: z.number(),
         prefixes: z.array(z.string()),
         names: z.array(z.string()),
+        placement: z.enum(["subdomain", "main", "both"]).optional(),
       })
       .parse(d),
   )
@@ -82,17 +83,21 @@ export const regeneratePlan = createServerFn({ method: "POST" })
     });
     if (!domain) throw new Error("Domain not found");
 
+    const existingPlan = await db.query.domainPlans.findFirst({
+      where: eq(domainPlans.domainId, data.domainId),
+    });
+
+    // Preserve the placement (main / subdomain / both) chosen at creation, unless overridden.
+    const placement = data.placement ?? existingPlan?.placement ?? "subdomain";
+
     const built = planDomain(domain.name, {
       totalInboxes: data.totalInboxes,
       prefixes: data.prefixes,
       names: data.names,
+      placement,
     });
 
     await db.delete(plannedInboxes).where(eq(plannedInboxes.domainId, data.domainId));
-
-    const existingPlan = await db.query.domainPlans.findFirst({
-      where: eq(domainPlans.domainId, data.domainId),
-    });
 
     let planId: string;
     if (existingPlan) {
@@ -104,6 +109,7 @@ export const regeneratePlan = createServerFn({ method: "POST" })
           status: "planned",
           prefixesSnapshot: data.prefixes,
           namesSnapshot: data.names,
+          placement,
         })
         .where(eq(domainPlans.id, existingPlan.id));
       planId = existingPlan.id;
@@ -118,6 +124,7 @@ export const regeneratePlan = createServerFn({ method: "POST" })
           status: "planned",
           prefixesSnapshot: data.prefixes,
           namesSnapshot: data.names,
+          placement,
         })
         .returning();
       planId = p.id;

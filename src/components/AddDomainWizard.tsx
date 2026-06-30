@@ -146,6 +146,8 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
   const [maxSubdomains, setMaxSubdomains] = useState(15);
   const [minInboxes, setMinInboxes] = useState(10);
   const [maxInboxes, setMaxInboxes] = useState(50);
+  // Where mailboxes are created: on subdomains, the main domain, or both.
+  const [placement, setPlacement] = useState<"subdomain" | "main" | "both">("subdomain");
 
   // Planned results for preview
   const [plannedResults, setPlannedResults] = useState<DomainPlan[]>([]);
@@ -323,6 +325,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
             names,
             minSubdomains: subdomainCount,
             maxSubdomains: subdomainCount,
+            placement,
           });
           if (plan.inboxes.length !== totalInboxes) {
             plan = null;
@@ -425,6 +428,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
       })),
       prefixes,
       names,
+      placement,
     });
   };
 
@@ -567,6 +571,38 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                     className="text-xs h-36 rounded-xl border-border bg-muted/50 p-4 focus:bg-card transition-all leading-relaxed resize-none shadow-inner"
                     placeholder="John Smith&#10;Mary Johnson&#10;Michael Brown..."
                   />
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-col gap-2">
+                <Label className="text-foreground font-bold text-sm tracking-tight">
+                  Mailbox placement
+                </Label>
+                <p className="text-[10px] text-muted-foreground -mt-1">
+                  Choose where mailboxes are created for each domain.
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      { v: "subdomain", label: "Subdomains", hint: "user@web.domain.com" },
+                      { v: "main", label: "Main domain", hint: "user@domain.com" },
+                      { v: "both", label: "Both", hint: "main + subdomains" },
+                    ] as const
+                  ).map((o) => (
+                    <button
+                      key={o.v}
+                      type="button"
+                      onClick={() => setPlacement(o.v)}
+                      className={`flex flex-col items-start gap-0.5 rounded-xl border p-3 text-left transition-colors ${
+                        placement === o.v
+                          ? "border-primary bg-primary/10"
+                          : "border-border bg-muted/40 hover:border-primary/40"
+                      }`}
+                    >
+                      <span className="text-sm font-medium text-foreground">{o.label}</span>
+                      <span className="text-[10px] text-muted-foreground">{o.hint}</span>
+                    </button>
+                  ))}
                 </div>
               </div>
 
