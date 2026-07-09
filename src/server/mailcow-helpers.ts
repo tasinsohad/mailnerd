@@ -138,3 +138,106 @@ export function cfTxtContent(type: string, content: string): string {
   if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) return trimmed;
   return `"${trimmed.replace(/"/g, '\\"')}"`;
 }
+
+// A DNS record as persisted in our `dns_records` table (the fields the Cloudflare push needs).
+export interface CfPushRecord {
+  type: string;
+  name: string;
+  content: string;
+  ttl?: number | null;
+  priority?: number | null;
+  proxied?: boolean | null;
+}
+
+// Build the Cloudflare `POST /dns_records` body for one record.
+//
+// A/AAAA/CNAME/MX/TXT use the flat `content` field. SRV and TLSA are STRUCTURED record types:
+// Cloudflare rejects them when sent as `content` ("weight is a required data field" / "usage is
+// a required data field") and instead requires a `data` object. We store their fields packed
+// into `content` (+ a separate `priority` for SRV) and unpack them here.
+//
+//   SRV  content = "<weight> <port> <target>", priority stored separately
+//   TLSA content = "<usage> <selector> <matching_type> <certificate>"
+export function buildCfRecordBody(
+  record: CfPushRecord,
+  fullName: string,
+  domainName: string,
+): Record<string, unknown> {
+  const ttl = record.ttl || 1;
+
+  if (record.type === "SRV") {
+    const [weight, port, target] = String(record.content).trim().split(/\s+/);
+    // record.name is e.g. "_autodiscover._tcp" (apex) or "_autodiscover._tcp.enterprise".
+    const labels = record.name.split(".");
+    const service = labels[0];
+    const proto = labels[1];
+    const hostLabels = labels.slice(2);
+    const srvName = hostLabels.length ? `${hostLabels.join(".")}.${domainName}` : domainName;
+    return {
+      type: "SRV",
+      name: fullName,
+      ttl,
+      data: {
+        service,
+        proto,
+        name: srvName,
+        priority: record.priority ?? 0,
+        weight: Number(weight) || 0,
+        port: Number(port) || 0,
+        target: target ?? "",
+      },
+    };
+  }
+
+  if (record.type === "TLSA") {
+    const [usage, selector, matchingType, ...cert] = String(record.content).trim().split(/\s+/);
+    return {
+      type: "TLSA",
+      name: fullName,
+      ttl,
+      data: {
+        usage: Number(usage) || 0,
+        selector: Number(selector) || 0,
+        matching_type: Number(matchingType) || 0,
+        certificate: cert.join(""),
+      },
+    };
+  }
+
+  const body: Record<string, unknown> = {
+    type: record.type,
+    name: fullName,
+    content: cfTxtContent(record.type, record.content),
+    ttl,
+    proxied: record.proxied || false,
+  };
+  if (record.priority !== null && record.priority !== undefined) body.priority = record.priority;
+  return body;
+}
+
+// Find an already-present Cloudflare record matching one we're about to push (for idempotency).
+// Matches by type + name; when several records share a name (e.g. multiple TXT), the one whose
+// content matches wins so we adopt the right record id.
+export function findMatchingCfRecord(
+  existing: { id: string; type: string; name: string; content: string }[],
+  type: string,
+  fullName: string,
+  content: string,
+): { id: string } | null {
+  const lname = fullName.toLowerCase();
+  const same = existing.filter((r) => r.type === type && r.name.toLowerCase() === lname);
+  if (same.length === 0) return null;
+  if (same.length === 1) return same[0];
+  const norm = (s: string) => String(s ?? "").replace(/^"|"$/g, "").trim().toLowerCase();
+  return same.find((r) => norm(r.content) === norm(content)) ?? same[0];
+}
+
+// A create failed only because the desired record (or an equivalent host record) already exists
+// — the target state is satisfied, so we treat it as success rather than a hard failure.
+export function isCfAlreadyExistsError(message: string): boolean {
+  const m = (message ?? "").toLowerCase();
+  return (
+    m.includes("identical record already exists") ||
+    m.includes("record with that host already exists")
+  );
+}

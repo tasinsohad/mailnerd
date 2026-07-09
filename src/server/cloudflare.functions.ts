@@ -126,6 +126,22 @@ export async function listCfDnsRecords(
   return res.json();
 }
 
+// Fetch every DNS record in a zone (paginated). Used to make the DNS push idempotent —
+// records that already exist are adopted instead of re-created.
+export async function fetchAllCfDnsRecords(
+  token: string,
+  zoneId: string,
+): Promise<CfDnsRecord[]> {
+  const all: CfDnsRecord[] = [];
+  for (let page = 1; page <= 20; page++) {
+    const resp = await listCfDnsRecords(token, zoneId, page, 100);
+    if (!resp.success || !resp.result || resp.result.length === 0) break;
+    all.push(...resp.result);
+    if (resp.result.length < 100) break;
+  }
+  return all;
+}
+
 export async function createCfDnsRecord(
   token: string,
   zoneId: string,

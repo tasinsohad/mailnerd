@@ -10,9 +10,13 @@ import {
   parseMailcowResult,
   generateMailboxPassword,
   cfTxtContent,
+  buildCfRecordBody,
+  findMatchingCfRecord,
+  isCfAlreadyExistsError,
   QUOTA,
 } from "./mailcow-helpers";
 import { resolveAndSaveCfZoneId } from "./cloudflare";
+import { fetchAllCfDnsRecords } from "./cloudflare.functions";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = any;
@@ -336,21 +340,31 @@ export async function pushDns(
   let pushed = 0;
   let failed = 0;
 
+  // Pre-fetch the zone's existing records so we can adopt (not re-create) ones already present —
+  // this makes re-pushing an already-provisioned domain succeed instead of erroring on duplicates.
+  const existing = await fetchAllCfDnsRecords(secrets.cfApiToken, cfZoneId);
+
   for (const record of records) {
     if (record.status === "active") continue;
     const name = record.name === "@" ? domain.name : `${record.name}.${domain.name}`;
+
+    // Idempotency: if this record already exists in the zone, adopt it and move on.
+    const match = findMatchingCfRecord(existing, record.type, name, record.content);
+    if (match) {
+      await db
+        .update(dnsRecords)
+        .set({ cfRecordId: match.id, status: "active", lastError: null })
+        .where(eq(dnsRecords.id, record.id));
+      results.push({ id: record.id, name: record.name, success: true });
+      pushed++;
+      continue;
+    }
+
     try {
       const res = await fetch(`https://api.cloudflare.com/client/v4/zones/${cfZoneId}/dns_records`, {
         method: "POST",
         headers: { Authorization: `Bearer ${secrets.cfApiToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: record.type,
-          name,
-          content: cfTxtContent(record.type, record.content),
-          ttl: record.ttl || 1,
-          priority: record.priority,
-          proxied: record.proxied || false,
-        }),
+        body: JSON.stringify(buildCfRecordBody(record, name, domain.name)),
       });
       const json = (await res.json()) as { success: boolean; result?: { id: string }; errors?: { message: string }[] };
       if (json.success) {
@@ -362,9 +376,19 @@ export async function pushDns(
         pushed++;
       } else {
         const errorMsg = json.errors?.[0]?.message || "Unknown Cloudflare error";
-        await db.update(dnsRecords).set({ lastError: errorMsg }).where(eq(dnsRecords.id, record.id));
-        results.push({ id: record.id, name: record.name, success: false, error: errorMsg });
-        failed++;
+        // "Already exists" means the desired state is present — treat as success, not failure.
+        if (isCfAlreadyExistsError(errorMsg)) {
+          await db
+            .update(dnsRecords)
+            .set({ status: "active", lastError: null })
+            .where(eq(dnsRecords.id, record.id));
+          results.push({ id: record.id, name: record.name, success: true });
+          pushed++;
+        } else {
+          await db.update(dnsRecords).set({ lastError: errorMsg }).where(eq(dnsRecords.id, record.id));
+          results.push({ id: record.id, name: record.name, success: false, error: errorMsg });
+          failed++;
+        }
       }
     } catch (err) {
       const errorMsg = String(err);

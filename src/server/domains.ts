@@ -13,8 +13,14 @@ import {
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { planDomain, randInt, DomainPlan, generateDnsRecords } from "@/lib/planning";
 import dns from "dns/promises";
-import { cfTxtContent } from "./mailcow-helpers";
+import {
+  cfTxtContent,
+  buildCfRecordBody,
+  findMatchingCfRecord,
+  isCfAlreadyExistsError,
+} from "./mailcow-helpers";
 import { resolveAndSaveCfZoneId } from "./cloudflare";
+import { fetchAllCfDnsRecords } from "./cloudflare.functions";
 import { pushDns as pipelinePushDns, unproxyDns } from "./pipeline";
 
 // Re-exported for any existing importers of these modules.
@@ -527,6 +533,10 @@ export const batchPushDnsToCloudflare = createServerFn({ method: "POST" })
     const records = await db.select().from(dnsRecords).where(eq(dnsRecords.domainId, domain.id));
     const results: { id: string; name: string; success: boolean; error?: string }[] = [];
 
+    // Pre-fetch the zone's existing records so already-present records are adopted (not
+    // re-created) — re-pushing an already-provisioned domain then succeeds instead of erroring.
+    const existing = await fetchAllCfDnsRecords(secrets.cfApiToken, domain.cfZoneId);
+
     const batchSize = 10;
     for (let i = 0; i < records.length; i += batchSize) {
       const batch = records.slice(i, i + batchSize);
@@ -535,6 +545,16 @@ export const batchPushDnsToCloudflare = createServerFn({ method: "POST" })
           return { id: record.id, name: record.name, success: true, skipped: true };
 
         const name = record.name === "@" ? domain.name : `${record.name}.${domain.name}`;
+
+        // Idempotency: adopt an already-present record instead of re-creating it.
+        const match = findMatchingCfRecord(existing, record.type, name, record.content);
+        if (match) {
+          await db
+            .update(dnsRecords)
+            .set({ cfRecordId: match.id, status: "active", lastError: null })
+            .where(eq(dnsRecords.id, record.id));
+          return { id: record.id, name: record.name, success: true };
+        }
 
         try {
           const res = await fetch(
@@ -545,14 +565,7 @@ export const batchPushDnsToCloudflare = createServerFn({ method: "POST" })
                 Authorization: `Bearer ${secrets.cfApiToken}`,
                 "Content-Type": "application/json",
               },
-              body: JSON.stringify({
-                type: record.type,
-                name,
-                content: cfTxtContent(record.type, record.content),
-                ttl: record.ttl || 1,
-                priority: record.priority,
-                proxied: record.proxied || false,
-              }),
+              body: JSON.stringify(buildCfRecordBody(record, name, domain.name)),
             },
           );
           const json = (await res.json()) as {
@@ -568,6 +581,14 @@ export const batchPushDnsToCloudflare = createServerFn({ method: "POST" })
             return { id: record.id, name: record.name, success: true };
           } else {
             const errorMsg = json.errors?.[0]?.message || "Unknown Cloudflare error";
+            // "Already exists" means the desired state is present — treat as success.
+            if (isCfAlreadyExistsError(errorMsg)) {
+              await db
+                .update(dnsRecords)
+                .set({ status: "active", lastError: null })
+                .where(eq(dnsRecords.id, record.id));
+              return { id: record.id, name: record.name, success: true };
+            }
             await db
               .update(dnsRecords)
               .set({ lastError: errorMsg })
