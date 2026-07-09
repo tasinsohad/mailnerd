@@ -493,6 +493,62 @@ function naturalSplit(total: number, buckets: number): number[] {
   return shuffle(result);
 }
 
+// Split a batch `total` of inboxes across `domainCount` domains for the wizard's "exact total"
+// mode. INVARIANTS: length === domainCount; sum === total; every entry >= 1 when total >=
+// domainCount. Unlike naturalSplit (tuned to ~8 per subdomain, which collapses to near-even at
+// domain scale), this uses random weights so the per-domain counts are visibly varied, with a
+// soft per-domain cap so no single domain swallows the batch.
+export function allocateInboxesAcrossDomains(total: number, domainCount: number): number[] {
+  if (domainCount <= 0) return [];
+  if (total <= 0) return new Array(domainCount).fill(0);
+  if (total <= domainCount) {
+    // one inbox to the first `total` domains (shuffled), rest zero
+    return shuffle(new Array(domainCount).fill(0).map((_, i) => (i < total ? 1 : 0)));
+  }
+
+  const average = total / domainCount;
+  const cap = Math.max(2, Math.ceil(average * 3));
+
+  // 1. random weights → 2. proportional raw allocation (sums to `total`)
+  const weights = new Array(domainCount).fill(0).map(() => randFloat(0.4, 1.6));
+  const weightSum = weights.reduce((a, b) => a + b, 0);
+  const raw = weights.map((w) => (w / weightSum) * total);
+
+  // 3. floor with a floor-of-1, then fix the rounding drift so the sum is exact
+  const result = raw.map((x) => Math.max(1, Math.floor(x)));
+  let remainder = total - result.reduce((a, b) => a + b, 0);
+
+  if (remainder > 0) {
+    // hand out the surplus to the largest fractional parts, respecting the cap
+    const order = raw
+      .map((x, i) => ({ i, frac: x - Math.floor(x) }))
+      .sort((a, b) => b.frac - a.frac);
+    let k = 0;
+    while (remainder > 0 && k < domainCount * 1000) {
+      const idx = order[k % order.length].i;
+      if (result[idx] < cap) {
+        result[idx]++;
+        remainder--;
+      }
+      k++;
+    }
+  } else if (remainder < 0) {
+    // over-allocated (many tiny weights bumped up to 1) — trim from the largest buckets
+    const order = result.map((v, i) => ({ i, v })).sort((a, b) => b.v - a.v);
+    let k = 0;
+    while (remainder < 0 && k < domainCount * 1000) {
+      const idx = order[k % order.length].i;
+      if (result[idx] > 1) {
+        result[idx]--;
+        remainder++;
+      }
+      k++;
+    }
+  }
+
+  return result;
+}
+
 export function parseList(value: string): string[] {
   return Array.from(
     new Set(

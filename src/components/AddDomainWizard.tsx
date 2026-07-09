@@ -94,10 +94,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Plus, Trash2, Wand2, Save, FolderOpen, X } from "lucide-react";
+import { Loader2, Plus, Trash2, Wand2, Save, FolderOpen, X, Upload, Download } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "@tanstack/react-router";
-import { parseList, planDomain, randInt, DomainPlan, generateDnsRecords } from "@/lib/planning";
+import {
+  parseList,
+  planDomain,
+  randInt,
+  allocateInboxesAcrossDomains,
+  DomainPlan,
+  generateDnsRecords,
+} from "@/lib/planning";
 
 interface DomainRow {
   domain: string;
@@ -114,6 +121,59 @@ interface AddDomainWizardProps {
   onOpenChange: (open: boolean) => void;
 }
 
+type CsvRow = {
+  domain: string;
+  ipAddress?: string;
+  sshUser?: string;
+  sshPassword?: string;
+};
+
+// Parse a CSV of domains + optional server credentials.
+// Accepts comma / semicolon / tab delimiters. If a header row is present
+// (contains "domain"), columns are matched by name; otherwise columns are
+// assumed to be: domain, ipAddress, sshUser, sshPassword.
+function parseDomainCsv(text: string): CsvRow[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length === 0) return [];
+
+  const splitLine = (line: string) =>
+    line.split(/[,;\t]/).map((c) => c.trim().replace(/^"|"$/g, ""));
+
+  const normalize = (h: string) => h.toLowerCase().replace(/[\s_-]/g, "");
+  const first = splitLine(lines[0]).map(normalize);
+  const hasHeader = first.some((h) => h.includes("domain"));
+
+  let idx = { domain: 0, ipAddress: 1, sshUser: 2, sshPassword: 3 };
+  if (hasHeader) {
+    const find = (aliases: string[]) =>
+      first.findIndex((h) => aliases.some((a) => h === a || h.includes(a)));
+    idx = {
+      domain: find(["domain", "domainname", "host"]),
+      ipAddress: find(["ipaddress", "ip"]),
+      sshUser: find(["sshuser", "user", "username"]),
+      sshPassword: find(["sshpassword", "password", "pass"]),
+    };
+  }
+
+  const rows: CsvRow[] = [];
+  const dataLines = hasHeader ? lines.slice(1) : lines;
+  for (const line of dataLines) {
+    const cols = splitLine(line);
+    const domain = idx.domain >= 0 ? cols[idx.domain] : cols[0];
+    if (!domain) continue;
+    rows.push({
+      domain,
+      ipAddress: idx.ipAddress >= 0 ? cols[idx.ipAddress] || undefined : undefined,
+      sshUser: idx.sshUser >= 0 ? cols[idx.sshUser] || undefined : undefined,
+      sshPassword: idx.sshPassword >= 0 ? cols[idx.sshPassword] || undefined : undefined,
+    });
+  }
+  return rows;
+}
+
 export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -126,6 +186,10 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
   const [domainList, setDomainList] = useState("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [newTemplateName, setNewTemplateName] = useState("");
+
+  // Credentials imported from CSV, keyed by domain name (lowercased)
+  const [csvCreds, setCsvCreds] = useState<Record<string, CsvRow>>({});
+  const csvInputRef = useRef<HTMLInputElement>(null);
 
   // Per-domain rows
   const [domainRows, setDomainRows] = useState<DomainRow[]>([]);
@@ -148,6 +212,12 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
   const [maxInboxes, setMaxInboxes] = useState(50);
   // Where mailboxes are created: on subdomains, the main domain, or both.
   const [placement, setPlacement] = useState<"subdomain" | "main" | "both">("subdomain");
+
+  // Each count control can be a per-domain range or an exact count (independent toggles).
+  const [subdomainMode, setSubdomainMode] = useState<"range" | "exact">("range");
+  const [inboxMode, setInboxMode] = useState<"range" | "exact">("range");
+  const [exactSubdomains, setExactSubdomains] = useState(3);
+  const [exactTotalInboxes, setExactTotalInboxes] = useState(50);
 
   // Planned results for preview
   const [plannedResults, setPlannedResults] = useState<DomainPlan[]>([]);
@@ -254,6 +324,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
     setDomainList("");
     setSelectedTemplateId("");
     setDomainRows([]);
+    setCsvCreds({});
   };
 
   const applyTemplate = (template: any) => {
@@ -305,18 +376,46 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
     });
   };
 
+  // Returns a human-readable error string if the active Step-2 modes are invalid, else null.
+  const step2Errors = (): string | null => {
+    if (subdomainMode === "range") {
+      if (minSubdomains < 1) return "Min subdomains must be ≥ 1";
+      if (maxSubdomains < minSubdomains) return "Max subdomains must be ≥ Min subdomains";
+    } else if (exactSubdomains < 1) {
+      return "Exact subdomains must be ≥ 1";
+    }
+    if (inboxMode === "range") {
+      if (minInboxes < 1) return "Min inboxes must be ≥ 1";
+      if (maxInboxes < minInboxes) return "Max inboxes must be ≥ Min inboxes";
+      if (subdomainMode === "range" && minInboxes < maxSubdomains)
+        return "Min inboxes must be ≥ Max subdomains (to ensure at least 1 inbox per subdomain)";
+    } else if (exactTotalInboxes < domainRows.length) {
+      return `Total inboxes must be ≥ number of domains (${domainRows.length}) so each domain gets at least one`;
+    }
+    return null;
+  };
+
   const planAllDomains = () => {
     const prefixes = parseList(prefixesText);
     const names = parseList(namesText);
     const results: DomainPlan[] = [];
 
-    for (const row of domainRows) {
+    // In exact-total inbox mode, split the batch total across domains up front.
+    const inboxAllocation =
+      inboxMode === "exact"
+        ? allocateInboxesAcrossDomains(exactTotalInboxes, domainRows.length)
+        : null;
+
+    for (let d = 0; d < domainRows.length; d++) {
+      const row = domainRows[d];
       let attempts = 0;
       let plan: DomainPlan | null = null;
 
       while (attempts < 10 && !plan) {
-        const subdomainCount = randInt(minSubdomains, maxSubdomains);
-        const totalInboxes = randInt(minInboxes, maxInboxes);
+        const subdomainCount =
+          subdomainMode === "exact" ? exactSubdomains : randInt(minSubdomains, maxSubdomains);
+        const totalInboxes =
+          inboxMode === "exact" ? inboxAllocation![d] : randInt(minInboxes, maxInboxes);
 
         try {
           plan = planDomain(row.domain, {
@@ -355,6 +454,66 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
     );
   };
 
+  const handleDownloadTemplate = () => {
+    const headers = ["domain", "ipAddress", "sshUser", "sshPassword"];
+    const sampleRows = [
+      ["example.com", "192.168.1.10", "root", "your-password"],
+      ["another.net", "192.168.1.11", "root", "your-password"],
+    ];
+    const csv = [headers, ...sampleRows].map((row) => row.join(",")).join("\r\n") + "\r\n";
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "domain-import-template.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Reset the input so the same file can be re-selected later.
+    e.target.value = "";
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const rows = parseDomainCsv(String(reader.result ?? ""));
+        if (rows.length === 0) {
+          toast.error("No domains found in CSV");
+          return;
+        }
+
+        const creds: Record<string, CsvRow> = {};
+        for (const row of rows) creds[row.domain.toLowerCase()] = row;
+        setCsvCreds(creds);
+
+        // Merge with any domains already entered, de-duplicating.
+        const existing = parseList(domainList);
+        const merged = Array.from(
+          new Set([...existing, ...rows.map((r) => r.domain)].map((d) => d.trim()).filter(Boolean)),
+        );
+        setDomainList(merged.join("\n"));
+
+        const withCreds = rows.filter((r) => r.ipAddress || r.sshUser || r.sshPassword).length;
+        toast.success(
+          `Imported ${rows.length} domain${rows.length === 1 ? "" : "s"} from CSV` +
+            (withCreds > 0 ? ` (${withCreds} with server credentials)` : ""),
+        );
+
+        validateMutation.mutate(merged);
+      } catch (err) {
+        toast.error("Failed to parse CSV file");
+      }
+    };
+    reader.onerror = () => toast.error("Failed to read CSV file");
+    reader.readAsText(file);
+  };
+
   const handlePreviewDns = () => {
     if (plannedResults.length === 0) {
       toast.error("Please randomize domains first");
@@ -383,15 +542,23 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
         return;
       }
       setDomainRows(
-        domains.map((d) => ({
-          domain: d,
-          ipAddress: servers[0]?.ipAddress || "1.2.3.4",
-          sshUser: servers[0]?.sshUser || "root",
-          sshPassword: "",
-        })),
+        domains.map((d) => {
+          const cred = csvCreds[d.toLowerCase()];
+          return {
+            domain: d,
+            ipAddress: cred?.ipAddress || servers[0]?.ipAddress || "1.2.3.4",
+            sshUser: cred?.sshUser || servers[0]?.sshUser || "root",
+            sshPassword: cred?.sshPassword || "",
+          };
+        }),
       );
       setStep(2);
     } else if (step === 2) {
+      const err = step2Errors();
+      if (err) {
+        toast.error(err);
+        return;
+      }
       planAllDomains();
       setStep(3);
     }
@@ -660,11 +827,42 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                     <Label className="text-foreground font-bold text-sm tracking-tight">
                       Domains List
                     </Label>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">Enter one domain per line</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      Enter one domain per line, or import a CSV
+                    </p>
                   </div>
-                  <span className="text-[10px] font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded-lg">
-                    {parseList(domainList).length} detected
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={csvInputRef}
+                      type="file"
+                      accept=".csv,text/csv,text/plain"
+                      className="hidden"
+                      onChange={handleCsvUpload}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 rounded-lg gap-1.5 text-[11px] text-muted-foreground"
+                      onClick={handleDownloadTemplate}
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Template
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 rounded-lg gap-1.5 text-[11px]"
+                      onClick={() => csvInputRef.current?.click()}
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      Upload CSV
+                    </Button>
+                    <span className="text-[10px] font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded-lg">
+                      {parseList(domainList).length} detected
+                    </span>
+                  </div>
                 </div>
                 <div className="relative group/textarea">
                   <Textarea
@@ -715,79 +913,162 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
               {/* Global Range Inputs */}
               <div className="p-8 pb-4 flex flex-col gap-6">
                 <div className="bg-success/10/50 border border-green-100 rounded-xl p-6">
-                  <h3 className="font-semibold text-foreground text-sm mb-4">
-                    Global Range Settings
-                  </h3>
+                  <h3 className="font-semibold text-foreground text-sm mb-1">Count Settings</h3>
                   <p className="text-[10px] text-muted-foreground mb-4">
-                    These ranges apply to all domains in the batch. Each domain will randomly get
-                    values within these ranges.
+                    Set subdomains and inboxes as a per-domain range (each domain rolls a random
+                    value) or as an exact count. Exact inboxes are split across the batch's domains.
                   </p>
 
                   <div className="grid grid-cols-2 gap-6">
+                    {/* Subdomains */}
                     <div className="flex flex-col gap-2">
-                      <Label className="text-foreground font-bold text-xs">
-                        Subdomains per Domain
-                      </Label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="number"
-                          value={minSubdomains}
-                          onChange={(e) => setMinSubdomains(Number(e.target.value))}
-                          className="h-9 rounded-xl text-xs"
-                          placeholder="Min"
-                          min={1}
-                        />
-                        <span className="text-muted-foreground">—</span>
-                        <Input
-                          type="number"
-                          value={maxSubdomains}
-                          onChange={(e) => setMaxSubdomains(Number(e.target.value))}
-                          className="h-9 rounded-xl text-xs"
-                          placeholder="Max"
-                          min={1}
-                        />
+                      <div className="flex items-center justify-between">
+                        <Label className="text-foreground font-bold text-xs">Subdomains</Label>
+                        <div className="flex rounded-lg bg-muted p-0.5">
+                          {(["range", "exact"] as const).map((m) => (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() => setSubdomainMode(m)}
+                              className={`px-2 py-0.5 text-[10px] rounded-md capitalize transition-colors ${
+                                subdomainMode === m
+                                  ? "bg-card text-foreground shadow-sm"
+                                  : "text-muted-foreground"
+                              }`}
+                            >
+                              {m}
+                            </button>
+                          ))}
+                        </div>
                       </div>
+                      {subdomainMode === "range" ? (
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="number"
+                            value={minSubdomains}
+                            onChange={(e) => setMinSubdomains(Number(e.target.value))}
+                            className="h-9 rounded-xl text-xs"
+                            placeholder="Min"
+                            min={1}
+                          />
+                          <span className="text-muted-foreground">—</span>
+                          <Input
+                            type="number"
+                            value={maxSubdomains}
+                            onChange={(e) => setMaxSubdomains(Number(e.target.value))}
+                            className="h-9 rounded-xl text-xs"
+                            placeholder="Max"
+                            min={1}
+                          />
+                        </div>
+                      ) : (
+                        <Input
+                          type="number"
+                          value={exactSubdomains}
+                          onChange={(e) => setExactSubdomains(Number(e.target.value))}
+                          className="h-9 rounded-xl text-xs"
+                          placeholder="Subdomains per domain"
+                          min={1}
+                          max={20}
+                        />
+                      )}
                     </div>
 
+                    {/* Inboxes */}
                     <div className="flex flex-col gap-2">
-                      <Label className="text-foreground font-bold text-xs">Inboxes per Domain</Label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="number"
-                          value={minInboxes}
-                          onChange={(e) => setMinInboxes(Number(e.target.value))}
-                          className="h-9 rounded-xl text-xs"
-                          placeholder="Min"
-                          min={1}
-                        />
-                        <span className="text-muted-foreground">—</span>
-                        <Input
-                          type="number"
-                          value={maxInboxes}
-                          onChange={(e) => setMaxInboxes(Number(e.target.value))}
-                          className="h-9 rounded-xl text-xs"
-                          placeholder="Max"
-                          min={1}
-                        />
+                      <div className="flex items-center justify-between">
+                        <Label className="text-foreground font-bold text-xs">Inboxes</Label>
+                        <div className="flex rounded-lg bg-muted p-0.5">
+                          {(["range", "exact"] as const).map((m) => (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() => setInboxMode(m)}
+                              className={`px-2 py-0.5 text-[10px] rounded-md capitalize transition-colors ${
+                                inboxMode === m
+                                  ? "bg-card text-foreground shadow-sm"
+                                  : "text-muted-foreground"
+                              }`}
+                            >
+                              {m}
+                            </button>
+                          ))}
+                        </div>
                       </div>
+                      {inboxMode === "range" ? (
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="number"
+                            value={minInboxes}
+                            onChange={(e) => setMinInboxes(Number(e.target.value))}
+                            className="h-9 rounded-xl text-xs"
+                            placeholder="Min"
+                            min={1}
+                          />
+                          <span className="text-muted-foreground">—</span>
+                          <Input
+                            type="number"
+                            value={maxInboxes}
+                            onChange={(e) => setMaxInboxes(Number(e.target.value))}
+                            className="h-9 rounded-xl text-xs"
+                            placeholder="Max"
+                            min={1}
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-1">
+                          <Input
+                            type="number"
+                            value={exactTotalInboxes}
+                            onChange={(e) => setExactTotalInboxes(Number(e.target.value))}
+                            className="h-9 rounded-xl text-xs"
+                            placeholder="Total inboxes for the batch"
+                            min={1}
+                          />
+                          <span className="text-[10px] text-muted-foreground">
+                            ≈{" "}
+                            {domainRows.length > 0
+                              ? Math.round(exactTotalInboxes / domainRows.length)
+                              : 0}{" "}
+                            per domain across {domainRows.length} domains
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {minSubdomains < 1 && (
+                  {/* Validation */}
+                  {subdomainMode === "range" && minSubdomains < 1 && (
                     <p className="text-[10px] text-red-500 mt-2">Min subdomains must be ≥ 1</p>
                   )}
-                  {maxSubdomains < minSubdomains && (
+                  {subdomainMode === "range" && maxSubdomains < minSubdomains && (
                     <p className="text-[10px] text-red-500 mt-2">Max subdomains must be ≥ Min</p>
                   )}
-                  {minInboxes < maxSubdomains && (
-                    <p className="text-[10px] text-red-500 mt-2">
-                      Min inboxes must be ≥ Max subdomains (to ensure at least 1 inbox per
-                      subdomain)
-                    </p>
+                  {subdomainMode === "exact" &&
+                    exactSubdomains > parseList(prefixesText).length && (
+                      <p className="text-[10px] text-amber-600 mt-2">
+                        Only {parseList(prefixesText).length} prefixes available — subdomains will be
+                        capped at {parseList(prefixesText).length}.
+                      </p>
+                    )}
+                  {inboxMode === "range" && minInboxes < 1 && (
+                    <p className="text-[10px] text-red-500 mt-2">Min inboxes must be ≥ 1</p>
                   )}
-                  {maxInboxes < minInboxes && (
+                  {inboxMode === "range" && maxInboxes < minInboxes && (
+                    <p className="text-[10px] text-red-500 mt-2">Max inboxes must be ≥ Min inboxes</p>
+                  )}
+                  {inboxMode === "range" &&
+                    subdomainMode === "range" &&
+                    minInboxes < maxSubdomains && (
+                      <p className="text-[10px] text-red-500 mt-2">
+                        Min inboxes must be ≥ Max subdomains (to ensure at least 1 inbox per
+                        subdomain)
+                      </p>
+                    )}
+                  {inboxMode === "exact" && exactTotalInboxes < domainRows.length && (
                     <p className="text-[10px] text-red-500 mt-2">
-                      Max inboxes must be ≥ Min inboxes
+                      Total inboxes must be ≥ number of domains ({domainRows.length}) so each domain
+                      gets at least one.
                     </p>
                   )}
                 </div>

@@ -271,8 +271,8 @@ const addDomainsWizardSchema = z.object({
       ipAddress: z.string().min(1).max(45),
       sshUser: z.string().min(1).max(50),
       sshPassword: z.string().optional().nullable(),
-      plannedSubdomainCount: z.number().int().min(1).max(20).optional(),
-      plannedInboxCount: z.number().int().min(1).max(100).optional(),
+      plannedSubdomainCount: z.number().int().min(1).max(1000).optional(),
+      plannedInboxCount: z.number().int().min(1).max(10000).optional(),
       plannedDistribution: z.array(z.number().int()).optional(),
     }),
   ),
@@ -311,7 +311,9 @@ export const addDomainsWizardAction = createServerFn({ method: "POST" })
             totalInboxes: inboxCount,
             prefixes,
             names,
-            minSubdomains: 1,
+            // Honor the exact subdomain count previewed in the wizard (min == max). This also
+            // makes range-mode previews faithful — the count the user saw is the count persisted.
+            minSubdomains: row.plannedSubdomainCount ?? 1,
             maxSubdomains: row.plannedSubdomainCount ?? 15,
             placement,
           });
