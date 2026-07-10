@@ -1,10 +1,44 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireAuth } from "@/lib/auth";
 import { z } from "zod";
-import { domains, plannedInboxes, serverHealth } from "@/lib/db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { domains, plannedInboxes, serverHealth, healthHistory } from "@/lib/db/schema";
+import { eq, and, inArray, desc } from "drizzle-orm";
 import { checkDomainHealth, type DomainHealth } from "./health";
 import { checkServerHealth } from "./health-server";
+import { diffSnapshots, toSnapshot, type IndicatorSnap } from "./health-history";
+
+// Append a compact history row for a check run, then prune to the newest ~100 for that target.
+// Tolerant of an unmigrated table (logs and moves on).
+async function appendHistory(
+  db: any,
+  userId: string,
+  scope: "server" | "domain",
+  targetKey: string,
+  targetName: string,
+  health: DomainHealth,
+): Promise<void> {
+  try {
+    await db.insert(healthHistory).values({
+      userId,
+      scope,
+      targetKey,
+      targetName,
+      status: health.status,
+      score: health.score,
+      indicators: toSnapshot(health.indicators),
+      checkedAt: new Date(health.checkedAt),
+    });
+    const rows = await db
+      .select({ id: healthHistory.id })
+      .from(healthHistory)
+      .where(and(eq(healthHistory.userId, userId), eq(healthHistory.scope, scope), eq(healthHistory.targetKey, targetKey)))
+      .orderBy(desc(healthHistory.checkedAt));
+    const excess = rows.slice(100).map((r: any) => r.id);
+    if (excess.length) await db.delete(healthHistory).where(inArray(healthHistory.id, excess));
+  } catch (err) {
+    console.error("health history write failed (is the table migrated?):", err);
+  }
+}
 
 // Run the domain-level (DNS auth) health engine for one domain, persist, and return it.
 async function runDomainOne(db: any, domain: any): Promise<DomainHealth> {
@@ -23,6 +57,7 @@ async function runDomainOne(db: any, domain: any): Promise<DomainHealth> {
   });
 
   await db.update(domains).set({ health, healthCheckedAt: new Date() }).where(eq(domains.id, domain.id));
+  await appendHistory(db, domain.userId, "domain", domain.id, domain.name, health);
   return health;
 }
 
@@ -62,6 +97,7 @@ async function runServerOne(db: any, userId: string, rep: any): Promise<DomainHe
     // server_health table may not be migrated yet — degrade gracefully.
     console.error("serverHealth upsert failed (is the table migrated?):", err);
   }
+  await appendHistory(db, userId, "server", rep.ipAddress, rep.ipAddress, health);
   return health;
 }
 
@@ -185,6 +221,49 @@ export const getHealthOverview = createServerFn({ method: "GET" })
     const rows = await db.select().from(domains).where(eq(domains.userId, userId));
     const lastCheckedAt = rows.map((r: any) => r.healthCheckedAt).filter(Boolean).sort().pop() ?? null;
     return { ...summarize(rows), lastCheckedAt };
+  });
+
+// Health-check history for one target (a server IP or a domain), oldest-first for charting, plus
+// the regressed/recovered diff between the two most recent runs.
+export const getHealthHistory = createServerFn({ method: "GET" })
+  .middleware([requireAuth])
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        scope: z.enum(["server", "domain"]),
+        targetKey: z.string(),
+        limit: z.number().int().min(2).max(200).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { db, userId } = context as any;
+    if (!db) return { history: [], regressed: [], recovered: [] };
+    try {
+      const rows = await db
+        .select()
+        .from(healthHistory)
+        .where(
+          and(
+            eq(healthHistory.userId, userId),
+            eq(healthHistory.scope, data.scope),
+            eq(healthHistory.targetKey, data.targetKey),
+          ),
+        )
+        .orderBy(desc(healthHistory.checkedAt))
+        .limit(data.limit ?? 60);
+
+      const curr = rows[0];
+      const prev = rows[1];
+      const diff = curr
+        ? diffSnapshots((prev?.indicators as IndicatorSnap[]) ?? null, (curr.indicators as IndicatorSnap[]) ?? [])
+        : { regressed: [], recovered: [] };
+
+      // Return chronological (oldest → newest) for the sparkline.
+      return { history: rows.slice().reverse(), regressed: diff.regressed, recovered: diff.recovered };
+    } catch {
+      return { history: [], regressed: [], recovered: [] };
+    }
   });
 
 // Latest server-health rows for a batch's IPs (for the per-server list on the job dashboard).

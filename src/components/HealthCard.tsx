@@ -7,6 +7,7 @@ import { runDomainHealth } from "@/server/health-actions";
 import type { DomainHealth, HealthAction, HealthStatus, Indicator } from "@/server/health";
 import { sortByPriority } from "@/server/health-checks";
 import { ACTION_LABEL, runHealthFix } from "@/lib/health-fixes";
+import { HealthTrend } from "@/components/HealthTrend";
 
 const DOT: Record<HealthStatus, string> = {
   ok: "text-success",
@@ -90,6 +91,7 @@ export function HealthCard({
   const [serverHealth, setServerHealth] = useState<DomainHealth | null>(initialServerHealth ?? null);
   const [checkedAt, setCheckedAt] = useState<string | null>(initialCheckedAt ?? null);
   const [busy, setBusy] = useState(false);
+  const [trendVersion, setTrendVersion] = useState(0); // bump to refetch the sparklines after a run
 
   const recheck = useCallback(async () => {
     setBusy(true);
@@ -102,6 +104,7 @@ export function HealthCard({
           setCheckedAt(res.health.checkedAt);
         }
         if (res?.serverHealth) setServerHealth(res.serverHealth);
+        setTrendVersion((v) => v + 1);
       }
     } catch (e: any) {
       toast.error(e?.message ?? "Health check failed");
@@ -161,14 +164,20 @@ export function HealthCard({
         </div>
       ) : (
         <>
-          <div className="px-6 pt-3 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-            Domain — DNS authentication
+          <div className="flex items-center justify-between px-6 pt-3">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              Domain — DNS authentication
+            </span>
+            <HealthTrend scope="domain" targetKey={domainId} version={trendVersion} />
           </div>
           <IndicatorRows indicators={health.indicators} busy={busy} onFix={runFix} />
 
-          <div className="flex items-center gap-2 border-t border-border px-6 pt-4 pb-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-            <Server className="h-3.5 w-3.5" />
-            Server{serverIp ? ` — ${serverIp}` : ""}
+          <div className="flex items-center justify-between border-t border-border px-6 pt-4 pb-1">
+            <span className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              <Server className="h-3.5 w-3.5" />
+              Server{serverIp ? ` — ${serverIp}` : ""}
+            </span>
+            {serverIp && <HealthTrend scope="server" targetKey={serverIp} version={trendVersion} />}
           </div>
           {serverHealth ? (
             <IndicatorRows indicators={serverHealth.indicators} busy={busy} onFix={runFix} />

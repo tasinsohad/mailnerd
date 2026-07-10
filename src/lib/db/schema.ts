@@ -224,6 +224,24 @@ export const serverHealth = pgTable(
   }),
 );
 
+// Append-only time series of health check results, for trends and "when did it degrade". One row
+// per check run per target (a server IP or a domain). Pruned to the newest ~100 rows per target.
+export const healthHistory = pgTable("health_history", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id),
+  scope: text("scope").notNull(), // "server" | "domain"
+  targetKey: text("target_key").notNull(), // ipAddress (server) or domainId (domain)
+  targetName: text("target_name"), // ip or domain name, for display
+  status: text("status").notNull(),
+  score: integer("score").notNull().default(0),
+  indicators: jsonb("indicators"), // compact [{id, status}] snapshot
+  checkedAt: timestamp("checked_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Relations
 export const userRelations = relations(users, ({ many }) => ({
   domains: many(domains),
