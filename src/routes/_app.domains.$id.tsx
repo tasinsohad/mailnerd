@@ -8,6 +8,7 @@ import { downloadCsv } from "@/lib/csv";
 import { buildExportCsv } from "@/lib/export-formats";
 import { ExportButton } from "@/components/ExportButton";
 import { ExportSubdomainsDialog } from "@/components/ExportSubdomainsDialog";
+import { TroubleshootButton } from "@/components/TroubleshootButton";
 import { subdomainExportRows } from "@/lib/subdomains";
 import {
   Globe,
@@ -498,6 +499,10 @@ function DomainDetailsPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <TroubleshootButton
+            domainId={id}
+            className="h-10 gap-2 px-4 border-primary/40 text-primary hover:bg-primary/10"
+          />
           <Button
             onClick={runFullAutomation}
             disabled={isAnyPending}

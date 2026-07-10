@@ -118,6 +118,18 @@ export function HealthCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Sync from props when the parent refetches (e.g. the header "Troubleshoot" button ran a check),
+  // and refresh the sparklines to include the new run.
+  useEffect(() => {
+    if (initialHealth) {
+      setHealth(initialHealth);
+      setCheckedAt(initialCheckedAt ?? null);
+    }
+    if (initialServerHealth) setServerHealth(initialServerHealth);
+    setTrendVersion((v) => v + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialHealth, initialServerHealth, initialCheckedAt]);
+
   const runFix = async (action: HealthAction) => {
     setBusy(true);
     toast.loading(`${ACTION_LABEL[action]}…`, { id: "healthfix" });
