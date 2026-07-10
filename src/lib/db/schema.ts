@@ -201,6 +201,29 @@ export const rateLimits = pgTable(
   }),
 );
 
+// Latest deliverability health for a VPS/server, keyed by (userId, ipAddress). Server-level checks
+// (outbound port 25, submission ports, Postfix queue, FCrDNS, IP blacklist, TLS, containers) are
+// run once per unique IP in a job and stored here, so multiple domains on one VPS share one result.
+export const serverHealth = pgTable(
+  "server_health",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    ipAddress: text("ip_address").notNull(),
+    mailcowHostname: text("mailcow_hostname"),
+    health: jsonb("health"), // DomainHealth-shaped result (see src/server/health-types.ts)
+    checkedAt: timestamp("checked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    uniqueUserIp: [table.userId, table.ipAddress],
+  }),
+);
+
 // Relations
 export const userRelations = relations(users, ({ many }) => ({
   domains: many(domains),

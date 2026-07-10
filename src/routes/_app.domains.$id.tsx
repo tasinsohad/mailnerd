@@ -553,7 +553,9 @@ function DomainDetailsPage() {
 
       <HealthCard
         domainId={id}
+        serverIp={domain.ipAddress ?? null}
         initialHealth={(domain.health as any) ?? null}
+        initialServerHealth={((data as any)?.serverHealth?.health as any) ?? null}
         initialCheckedAt={domain.healthCheckedAt ?? null}
       />
 

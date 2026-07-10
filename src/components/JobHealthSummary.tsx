@@ -31,6 +31,7 @@ export function JobHealthSummary({ batchId, domains }: { batchId: string; domain
       if (res?.error) toast.error(res.error, { id: "jobhealth" });
       else toast.success("Job health check complete", { id: "jobhealth" });
       qc.invalidateQueries({ queryKey: ["batch", batchId] });
+      qc.invalidateQueries({ queryKey: ["batch-server-health", batchId] });
     },
     onError: (e: any) => toast.error(e.message, { id: "jobhealth" }),
   });

@@ -9,6 +9,7 @@ import {
   plannedInboxes,
   cloudflareZones,
   userSecrets,
+  serverHealth,
 } from "@/lib/db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { planDomain, randInt, DomainPlan, generateDnsRecords } from "@/lib/planning";
@@ -420,7 +421,22 @@ export const getDomainDetails = createServerFn({ method: "GET" })
         where: eq(domainPlans.domainId, domain.id),
       });
 
-      return { domain: publicDomain(domain), records, inboxes, plan };
+      // Latest server-level health for this domain's VPS (shared across domains on the same IP).
+      let serverHealthRow = null;
+      if (domain.ipAddress) {
+        try {
+          const shRows = await db
+            .select()
+            .from(serverHealth)
+            .where(and(eq(serverHealth.userId, userId), eq(serverHealth.ipAddress, domain.ipAddress)))
+            .limit(1);
+          serverHealthRow = shRows[0] ?? null;
+        } catch {
+          /* server_health table may not be migrated yet */
+        }
+      }
+
+      return { domain: publicDomain(domain), records, inboxes, plan, serverHealth: serverHealthRow };
     } catch {
       return null;
     }

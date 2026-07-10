@@ -36,6 +36,7 @@ import { downloadCsv } from "@/lib/csv";
 import { StatusPill } from "@/components/StatusPill";
 import { JobHealthSummary } from "@/components/JobHealthSummary";
 import { JobIssuesPanel } from "@/components/JobIssuesPanel";
+import { JobServerHealth } from "@/components/JobServerHealth";
 
 export const Route = createFileRoute("/_app/jobs/$id")({
   component: JobPipelinePage,
@@ -263,6 +264,7 @@ function JobPipelinePage() {
       {step === "VIEW" && (
         <div className="flex flex-col gap-6">
           <JobHealthSummary batchId={id} domains={domains} />
+          <JobServerHealth batchId={id} />
           <JobIssuesPanel
             batchId={id}
             domains={domains}
