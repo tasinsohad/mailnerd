@@ -7,6 +7,8 @@ import { eq, and } from "drizzle-orm";
 import { plannedInboxes, dnsRecords, userSecrets } from "@/lib/db/schema";
 import {
   mailcowRequest,
+  mailcowRequestRetry,
+  mailcowListAll,
   parseMailcowResult,
   generateMailboxPassword,
   cfTxtContent,
@@ -16,7 +18,7 @@ import {
   QUOTA,
 } from "./mailcow-helpers";
 import { resolveAndSaveCfZoneId } from "./cloudflare";
-import { fetchAllCfDnsRecords } from "./cloudflare.functions";
+import { fetchAllCfDnsRecords, createCfDnsRecordResilient } from "./cloudflare.functions";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = any;
@@ -120,23 +122,22 @@ export async function ensureMailDomains(
   db: Db,
   domain: Domain,
 ): Promise<{ existingDomains: Set<string>; results: MailcowResultRow[] }> {
+  // Writes go through the retrying client so a transient hiccup during bulk provisioning
+  // (429 / 5xx / timeout) doesn't silently drop a domain or mailbox.
   const mc = (path: string, body?: unknown) =>
-    mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, path, body);
+    mailcowRequestRetry(domain.mailcowHostname, domain.mailcowApiKey, path, body);
 
   // Fail fast if the Mailcow API isn't reachable. A Cloudflare-PROXIED mail host (orange
   // cloud) intercepts the API and returns HTML / hangs, which would otherwise make us hang
   // on dozens of add/* calls. The mail host MUST be DNS-only. A valid empty Mailcow returns
   // {} (object) or [] with HTTP 200; HTML (string) or non-200/timeout means unreachable.
-  const probe = await mailcowRequest(
-    domain.mailcowHostname,
-    domain.mailcowApiKey,
-    "get/domain/all",
-    undefined,
-    { timeoutMs: 12000 },
-  ).catch((e) => ({ ok: false, status: 0, json: String(e) }));
-  if (probe.status !== 200 || typeof probe.json === "string") {
+  const probe = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all", {
+    attempts: 5,
+    timeoutMs: 12000,
+  });
+  if (probe === null) {
     throw new Error(
-      `Mailcow API not reachable at ${domain.mailcowHostname} (status ${probe.status}). ` +
+      `Mailcow API not reachable at ${domain.mailcowHostname} after retries. ` +
         `Is the mail host Cloudflare-proxied? mail.<domain> must be DNS-only (grey cloud).`,
     );
   }
@@ -177,13 +178,9 @@ export async function ensureMailDomains(
   }
 
   const existingDomains = new Set<string>();
-  try {
-    const { json } = await mc("get/domain/all");
-    if (Array.isArray(json)) {
-      for (const d of json) if (d?.domain_name) existingDomains.add(String(d.domain_name).toLowerCase());
-    }
-  } catch {
-    // leave empty -> domains reported as missing below
+  const domList = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all");
+  if (domList) {
+    for (const d of domList) if (d?.domain_name) existingDomains.add(String(d.domain_name).toLowerCase());
   }
 
   const results: MailcowResultRow[] = uniqueSubdomains.map((sub) => {
@@ -209,8 +206,10 @@ export async function createMailboxes(
   existingDomains: Set<string>,
   opts?: { recreate?: boolean },
 ): Promise<{ results: MailcowResultRow[]; summary: { total: number; created: number; failed: number } }> {
+  // Writes go through the retrying client so a transient hiccup during bulk provisioning
+  // (429 / 5xx / timeout) doesn't silently drop a domain or mailbox.
   const mc = (path: string, body?: unknown) =>
-    mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, path, body);
+    mailcowRequestRetry(domain.mailcowHostname, domain.mailcowApiKey, path, body);
   const inboxes = await db.select().from(plannedInboxes).where(eq(plannedInboxes.domainId, domain.id));
   const { MAILBOX_QUOTA_MB } = QUOTA;
   const results: MailcowResultRow[] = [];
@@ -246,7 +245,9 @@ export async function createMailboxes(
       const r = await mc("add/mailbox", {
         local_part: ib.localPart,
         domain: ib.subdomainFqdn,
-        name: ib.personName,
+        // Display name. The planned-inbox column is `fullName` — `personName` never existed, so
+        // this was silently sending `undefined` and creating blank-named mailboxes.
+        name: ib.fullName || [ib.firstName, ib.lastName].filter(Boolean).join(" ") || ib.localPart,
         password: pw,
         password2: pw, // Mailcow requires the confirmation field; empty -> "password_complexity"
         quota: MAILBOX_QUOTA_MB,
@@ -261,15 +262,19 @@ export async function createMailboxes(
   }
 
   // Verify against the source of truth and persist passwords only for ones created now.
-  const existingMailboxes = new Set<string>();
-  try {
-    const { json } = await mc("get/mailbox/all");
-    if (Array.isArray(json)) {
-      for (const m of json) if (m?.username) existingMailboxes.add(String(m.username).toLowerCase());
-    }
-  } catch {
-    // leave empty -> everything reported as failed below
+  // CRITICAL: use the resilient list read. If verification is unavailable (transient API flakiness
+  // during the fresh-provision window), we must NOT fall through to "empty" — that would mark every
+  // just-created mailbox `failed`. Throw instead so statuses are left untouched and a retry can
+  // reconcile them once the API settles.
+  const mbList = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/mailbox/all");
+  if (mbList === null) {
+    throw new Error(
+      "Could not verify mailboxes: Mailcow get/mailbox/all did not return a list after retries. " +
+        "Mailbox statuses left unchanged — re-run once the API is stable.",
+    );
   }
+  const existingMailboxes = new Set<string>();
+  for (const m of mbList) if (m?.username) existingMailboxes.add(String(m.username).toLowerCase());
 
   let created = 0;
   let failed = 0;
@@ -305,15 +310,16 @@ export async function createMailboxes(
 // password changes). Idempotent; used as the final pipeline step. ---
 export async function verifyMailboxes(db: Db, domain: Domain): Promise<{ total: number; active: number }> {
   const inboxes = await db.select().from(plannedInboxes).where(eq(plannedInboxes.domainId, domain.id));
-  const existing = new Set<string>();
-  try {
-    const { json } = await mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, "get/mailbox/all");
-    if (Array.isArray(json)) {
-      for (const m of json) if (m?.username) existing.add(String(m.username).toLowerCase());
-    }
-  } catch {
-    // leave empty -> all marked failed
+  // Resilient read: null means "couldn't verify" — do NOT mark everything failed on a transient
+  // hiccup. Leave statuses untouched and surface a clear error for a later retry.
+  const mbList = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/mailbox/all");
+  if (mbList === null) {
+    throw new Error(
+      "Could not verify mailboxes: Mailcow get/mailbox/all did not return a list after retries.",
+    );
   }
+  const existing = new Set<string>();
+  for (const m of mbList) if (m?.username) existing.add(String(m.username).toLowerCase());
   let active = 0;
   for (const ib of inboxes) {
     const ok = existing.has(String(ib.email).toLowerCase());
@@ -361,12 +367,11 @@ export async function pushDns(
     }
 
     try {
-      const res = await fetch(`https://api.cloudflare.com/client/v4/zones/${cfZoneId}/dns_records`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${secrets.cfApiToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify(buildCfRecordBody(record, name, domain.name)),
-      });
-      const json = (await res.json()) as { success: boolean; result?: { id: string }; errors?: { message: string }[] };
+      const json = await createCfDnsRecordResilient(
+        secrets.cfApiToken,
+        cfZoneId,
+        buildCfRecordBody(record, name, domain.name),
+      );
       if (json.success) {
         await db
           .update(dnsRecords)

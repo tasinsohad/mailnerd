@@ -6,6 +6,7 @@ import {
   buildCfRecordBody,
   findMatchingCfRecord,
   isCfAlreadyExistsError,
+  isTransientHttp,
   QUOTA,
 } from "../mailcow-helpers";
 
@@ -138,6 +139,15 @@ describe("isCfAlreadyExistsError", () => {
   });
   it("does not swallow unrelated errors", () => {
     expect(isCfAlreadyExistsError("weight is a required data field.")).toBe(false);
+  });
+});
+
+describe("isTransientHttp", () => {
+  it("treats network (0), rate-limit (429), and 5xx as transient", () => {
+    for (const s of [0, 429, 500, 502, 503, 504]) expect(isTransientHttp(s)).toBe(true);
+  });
+  it("treats 2xx and deterministic 4xx as non-transient", () => {
+    for (const s of [200, 201, 400, 401, 403, 404, 409]) expect(isTransientHttp(s)).toBe(false);
   });
 });
 

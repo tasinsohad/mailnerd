@@ -3,7 +3,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { listDomains, listDomainBatches } from "@/server/domains";
 import { getInboxExport } from "@/server/plans";
-import { buildInboxCsv, downloadCsv } from "@/lib/csv";
+import { downloadCsv } from "@/lib/csv";
+import { buildExportCsv } from "@/lib/export-formats";
+import { ExportButton } from "@/components/ExportButton";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -47,7 +49,7 @@ function DomainsPage() {
   const [exportingAll, setExportingAll] = useState(false);
   const anyReady = domains.some((d: any) => (d.createdInboxCount ?? 0) > 0);
 
-  const downloadAll = async () => {
+  const downloadAll = async (formatId: string) => {
     setExportingAll(true);
     toast.loading("Building combined CSV…", { id: "export-all" });
     try {
@@ -56,7 +58,7 @@ function DomainsPage() {
         toast.error("No created mailboxes to export yet.", { id: "export-all" });
         return;
       }
-      downloadCsv("all_inboxes.csv", buildInboxCsv(res.rows));
+      downloadCsv(`all_inboxes_${formatId}.csv`, buildExportCsv(formatId, res.rows));
       toast.success(`Exported ${res.rows.length} mailboxes`, { id: "export-all" });
     } catch (e: any) {
       toast.error(e?.message ?? "Export failed", { id: "export-all" });
@@ -107,16 +109,13 @@ function DomainsPage() {
             </Select>
           )}
           {domains.length > 0 && (
-            <Button
-              variant="outline"
-              onClick={downloadAll}
-              disabled={!anyReady || exportingAll}
-              className="gap-2"
+            <ExportButton
+              label="Download all CSVs"
+              onExport={downloadAll}
+              disabled={!anyReady}
+              busy={exportingAll}
               title={anyReady ? "Download one combined CSV of all created mailboxes" : "Available once mailboxes are created"}
-            >
-              {exportingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-              Download all CSVs
-            </Button>
+            />
           )}
           <Button onClick={() => setWizardOpen(true)} className="gap-2">
             <Plus className="h-4 w-4" /> Add domains

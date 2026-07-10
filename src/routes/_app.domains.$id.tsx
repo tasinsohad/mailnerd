@@ -4,7 +4,11 @@ import { getDomainDetails, pushDnsToCloudflare, updateDomain, repairDomainDns } 
 import { provisionServer } from "@/server/provisioning";
 import { setupMailcowDomain, fetchDkimAndSync } from "@/server/mailcow";
 import { regeneratePlan } from "@/server/plans";
-import { buildInboxCsv, downloadCsv } from "@/lib/csv";
+import { downloadCsv } from "@/lib/csv";
+import { buildExportCsv } from "@/lib/export-formats";
+import { ExportButton } from "@/components/ExportButton";
+import { ExportSubdomainsDialog } from "@/components/ExportSubdomainsDialog";
+import { subdomainExportRows } from "@/lib/subdomains";
 import {
   Globe,
   Server,
@@ -98,7 +102,17 @@ function DomainDetailsPage() {
 
   const [logs, setLogs] = useState<string[]>([]);
   const [terminalStatus, setTerminalStatus] = useState<string>("");
+  const [subOpen, setSubOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Unique subdomains (apex excluded) for this domain — available as soon as inboxes are planned.
+  const subRows = subdomainExportRows(
+    inboxes.map((ib: any) => ({
+      domainName: domain?.name ?? "",
+      subdomainPrefix: ib.subdomainPrefix,
+      subdomainFqdn: ib.subdomainFqdn,
+    })),
+  );
 
   const [isEditingServer, setIsEditingServer] = useState(false);
   const [ipAddress, setIpAddress] = useState("");
@@ -414,7 +428,7 @@ function DomainDetailsPage() {
     }
   };
 
-  const exportCsv = () => {
+  const exportCsv = (formatId: string) => {
     // Mail server clients connect to (mailcow host), e.g. mail.example.com
     const mailServer = domain.mailcowHostname || `mail.${domain.name}`;
     // Only export mailboxes that were actually created (have a password) — these are the
@@ -426,11 +440,13 @@ function DomainDetailsPage() {
     }
     const rows = usable.map((ib: any) => ({
       name: ib.fullName || [ib.firstName, ib.lastName].filter(Boolean).join(" ") || ib.localPart || "",
+      firstName: ib.firstName || "",
+      lastName: ib.lastName || "",
       email: ib.email,
       password: ib.password || "",
       mailServer,
     }));
-    downloadCsv(`${domain.name}_inboxes.csv`, buildInboxCsv(rows));
+    downloadCsv(`${domain.name}_${formatId}.csv`, buildExportCsv(formatId, rows));
     toast.success(`Exported ${rows.length} mailbox${rows.length === 1 ? "" : "es"}`);
   };
 
@@ -831,16 +847,31 @@ function DomainDetailsPage() {
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Mail className="h-5 w-5 text-muted-foreground" /> Planned Inboxes by Subdomain
           </h2>
-          <Button
-            variant="outline"
-            onClick={exportCsv}
-            disabled={!canExportCsv}
-            title={canExportCsv ? undefined : "Available once mailboxes are created"}
-            className="rounded-xl h-9 gap-2 border-border"
-          >
-            <Send className="h-4 w-4" /> Export CSV
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setSubOpen(true)}
+              disabled={subRows.length === 0}
+              title={subRows.length === 0 ? "Available once inboxes are planned" : undefined}
+              className="rounded-xl h-9 gap-2 border-border"
+            >
+              <Globe className="h-4 w-4" /> Subdomains
+            </Button>
+            <ExportButton
+              onExport={exportCsv}
+              disabled={!canExportCsv}
+              title={canExportCsv ? undefined : "Available once mailboxes are created"}
+              className="rounded-xl h-9 gap-2 border-border"
+            />
+          </div>
         </div>
+
+        <ExportSubdomainsDialog
+          open={subOpen}
+          onOpenChange={setSubOpen}
+          rows={subRows}
+          filenameBase={domain?.name ?? "domain"}
+        />
 
         {inboxes.length > 0 ? (
           <div className="flex flex-col gap-2">
@@ -910,7 +941,7 @@ function SubdomainInboxSection({
               style={{ zIndex: 4 - i }}
               title={ib.email}
             >
-              {ib.personName?.charAt(0) || "?"}
+              {ib.fullName?.charAt(0) || "?"}
             </div>
           ))}
           {inboxes.length > 4 && (
@@ -936,7 +967,7 @@ function SubdomainInboxSection({
               {inboxes.map((ib: any) => (
                 <tr key={ib.id} className="hover:bg-muted/50 transition-colors">
                   <td className="px-4 py-3 font-medium text-foreground">{ib.email}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{ib.personName}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{ib.fullName}</td>
                   <td className="px-4 py-3">
                     <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-md text-[10px] font-bold uppercase">
                       {ib.format}

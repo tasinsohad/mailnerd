@@ -6,6 +6,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,13 +22,17 @@ import {
   Trash2,
   Loader2,
   Download,
+  Globe,
 } from "lucide-react";
 import { toast } from "sonner";
 import { pushDnsToCloudflare, repairDomainDns, deleteDomain } from "@/server/domains";
 import { provisionServer } from "@/server/provisioning";
 import { setupMailcowDomain, fetchDkimAndSync } from "@/server/mailcow";
-import { getInboxExport } from "@/server/plans";
-import { buildInboxCsv, downloadCsv } from "@/lib/csv";
+import { getInboxExport, getSubdomainExport } from "@/server/plans";
+import { downloadCsv } from "@/lib/csv";
+import { EXPORT_FORMATS, buildExportCsv } from "@/lib/export-formats";
+import { ExportSubdomainsDialog } from "@/components/ExportSubdomainsDialog";
+import type { SubdomainRow } from "@/lib/subdomains";
 
 // Every per-domain control in one 3-dot menu. Used in the Domains list and anywhere a
 // single domain needs its full action set. Stops click propagation so it can live inside
@@ -42,8 +49,27 @@ export function DomainActionsMenu({
   canExport?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+  const [subOpen, setSubOpen] = useState(false);
+  const [subRows, setSubRows] = useState<SubdomainRow[]>([]);
 
-  const exportCsv = async () => {
+  const openSubdomains = async () => {
+    setBusy(true);
+    try {
+      const res: any = await getSubdomainExport({ data: { domainId } });
+      if (!res?.rows?.length) {
+        toast.error("No subdomains to export yet. Plan the domain's inboxes first.");
+        return;
+      }
+      setSubRows(res.rows);
+      setSubOpen(true);
+    } catch (e: any) {
+      toast.error(e?.message ?? "Couldn't load subdomains");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportCsv = async (formatId: string) => {
     setBusy(true);
     try {
       const res: any = await getInboxExport({ data: { domainId } });
@@ -51,7 +77,7 @@ export function DomainActionsMenu({
         toast.error("No created mailboxes to export yet.");
         return;
       }
-      downloadCsv(`${domainName ?? "domain"}_inboxes.csv`, buildInboxCsv(res.rows));
+      downloadCsv(`${domainName ?? "domain"}_${formatId}.csv`, buildExportCsv(formatId, res.rows));
       toast.success(`Exported ${res.rows.length} mailbox${res.rows.length === 1 ? "" : "es"}`);
     } catch (e: any) {
       toast.error(e?.message ?? "Export failed");
@@ -86,6 +112,7 @@ export function DomainActionsMenu({
   };
 
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
@@ -114,12 +141,23 @@ export function DomainActionsMenu({
           <ShieldCheck className="h-4 w-4" /> Sync DKIM
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          onClick={exportCsv}
-          disabled={!canExport}
-          title={canExport ? undefined : "Available once mailboxes are created"}
-        >
-          <Download className="h-4 w-4" /> Export CSV
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger
+            disabled={!canExport}
+            title={canExport ? undefined : "Available once mailboxes are created"}
+          >
+            <Download className="h-4 w-4" /> Export CSV
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {EXPORT_FORMATS.map((f) => (
+              <DropdownMenuItem key={f.id} onClick={() => exportCsv(f.id)}>
+                {f.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuItem onClick={openSubdomains}>
+          <Globe className="h-4 w-4" /> Export subdomains
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuLabel>Repair</DropdownMenuLabel>
@@ -141,5 +179,12 @@ export function DomainActionsMenu({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    <ExportSubdomainsDialog
+      open={subOpen}
+      onOpenChange={setSubOpen}
+      rows={subRows}
+      filenameBase={domainName ?? "domain"}
+    />
+    </>
   );
 }

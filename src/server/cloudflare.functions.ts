@@ -60,6 +60,8 @@ export interface CfDeleteDnsRecordResponse {
   errors: { message: string }[];
 }
 
+import { retryTransient } from "@/lib/retry";
+
 const CF_API_BASE = "https://api.cloudflare.com/client/v4";
 
 export async function verifyCfToken(token: string): Promise<CfTokenVerifyResponse> {
@@ -162,6 +164,52 @@ export async function createCfDnsRecord(
     body: JSON.stringify(record),
   });
   return res.json();
+}
+
+// The parsed outcome of a resilient record create, carrying the HTTP status through so callers
+// can distinguish a deterministic error (e.g. "already exists", 400) from a transient one.
+export interface CfCreateOutcome {
+  success: boolean;
+  result?: { id: string };
+  errors?: { message: string }[];
+  status: number;
+}
+
+// Create a DNS record, retrying TRANSIENT failures — rate limiting (429, honouring Retry-After),
+// 5xx, and network/timeout errors — with backoff. This is what makes bulk DNS pushes reliable:
+// without it, a burst of parallel record creates that trips Cloudflare's rate limit leaves a
+// random subset failed, forcing repeated manual re-runs. Deterministic 4xx (e.g. "an identical
+// record already exists") is returned immediately for the caller's idempotency handling.
+export function createCfDnsRecordResilient(
+  token: string,
+  zoneId: string,
+  body: Record<string, unknown>,
+  opts?: { attempts?: number },
+): Promise<CfCreateOutcome> {
+  return retryTransient<CfCreateOutcome>(
+    async () => {
+      try {
+        const res = await fetch(`${CF_API_BASE}/zones/${zoneId}/dns_records`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const json: any = await res.json().catch(() => ({}));
+        const retryAfter = Number(res.headers.get("retry-after")) || 0;
+        return { ...json, status: res.status, retryAfterMs: retryAfter * 1000 } as any;
+      } catch (e) {
+        // Network/timeout — status 0 marks it transient so retryTransient retries.
+        return { success: false, errors: [{ message: String(e) }], status: 0 } as CfCreateOutcome;
+      }
+    },
+    // Retry while the call did not succeed AND the status is transient (0/429/5xx).
+    (r) => !r.success && (r.status === 0 || r.status === 429 || r.status >= 500),
+    {
+      attempts: opts?.attempts ?? 4,
+      base: 700,
+      extraDelayMs: (r) => (r as any)?.retryAfterMs ?? 0,
+    },
+  );
 }
 
 export async function updateCfDnsRecord(

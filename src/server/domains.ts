@@ -20,7 +20,7 @@ import {
   isCfAlreadyExistsError,
 } from "./mailcow-helpers";
 import { resolveAndSaveCfZoneId } from "./cloudflare";
-import { fetchAllCfDnsRecords } from "./cloudflare.functions";
+import { fetchAllCfDnsRecords, createCfDnsRecordResilient } from "./cloudflare.functions";
 import { pushDns as pipelinePushDns, unproxyDns } from "./pipeline";
 
 // Re-exported for any existing importers of these modules.
@@ -537,7 +537,9 @@ export const batchPushDnsToCloudflare = createServerFn({ method: "POST" })
     // re-created) — re-pushing an already-provisioned domain then succeeds instead of erroring.
     const existing = await fetchAllCfDnsRecords(secrets.cfApiToken, domain.cfZoneId);
 
-    const batchSize = 10;
+    // Modest concurrency: enough to be fast, low enough to rarely trip Cloudflare's rate limit.
+    // createCfDnsRecordResilient still retries any 429/5xx that slips through.
+    const batchSize = 5;
     for (let i = 0; i < records.length; i += batchSize) {
       const batch = records.slice(i, i + batchSize);
       const promises = batch.map(async (record: any) => {
@@ -557,22 +559,11 @@ export const batchPushDnsToCloudflare = createServerFn({ method: "POST" })
         }
 
         try {
-          const res = await fetch(
-            `https://api.cloudflare.com/client/v4/zones/${domain.cfZoneId}/dns_records`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${secrets.cfApiToken}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify(buildCfRecordBody(record, name, domain.name)),
-            },
+          const json = await createCfDnsRecordResilient(
+            secrets.cfApiToken,
+            domain.cfZoneId,
+            buildCfRecordBody(record, name, domain.name),
           );
-          const json = (await res.json()) as {
-            success: boolean;
-            result?: { id: string };
-            errors?: { message: string }[];
-          };
           if (json.success) {
             await db
               .update(dnsRecords)

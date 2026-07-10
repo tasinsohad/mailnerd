@@ -20,7 +20,6 @@ import {
   XCircle,
   Terminal,
   Trash2,
-  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,8 +28,14 @@ import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { JobActionsMenu } from "@/components/JobActionsMenu";
 import { DomainActionsMenu } from "@/components/DomainActionsMenu";
+import { ExportButton } from "@/components/ExportButton";
+import { ExportSubdomainsDialog } from "@/components/ExportSubdomainsDialog";
+import { buildExportCsv } from "@/lib/export-formats";
+import { subdomainExportRows } from "@/lib/subdomains";
+import { downloadCsv } from "@/lib/csv";
 import { StatusPill } from "@/components/StatusPill";
 import { JobHealthSummary } from "@/components/JobHealthSummary";
+import { JobIssuesPanel } from "@/components/JobIssuesPanel";
 
 export const Route = createFileRoute("/_app/jobs/$id")({
   component: JobPipelinePage,
@@ -42,6 +47,7 @@ function JobPipelinePage() {
   const { id } = Route.useParams();
   const [step, setStep] = useState<Step>("VIEW");
   const [autoStepped, setAutoStepped] = useState(false);
+  const [subOpen, setSubOpen] = useState(false);
 
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -78,68 +84,33 @@ function JobPipelinePage() {
     }
   };
 
-  const handleExportCsv = () => {
-    // Wrap a field in quotes if it contains a comma, quote, or newline (RFC 4180).
-    const esc = (v: any) => {
-      const s = String(v ?? "");
-      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-
-    const headers = [
-      "Name",
-      "Email",
-      "Password",
-      "IMAP Server",
-      "IMAP Port",
-      "SMTP Server",
-      "SMTP Port",
-      "Daily Limit",
-      "SMTP Secure",
-      "IMAP Secure",
-    ];
-
-    const rows: string[][] = [];
-    domains.forEach((d: any) => {
+  const handleExportCsv = (formatId: string) => {
+    // Build one platform-formatted CSV across every created mailbox in the job. The format
+    // registry (buildExportCsv) owns the headers + column mapping.
+    const rows = domains.flatMap((d: any) => {
       const mailServer = d.mailcowHostname || `mail.${d.name}`;
-      inboxes
+      return inboxes
         .filter((i: any) => i.domainId === d.id && i.password) // only created mailboxes
-        .forEach((ib: any) => {
-          const name =
+        .map((ib: any) => ({
+          name:
             ib.fullName ||
-            ib.personName ||
             [ib.firstName, ib.lastName].filter(Boolean).join(" ") ||
             ib.localPart ||
-            "";
-          rows.push([
-            name,
-            ib.email,
-            ib.password || "",
-            mailServer, // IMAP Server
-            "993", // IMAP Port
-            mailServer, // SMTP Server
-            "587", // SMTP Port (STARTTLS)
-            "15", // Daily Limit
-            "TLS", // SMTP Secure (STARTTLS on 587)
-            "SSL", // IMAP Secure (implicit TLS on 993)
-          ]);
-        });
+            "",
+          firstName: ib.firstName || "",
+          lastName: ib.lastName || "",
+          email: ib.email,
+          password: ib.password || "",
+          mailServer,
+        }));
     });
 
     if (!rows.length) {
-      alert("No created mailboxes to export yet. Create the mailboxes first.");
+      toast.error("No created mailboxes to export yet. Create the mailboxes first.");
       return;
     }
 
-    const csvContent = [headers, ...rows].map((r) => r.map(esc).join(",")).join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `job_${batch.name}_export.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    downloadCsv(`job_${batch.name}_${formatId}.csv`, buildExportCsv(formatId, rows));
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -150,6 +121,17 @@ function JobPipelinePage() {
   const inboxes = (data as any)?.inboxes ?? [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const records = (data as any)?.records ?? [];
+
+  // Unique subdomains (apex excluded) across every domain in the job — ready once inboxes are
+  // planned, mailboxes need not exist.
+  const nameById = new Map<string, string>(domains.map((d: any) => [d.id, d.name]));
+  const subRows = subdomainExportRows(
+    inboxes.map((ib: any) => ({
+      domainName: nameById.get(ib.domainId) ?? "",
+      subdomainPrefix: ib.subdomainPrefix,
+      subdomainFqdn: ib.subdomainFqdn,
+    })),
+  );
 
   // Auto-jump to SERVER_SETUP if any domain is already in provisioning or failed state
   useEffect(() => {
@@ -222,12 +204,17 @@ function JobPipelinePage() {
           <div className="flex items-center gap-3">
             <Button
               variant="outline"
-              onClick={handleExportCsv}
-              className="h-11 px-4 rounded-lg border-border text-muted-foreground hover:bg-muted"
+              onClick={() => setSubOpen(true)}
+              disabled={subRows.length === 0}
+              title={subRows.length === 0 ? "Available once inboxes are planned" : undefined}
+              className="h-11 px-4 rounded-lg border-border text-muted-foreground hover:bg-muted gap-2"
             >
-              <Download className="h-4 w-4 mr-2" />
-              Export CSV
+              <Globe className="h-4 w-4" /> Subdomains
             </Button>
+            <ExportButton
+              onExport={handleExportCsv}
+              className="h-11 px-4 rounded-lg border-border text-muted-foreground hover:bg-muted gap-2"
+            />
             <JobActionsMenu
               domainIds={domains.map((d: any) => d.id)}
               onChanged={() => qc.invalidateQueries({ queryKey: ["batch", id] })}
@@ -265,9 +252,22 @@ function JobPipelinePage() {
         )}
       </div>
 
+      <ExportSubdomainsDialog
+        open={subOpen}
+        onOpenChange={setSubOpen}
+        rows={subRows}
+        filenameBase={`job_${batch.name}`}
+        title="Export job subdomains"
+      />
+
       {step === "VIEW" && (
         <div className="flex flex-col gap-6">
           <JobHealthSummary batchId={id} domains={domains} />
+          <JobIssuesPanel
+            batchId={id}
+            domains={domains}
+            onChanged={() => qc.invalidateQueries({ queryKey: ["batch", id] })}
+          />
           <ViewStep domains={domains} inboxes={inboxes} records={records} />
         </div>
       )}
@@ -385,12 +385,25 @@ function ViewStep({
   inboxes: any[];
   records: any[];
 }) {
+  // Unique mail subdomains across the job (apex excluded) — same set the "Subdomains" export uses.
+  const subdomainCount = subdomainExportRows(
+    inboxes.map((ib) => ({
+      domainName: "",
+      subdomainPrefix: ib.subdomainPrefix,
+      subdomainFqdn: ib.subdomainFqdn,
+    })),
+  ).length;
+
   return (
     <div className="grid gap-6">
-      <div className="grid gap-6 md:grid-cols-3">
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
           <div className="text-xs font-bold text-muted-foreground uppercase">Total Domains</div>
           <div className="text-3xl font-black text-primary">{domains.length}</div>
+        </div>
+        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+          <div className="text-xs font-bold text-muted-foreground uppercase">Total Subdomains</div>
+          <div className="text-3xl font-black text-primary">{subdomainCount}</div>
         </div>
         <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
           <div className="text-xs font-bold text-muted-foreground uppercase">Total Inboxes</div>

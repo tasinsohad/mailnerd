@@ -4,6 +4,7 @@ import tsConfigPaths from "vite-tsconfig-paths";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { nitro } from "nitro/vite";
+import sseHandler from "./src/server/sse-node";
 
 // These are native/optional packages that should NOT be bundled.
 // CRITICAL: postgres and drizzle-orm MUST be bundled (NOT in this list)
@@ -12,6 +13,12 @@ const nativeExternals = ["node-ssh", "cloudflare", "ssh2", "bullmq", "ioredis", 
 
 export default defineConfig({
   plugins: [
+    {
+      name: "sse-dev-plugin",
+      configureServer(server) {
+        server.middlewares.use("/api/sse", sseHandler);
+      }
+    },
     tsConfigPaths(),
     // Note: tanstackRouter plugin completely removed due to Windows + Vite HMR conflicts
     // causing EPERM and "hot" duplicate declaration errors.

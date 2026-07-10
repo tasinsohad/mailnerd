@@ -5,9 +5,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { runDomainHealth } from "@/server/health-actions";
 import type { DomainHealth, HealthAction, HealthStatus } from "@/server/health";
-import { pushDnsToCloudflare, repairDomainDns } from "@/server/domains";
-import { fetchDkimAndSync, setupMailcowDomain } from "@/server/mailcow";
-import { provisionServer } from "@/server/provisioning";
+import { ACTION_LABEL, runHealthFix } from "@/lib/health-fixes";
 
 const DOT: Record<HealthStatus, string> = {
   ok: "text-success",
@@ -21,14 +19,6 @@ const OVERALL: Record<string, { color: string; label: string }> = {
   warning: { color: "text-warning", label: "Needs attention" },
   critical: { color: "text-destructive", label: "Critical" },
   unknown: { color: "text-muted-foreground", label: "Not checked" },
-};
-
-const ACTION_LABEL: Record<HealthAction, string> = {
-  pushDns: "Push DNS",
-  syncDkim: "Sync DKIM",
-  fixDns: "Fix DNS",
-  recreate: "Recreate mailboxes",
-  provision: "Re-provision",
 };
 
 export function HealthCard({
@@ -71,17 +61,7 @@ export function HealthCard({
     setBusy(true);
     toast.loading(`${ACTION_LABEL[action]}…`, { id: "healthfix" });
     try {
-      const call =
-        action === "pushDns"
-          ? pushDnsToCloudflare({ data: { domainId } })
-          : action === "syncDkim"
-            ? fetchDkimAndSync({ data: { domainId } })
-            : action === "fixDns"
-              ? repairDomainDns({ data: { domainId } })
-              : action === "recreate"
-                ? setupMailcowDomain({ data: { domainId, recreate: true } })
-                : provisionServer({ data: { domainId } });
-      const res: any = await call;
+      const res: any = await runHealthFix(action, domainId);
       if (res?.error) toast.error(res.error, { id: "healthfix" });
       else toast.success(`${ACTION_LABEL[action]} done — re-checking…`, { id: "healthfix" });
     } catch (e: any) {

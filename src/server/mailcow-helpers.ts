@@ -1,5 +1,6 @@
 import https from "node:https";
 import crypto from "node:crypto";
+import { retryTransient } from "@/lib/retry";
 
 // Quota sizing for Mailcow domains/mailboxes. IMPORTANT: Mailcow's add/domain fields are
 // `mailboxes`, `quota` (domain TOTAL, MB), `maxquota` (max a single mailbox may have, MB),
@@ -102,6 +103,61 @@ export function mailcowRequest(
     if (payload) req.write(payload);
     req.end();
   });
+}
+
+// An HTTP status worth retrying: a transport failure (0, surfaced as a throw), rate limiting
+// (429), or a server-side error (5xx) from a warming-up / overloaded Mailcow. A 2xx or a
+// deterministic 4xx is NOT retried — those reflect the request, not a transient hiccup.
+export function isTransientHttp(status: number): boolean {
+  return status === 0 || status === 429 || status >= 500;
+}
+
+// Like mailcowRequest but retries TRANSIENT failures (thrown network/timeout errors, 429, 5xx)
+// with backoff. Use this for WRITES (add/edit/delete) during bulk provisioning so a single
+// transient hiccup doesn't drop a domain/mailbox and force a manual re-run. A 200 response with a
+// "danger" body (e.g. object_exists) is deterministic and returned as-is — never retried.
+export function mailcowRequestRetry(
+  host: string,
+  apiKey: string,
+  path: string,
+  body?: unknown,
+  opts?: { attempts?: number; timeoutMs?: number },
+): Promise<{ ok: boolean; status: number; json: unknown }> {
+  return retryTransient(
+    () => mailcowRequest(host, apiKey, path, body, { timeoutMs: opts?.timeoutMs ?? 20000 }),
+    (res) => isTransientHttp(res.status),
+    { attempts: opts?.attempts ?? 3, base: 600 },
+  );
+}
+
+// Read a Mailcow "get all" list endpoint (get/mailbox/all, get/domain/all) resiliently.
+//
+// During the fresh-provision window the API is briefly flaky — self-signed cert, cold
+// nginx/php-fpm, ACME churn — so a single call can time out, reset the connection, or return a
+// non-array (an HTML error page). These endpoints are READ-ONLY and idempotent, so we retry with
+// backoff until we get a real array.
+//
+// Returns null when no valid array response ever came back. Callers MUST treat null as
+// "verification unavailable" (leave state untouched), NEVER as "the list is empty" — the latter
+// is what caused successfully-created mailboxes to be marked `failed` on a transient hiccup.
+export async function mailcowListAll(
+  host: string,
+  apiKey: string,
+  path: string,
+  opts?: { attempts?: number; timeoutMs?: number },
+): Promise<any[] | null> {
+  const attempts = opts?.attempts ?? 4;
+  const timeoutMs = opts?.timeoutMs ?? 20000;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const { json } = await mailcowRequest(host, apiKey, path, undefined, { timeoutMs });
+      if (Array.isArray(json)) return json;
+    } catch {
+      // transient (timeout / connection reset) — fall through to backoff and retry
+    }
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+  }
+  return null;
 }
 
 // Mailcow's API returns HTTP 200 even when an operation fails; the real outcome is
