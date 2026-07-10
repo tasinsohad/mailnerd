@@ -37,6 +37,7 @@ import { StatusPill } from "@/components/StatusPill";
 import { JobHealthSummary } from "@/components/JobHealthSummary";
 import { JobIssuesPanel } from "@/components/JobIssuesPanel";
 import { JobServerHealth } from "@/components/JobServerHealth";
+import { TroubleshootButton } from "@/components/TroubleshootButton";
 
 export const Route = createFileRoute("/_app/jobs/$id")({
   component: JobPipelinePage,
@@ -212,6 +213,10 @@ function JobPipelinePage() {
             >
               <Globe className="h-4 w-4" /> Subdomains
             </Button>
+            <TroubleshootButton
+              batchId={id}
+              className="h-11 px-4 rounded-lg border-primary/40 text-primary hover:bg-primary/10 gap-2"
+            />
             <ExportButton
               onExport={handleExportCsv}
               className="h-11 px-4 rounded-lg border-border text-muted-foreground hover:bg-muted gap-2"

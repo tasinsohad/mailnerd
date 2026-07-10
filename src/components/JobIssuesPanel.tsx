@@ -1,81 +1,102 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Loader2, Wrench, AlertTriangle, CircleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { HealthAction, DomainHealth, Indicator } from "@/server/health";
-import { runJobHealth } from "@/server/health-actions";
-import {
-  ACTION_LABEL,
-  ACTION_ORDER,
-  DESTRUCTIVE_ACTIONS,
-  runHealthFix,
-} from "@/lib/health-fixes";
+import { runJobHealth, getBatchServerHealth } from "@/server/health-actions";
+import { ACTION_LABEL, ACTION_ORDER, DESTRUCTIVE_ACTIONS, runHealthFix } from "@/lib/health-fixes";
 
-type Domain = { id: string; name: string; health?: DomainHealth | null };
+type Domain = { id: string; name: string; ipAddress?: string | null; health?: DomainHealth | null };
 
-// One recommended fix, aggregated across the job's domains.
+// One recommended fix, aggregated across the job's domains/servers.
 interface FixBucket {
   action: HealthAction;
   domainIds: string[];
   domainNames: string[];
-  issueLabels: string[]; // e.g. ["MX records", "SPF"]
-  hasFail: boolean; // any affected indicator is a hard fail (vs warn)
+  issueLabels: string[];
+  hasFail: boolean;
 }
 
-// A manual issue (no auto-fix action) — surfaced with its instruction text.
+// A manual issue (no auto-fix) — surfaced with its remediation. Scopes are domain names or server IPs.
 interface ManualIssue {
   id: string;
   label: string;
   fix: string;
-  domainNames: string[];
+  hasFail: boolean;
+  scopes: string[];
 }
 
-function collect(domains: Domain[]): { fixes: FixBucket[]; manual: ManualIssue[] } {
+interface ServerIssues {
+  ip: string;
+  indicators: Indicator[];
+  repDomain: { id: string; name: string } | null;
+}
+
+function collect(domains: Domain[], servers: ServerIssues[]): { fixes: FixBucket[]; manual: ManualIssue[] } {
   const byAction = new Map<HealthAction, FixBucket>();
-  const manualById = new Map<string, ManualIssue>();
+  const manual = new Map<string, ManualIssue>();
 
+  const addFix = (action: HealthAction, domainId: string | null, domainName: string, label: string, isFail: boolean) => {
+    let b = byAction.get(action);
+    if (!b) {
+      b = { action, domainIds: [], domainNames: [], issueLabels: [], hasFail: false };
+      byAction.set(action, b);
+    }
+    if (domainId && !b.domainIds.includes(domainId)) {
+      b.domainIds.push(domainId);
+      b.domainNames.push(domainName);
+    }
+    if (!b.issueLabels.includes(label)) b.issueLabels.push(label);
+    if (isFail) b.hasFail = true;
+  };
+
+  const addManual = (key: string, label: string, fix: string, scope: string, isFail: boolean) => {
+    let m = manual.get(key);
+    if (!m) {
+      m = { id: key, label, fix, hasFail: false, scopes: [] };
+      manual.set(key, m);
+    }
+    if (!m.scopes.includes(scope)) m.scopes.push(scope);
+    if (isFail) m.hasFail = true;
+  };
+
+  // Domain (DNS-auth) issues.
   for (const d of domains) {
-    const indicators: Indicator[] = d.health?.indicators ?? [];
-    for (const ind of indicators) {
+    for (const ind of (d.health?.indicators ?? []) as Indicator[]) {
       if (ind.status !== "fail" && ind.status !== "warn") continue;
+      if (ind.action) addFix(ind.action, d.id, d.name, ind.label, ind.status === "fail");
+      else if (ind.fix) addManual(ind.id, ind.label, ind.fix, d.name, ind.status === "fail");
+    }
+  }
 
-      if (ind.action) {
-        let b = byAction.get(ind.action);
-        if (!b) {
-          b = { action: ind.action, domainIds: [], domainNames: [], issueLabels: [], hasFail: false };
-          byAction.set(ind.action, b);
-        }
-        if (!b.domainIds.includes(d.id)) {
-          b.domainIds.push(d.id);
-          b.domainNames.push(d.name);
-        }
-        if (!b.issueLabels.includes(ind.label)) b.issueLabels.push(ind.label);
-        if (ind.status === "fail") b.hasFail = true;
+  // Server (VPS/IP) issues — actionable ones run on a representative domain of that IP.
+  for (const s of servers) {
+    for (const ind of s.indicators) {
+      if (ind.status !== "fail" && ind.status !== "warn") continue;
+      if (ind.action && s.repDomain) {
+        addFix(ind.action, s.repDomain.id, s.repDomain.name, `${ind.label} · ${s.ip}`, ind.status === "fail");
       } else if (ind.fix) {
-        let m = manualById.get(ind.id);
-        if (!m) {
-          m = { id: ind.id, label: ind.label, fix: ind.fix, domainNames: [] };
-          manualById.set(ind.id, m);
-        }
-        if (!m.domainNames.includes(d.name)) m.domainNames.push(d.name);
+        addManual(`${ind.id}@${s.ip}`, `${ind.label} (server)`, ind.fix, s.ip, ind.status === "fail");
       }
     }
   }
 
-  const fixes = ACTION_ORDER.map((a) => byAction.get(a)).filter(Boolean) as FixBucket[];
-  // Criticals (hard fails) first.
-  fixes.sort((a, b) => Number(b.hasFail) - Number(a.hasFail));
-  return { fixes, manual: [...manualById.values()] };
+  const fixes = (ACTION_ORDER.map((a) => byAction.get(a)).filter(Boolean) as FixBucket[]).sort(
+    (a, b) => Number(b.hasFail) - Number(a.hasFail),
+  );
+  const manualList = [...manual.values()].sort((a, b) => Number(b.hasFail) - Number(a.hasFail));
+  return { fixes, manual: manualList };
 }
 
-function namesLabel(names: string[]): string {
-  if (names.length <= 3) return names.join(", ");
-  return `${names.slice(0, 3).join(", ")} +${names.length - 3} more`;
+function scopeLabel(scopes: string[]): string {
+  if (scopes.length <= 3) return scopes.join(", ");
+  return `${scopes.slice(0, 3).join(", ")} +${scopes.length - 3} more`;
 }
 
-// Job-level "Recommended fixes": groups the domains' health issues by the fix that resolves them
-// and runs each fix across only its affected domains, then re-scans the job.
+// Job-level troubleshooting results: every open issue across the job's domains AND servers, grouped
+// by the fix that resolves it (run across only the affected targets) with remediation for the rest.
 export function JobIssuesPanel({
   batchId,
   domains,
@@ -86,7 +107,22 @@ export function JobIssuesPanel({
   onChanged?: () => void;
 }) {
   const [runningAction, setRunningAction] = useState<HealthAction | null>(null);
-  const { fixes, manual } = collect(domains);
+
+  const { data: serverData } = useQuery({
+    queryKey: ["batch-server-health", batchId],
+    queryFn: () => getBatchServerHealth({ data: { batchId } }),
+  });
+
+  // Map each server IP to a representative domain (for running server fixes) and its issues.
+  const ipToRep = new Map<string, { id: string; name: string }>();
+  for (const d of domains) if (d.ipAddress && !ipToRep.has(d.ipAddress)) ipToRep.set(d.ipAddress, { id: d.id, name: d.name });
+  const servers: ServerIssues[] = (((serverData as any)?.servers ?? []) as any[]).map((s) => ({
+    ip: s.ipAddress,
+    indicators: (s.health?.indicators ?? []) as Indicator[],
+    repDomain: ipToRep.get(s.ipAddress) ?? null,
+  }));
+
+  const { fixes, manual } = collect(domains, servers);
 
   if (fixes.length === 0 && manual.length === 0) return null;
 
@@ -95,9 +131,8 @@ export function JobIssuesPanel({
     const n = bucket.domainIds.length;
     if (DESTRUCTIVE_ACTIONS.has(bucket.action)) {
       const verb = bucket.action === "provision" ? "wipe & re-provision" : "delete & recreate mailboxes for";
-      if (!confirm(`This will ${verb} ${n} domain${n === 1 ? "" : "s"}. Continue?`)) return;
+      if (!confirm(`This will ${verb} ${n} target${n === 1 ? "" : "s"}. Continue?`)) return;
     }
-
     setRunningAction(bucket.action);
     let ok = 0;
     let fail = 0;
@@ -111,17 +146,16 @@ export function JobIssuesPanel({
         fail++;
       }
     }
-
-    toast.loading(`Re-checking ${n} domain${n === 1 ? "" : "s"}…`, { id: "jobfix" });
+    toast.loading(`Re-checking ${n} target${n === 1 ? "" : "s"}…`, { id: "jobfix" });
     try {
       await runJobHealth({ data: { batchId } });
     } catch {
-      /* re-check failure is non-fatal; the fixes still ran */
+      /* non-fatal */
     }
     setRunningAction(null);
     onChanged?.();
     toast[fail ? "error" : "success"](
-      `${label}: ${ok} ok${fail ? `, ${fail} failed` : ""} across ${n} domain${n === 1 ? "" : "s"}.`,
+      `${label}: ${ok} ok${fail ? `, ${fail} failed` : ""}.`,
       { id: "jobfix", duration: 8000 },
     );
   };
@@ -130,36 +164,23 @@ export function JobIssuesPanel({
     <div className="rounded-xl border border-border bg-card">
       <div className="flex items-center gap-3 border-b border-border px-6 py-4">
         <Wrench className="h-5 w-5 text-muted-foreground" />
-        <h2 className="font-display text-base font-semibold text-foreground">Recommended fixes</h2>
-        <span className="text-xs text-muted-foreground">
-          Resolve issues across the job's domains in one click
-        </span>
+        <h2 className="font-display text-base font-semibold text-foreground">Troubleshooting</h2>
+        <span className="text-xs text-muted-foreground">Issues across this job's domains &amp; servers</span>
       </div>
 
-      {fixes.length > 0 ? (
+      {fixes.length > 0 && (
         <ul className="divide-y divide-border">
           {fixes.map((b) => (
             <li key={b.action} className="flex items-center gap-4 px-6 py-4">
-              <span
-                className={cn(
-                  "status-dot shrink-0",
-                  b.hasFail ? "text-destructive status-dot--pulse" : "text-warning",
-                )}
-              />
+              <span className={cn("status-dot shrink-0", b.hasFail ? "text-destructive status-dot--pulse" : "text-warning")} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                  {b.hasFail ? (
-                    <CircleAlert className="h-4 w-4 text-destructive" />
-                  ) : (
-                    <AlertTriangle className="h-4 w-4 text-warning" />
-                  )}
+                  {b.hasFail ? <CircleAlert className="h-4 w-4 text-destructive" /> : <AlertTriangle className="h-4 w-4 text-warning" />}
                   {ACTION_LABEL[b.action]}
-                  <span className="text-xs font-normal text-muted-foreground">
-                    fixes {b.issueLabels.join(" / ")}
-                  </span>
+                  <span className="text-xs font-normal text-muted-foreground">fixes {b.issueLabels.join(" / ")}</span>
                 </div>
                 <div className="mt-0.5 truncate text-xs text-muted-foreground" title={b.domainNames.join(", ")}>
-                  {b.domainIds.length} domain{b.domainIds.length === 1 ? "" : "s"}: {namesLabel(b.domainNames)}
+                  {b.domainIds.length} target{b.domainIds.length === 1 ? "" : "s"}: {scopeLabel(b.domainNames)}
                 </div>
               </div>
               <Button
@@ -169,33 +190,30 @@ export function JobIssuesPanel({
                 disabled={runningAction !== null}
                 onClick={() => runFix(b)}
               >
-                {runningAction === b.action ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Wrench className="h-4 w-4" />
-                )}
-                Fix {b.domainIds.length} domain{b.domainIds.length === 1 ? "" : "s"}
+                {runningAction === b.action ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4" />}
+                Fix {b.domainIds.length}
               </Button>
             </li>
           ))}
         </ul>
-      ) : null}
+      )}
 
       {manual.length > 0 && (
         <div className="border-t border-border px-6 py-4">
           <div className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-            Manual — no automatic fix
+            Needs your action — no automatic fix
           </div>
           <ul className="flex flex-col gap-3">
             {manual.map((m) => (
               <li key={m.id} className="text-sm">
-                <span className="font-medium text-foreground">{m.label}</span>
-                <span className="ml-2 text-xs text-muted-foreground">
-                  {m.domainNames.length} domain{m.domainNames.length === 1 ? "" : "s"}
-                </span>
-                <div className="mt-0.5 text-xs text-muted-foreground">{m.fix}</div>
-                <div className="truncate text-[11px] text-muted-foreground/80" title={m.domainNames.join(", ")}>
-                  {namesLabel(m.domainNames)}
+                <div className="flex items-center gap-2">
+                  <span className={cn("status-dot", m.hasFail ? "text-destructive" : "text-warning")} />
+                  <span className="font-medium text-foreground">{m.label}</span>
+                  <span className="text-xs text-muted-foreground">{m.scopes.length}×</span>
+                </div>
+                <div className="mt-0.5 ml-4 text-xs text-muted-foreground">{m.fix}</div>
+                <div className="ml-4 truncate text-[11px] text-muted-foreground/80" title={m.scopes.join(", ")}>
+                  {scopeLabel(m.scopes)}
                 </div>
               </li>
             ))}
