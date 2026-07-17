@@ -31,7 +31,12 @@ import {
   fixCreateApiKey,
   type SshTarget,
 } from "./server-fixes";
-import { buildRemediationPlan, type RemediationStep, type PlannerContext } from "./remediation-planner";
+import {
+  buildRemediationPlan,
+  type RemediationStep,
+  type RemediationPlan,
+  type PlannerContext,
+} from "./remediation-planner";
 import { ConsoleLog } from "./console-bus";
 
 export interface StepResult {
@@ -162,4 +167,104 @@ export const runRemediationPlan = createServerFn({ method: "POST" })
     log.info(`Done. ${ranSteps.filter((r) => r.status === "fixed").length} applied, ${remaining.length} still failing.`);
 
     return { ranSteps, remaining, plan, transcript: log.transcript() };
+  });
+
+// Collapse a batch's per-domain plans into shared server-target steps (run ONCE per IP, even
+// though N domains provisioned on that shared VPS each surfaced the same failing indicator) plus
+// domain-target steps (run once per domain — DNS/DKIM is domain-specific and never shared).
+// Dedup key is `${ipAddress}:${step.id}`: the same step id on two different IPs stays separate,
+// and a step with no server IP on file is skipped (nothing to SSH into).
+//
+// Pure — no I/O — so the collapsing rules are unit-tested directly (remediation-dedup.test.ts)
+// without a database or SSH mock.
+export function dedupePlanByServer(
+  perDomain: { domainId: string; ipAddress: string | null; plan: RemediationPlan }[],
+): {
+  serverSteps: { ipAddress: string; step: RemediationStep; domainId: string }[];
+  domainSteps: { domainId: string; step: RemediationStep }[];
+} {
+  const serverSteps: { ipAddress: string; step: RemediationStep; domainId: string }[] = [];
+  const domainSteps: { domainId: string; step: RemediationStep }[] = [];
+  const seen = new Set<string>(); // `${ip}:${stepId}`
+  for (const d of perDomain) {
+    for (const step of d.plan.steps) {
+      if (step.target === "server") {
+        if (!d.ipAddress) continue;
+        const key = `${d.ipAddress}:${step.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        serverSteps.push({ ipAddress: d.ipAddress, step, domainId: d.domainId });
+      } else {
+        domainSteps.push({ domainId: d.domainId, step });
+      }
+    }
+  }
+  return { serverSteps, domainSteps };
+}
+
+const jobInput = (d: unknown) =>
+  z.object({ batchId: z.string(), runId: z.string().trim().optional() }).parse(d);
+
+// Batch (whole-job) auto-heal: diagnose + plan every domain in the batch, collapse server-target
+// steps that share an IP down to one execution via dedupePlanByServer (so 50 domains on one shared
+// VPS restart Mailcow once, not 50 times), then run each deduped server step once and each domain
+// step per-domain, streaming to the live console as it goes. Mirrors runRemediationPlan's diagnose
+// -> plan -> execute -> report shape, fanned out across a batch instead of one domain — but does
+// NOT re-check afterwards (a batch re-check is a distinct, heavier operation left to a follow-up
+// "re-check all" rather than folded into this response).
+export const runJobRemediation = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .inputValidator(jobInput)
+  .handler(async ({ data, context }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { db, userId } = context as any;
+    if (!db) return { error: "Database not connected" };
+    const rows = await db
+      .select()
+      .from(domains)
+      .where(and(eq(domains.userId, userId), eq(domains.batchId, data.batchId)));
+
+    const log = new ConsoleLog(data.runId);
+    const secrets = await db.query.userSecrets.findFirst({ where: eq(userSecrets.userId, userId) });
+    const pctx: PlannerContext = { hasCloudflareToken: !!secrets?.cfApiToken };
+
+    // Fresh diagnose -> plan per domain. Dynamic import: diagnose.ts statically imports the health
+    // engine (health-server.ts -> @/lib/ssh -> ssh2), which must never sit at this module's top
+    // level (see file header).
+    const { diagnoseDomain } = await import("./diagnose");
+    const perDomain: { domainId: string; ipAddress: string | null; plan: RemediationPlan }[] = [];
+    for (const domain of rows) {
+      const { health, serverHealth } = await diagnoseDomain(db, userId, domain);
+      perDomain.push({
+        domainId: domain.id,
+        ipAddress: domain.ipAddress ?? null,
+        plan: buildRemediationPlan(health, serverHealth, pctx),
+      });
+    }
+
+    const { serverSteps, domainSteps } = dedupePlanByServer(perDomain);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const byId = new Map<string, any>(rows.map((d: any) => [d.id, d]));
+    const results: StepResult[] = [];
+    log.info(
+      `Job auto-heal for ${rows.length} domain(s): ${serverSteps.length} server step(s), ${domainSteps.length} domain step(s).`,
+    );
+
+    for (const { step, domainId } of serverSteps) {
+      const domain = byId.get(domainId);
+      const target: SshTarget | null =
+        domain.ipAddress && domain.sshPassword
+          ? { ipAddress: domain.ipAddress, sshUser: domain.sshUser || "root", sshPassword: domain.sshPassword }
+          : null;
+      log.cmd(`${step.label} (server ${domain.ipAddress})`);
+      results.push(await executeStep(step, { db, userId, domain, target }, log));
+    }
+    for (const { step, domainId } of domainSteps) {
+      const domain = byId.get(domainId);
+      log.cmd(`${step.label} (${domain.name})`);
+      results.push(await executeStep(step, { db, userId, domain, target: null }, log));
+    }
+
+    log.info(`Job auto-heal done: ${results.filter((r) => r.status === "fixed").length} applied.`);
+    return { results, transcript: log.transcript() };
   });
