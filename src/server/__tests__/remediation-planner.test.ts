@@ -33,6 +33,24 @@ describe("buildRemediationPlan", () => {
     expect(ids(p)).toEqual(["restartMailcow"]);
   });
 
+  it("box-down keeps manual items (blacklist survives alongside restartMailcow)", () => {
+    const p = buildRemediationPlan(null, mk({ containers: "fail", blacklist: "fail" }), {});
+    expect(ids(p)).toEqual(["restartMailcow"]);
+    expect(manualIds(p)).toContain("blacklist");
+  });
+
+  it("mailcow API warn → createApiKey, disruptive", () => {
+    const p = buildRemediationPlan(null, mk({ mailcow: "warn" }), {});
+    expect(ids(p)).toContain("createApiKey");
+    expect(p.steps.find((s) => s.id === "createApiKey")!.disruptive).toBe(true);
+  });
+
+  it("containers warn (not a short-circuit) → restartMailcow AND pushDns both run", () => {
+    const p = buildRemediationPlan(mk({ mx: "fail" }), mk({ containers: "warn", queue: "ok" }), { hasCloudflareToken: true });
+    expect(ids(p)).toContain("restartMailcow");
+    expect(ids(p)).toContain("pushDns");
+  });
+
   it("queue stuck + IPv6 stall → forcePostfixIPv4, NO separate flush", () => {
     const p = buildRemediationPlan(null, mk({ ipv6: "fail", queue: "fail", port25: "ok" }), {});
     expect(ids(p)).toContain("forcePostfixIPv4");
@@ -49,6 +67,7 @@ describe("buildRemediationPlan", () => {
     const p = buildRemediationPlan(null, mk({ queue: "fail", port25: "ok", blacklist: "fail" }), {});
     expect(ids(p)).not.toContain("flushQueue");
     expect(manualIds(p)).toContain("queue-reputation");
+    expect(manualIds(p)).not.toContain("blacklist");
   });
 
   it("queue stuck + everything else fine → flushQueue", () => {
@@ -81,6 +100,14 @@ describe("buildRemediationPlan", () => {
     // no flushQueue here (ipv6 present), but forcePostfixIPv4 comes after pushDns/syncDkim/openFirewall
     expect(order.indexOf("pushDns")).toBeLessThan(order.indexOf("forcePostfixIPv4"));
     expect(order.indexOf("openFirewall")).toBeLessThan(order.indexOf("forcePostfixIPv4"));
+  });
+
+  it("flushQueue is genuinely last in a multi-step plan", () => {
+    const p = buildRemediationPlan(mk({ mx: "fail" }), mk({ firewall: "fail", queue: "fail", port25: "ok" }), { hasCloudflareToken: true });
+    const order = ids(p);
+    expect(order[order.length - 1]).toBe("flushQueue");
+    expect(order).toContain("openFirewall");
+    expect(order).toContain("pushDns");
   });
 
   it("blacklist alone → manual, no step", () => {

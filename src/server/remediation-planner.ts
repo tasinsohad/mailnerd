@@ -58,6 +58,16 @@ export function buildRemediationPlan(
       disruptive: true,
     });
   } else {
+    if (sv("containers") === "warn") {
+      steps.push({
+        id: "restartMailcow",
+        action: "restartMailcow",
+        target: "server",
+        label: "Restart Mailcow",
+        why: "One or more Mailcow containers are unhealthy; restart the stack.",
+        disruptive: true,
+      });
+    }
     // Foundation
     if (sv("mailcow") === "warn") {
       steps.push({
@@ -77,14 +87,14 @@ export function buildRemediationPlan(
           action: "fixDns",
           target: "domain",
           label: "Un-proxy mail host",
-          why: "The mail host is behind Cloudflare's proxy; SMTP, IMAP and the API need it DNS-only.",
+          why: "Make the mail host resolve DNS-only to the server — fixes a Cloudflare-proxied, wrong, or missing A record.",
           disruptive: false,
         });
       } else {
         manual.push({
           id: "fixDns",
           label: "Un-proxy mail host",
-          why: "The mail host is Cloudflare-proxied but no Cloudflare token is configured. Set it DNS-only manually.",
+          why: "The mail host is proxied, wrong, or missing and no Cloudflare token is configured. Point it DNS-only at the server manually.",
         });
       }
     }
