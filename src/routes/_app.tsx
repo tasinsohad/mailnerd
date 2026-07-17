@@ -1,5 +1,5 @@
 import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { Globe, Server, Settings, Mail, FolderGit2 } from "lucide-react";
+import { Globe, Server, Settings, Mail, FolderGit2, Stethoscope } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_app")({
@@ -11,6 +11,7 @@ const nav: ReadonlyArray<{ to: string; label: string; icon: any; exact?: boolean
   { to: "/jobs", label: "Jobs", icon: FolderGit2 },
   { to: "/domains", label: "Domains", icon: Globe },
   { to: "/servers", label: "Servers", icon: Server },
+  { to: "/troubleshoot", label: "Troubleshoot", icon: Stethoscope },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

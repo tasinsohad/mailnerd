@@ -8,11 +8,13 @@ export interface SubdomainExportInput {
   domainName: string; // parent domain, e.g. example.com
   subdomainPrefix: string; // "web", or "@" for the apex
   subdomainFqdn: string; // fully-qualified host, e.g. web.example.com
+  ipAddress?: string | null; // VPS IP the domain resolves to, if provisioned
 }
 
 export interface SubdomainRow {
   domain: string;
   subdomain: string;
+  ip?: string; // VPS IP, only present when the domain has one
 }
 
 // Unique, apex-excluded, sorted-by-FQDN list of subdomains.
@@ -25,27 +27,40 @@ export function subdomainExportRows(items: SubdomainExportInput[]): SubdomainRow
     const key = it.subdomainFqdn.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    rows.push({ domain: it.domainName, subdomain: it.subdomainFqdn });
+    rows.push({
+      domain: it.domainName,
+      subdomain: it.subdomainFqdn,
+      ...(it.ipAddress ? { ip: it.ipAddress } : {}),
+    });
   }
   rows.sort((a, b) => a.subdomain.localeCompare(b.subdomain));
   return rows;
 }
 
-// Newline-separated FQDNs — the "copy" payload.
-export function subdomainListText(rows: SubdomainRow[]): string {
-  return rows.map((r) => r.subdomain).join("\n");
+// True if any row carries a VPS IP — gates the "include IPs" option in the UI.
+export function subdomainRowsHaveIps(rows: SubdomainRow[]): boolean {
+  return rows.some((r) => !!r.ip);
 }
 
-// RFC 4180-safe CSV with `domain,subdomain` columns. Hostnames never contain commas/quotes, but
-// we quote defensively so a stray value can't corrupt the file.
+// Newline-separated FQDNs — the "copy" payload. With `includeIp`, each line becomes
+// `subdomain<TAB>ip` so the two paste into adjacent spreadsheet columns.
+export function subdomainListText(rows: SubdomainRow[], includeIp = false): string {
+  return rows
+    .map((r) => (includeIp ? `${r.subdomain}\t${r.ip ?? ""}` : r.subdomain))
+    .join("\n");
+}
+
+// RFC 4180-safe CSV with `domain,subdomain` columns (plus `ip` when `includeIp`). Hostnames never
+// contain commas/quotes, but we quote defensively so a stray value can't corrupt the file.
 function esc(v: string): string {
   const s = String(v ?? "");
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export function buildSubdomainCsv(rows: SubdomainRow[]): string {
-  const header = ["domain", "subdomain"];
-  return [header, ...rows.map((r) => [r.domain, r.subdomain])]
-    .map((r) => r.map(esc).join(","))
-    .join("\n");
+export function buildSubdomainCsv(rows: SubdomainRow[], includeIp = false): string {
+  const header = includeIp ? ["domain", "subdomain", "ip"] : ["domain", "subdomain"];
+  const body = rows.map((r) =>
+    includeIp ? [r.domain, r.subdomain, r.ip ?? ""] : [r.domain, r.subdomain],
+  );
+  return [header, ...body].map((r) => r.map(esc).join(",")).join("\n");
 }

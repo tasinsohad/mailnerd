@@ -48,3 +48,31 @@ describe("buildSubdomainCsv", () => {
     );
   });
 });
+
+describe("VPS IP inclusion", () => {
+  const ipItems = [
+    { domainName: "example.com", subdomainPrefix: "web", subdomainFqdn: "web.example.com", ipAddress: "1.2.3.4" },
+    { domainName: "other.net", subdomainPrefix: "mail", subdomainFqdn: "mail.other.net", ipAddress: null },
+  ];
+
+  it("carries the ip onto rows only when present", () => {
+    const rows = subdomainExportRows(ipItems);
+    expect(rows).toEqual([
+      { domain: "other.net", subdomain: "mail.other.net" },
+      { domain: "example.com", subdomain: "web.example.com", ip: "1.2.3.4" },
+    ]);
+  });
+
+  it("appends tab-separated IPs to the copy text when asked", () => {
+    const rows = subdomainExportRows(ipItems);
+    expect(subdomainListText(rows, true)).toBe("mail.other.net\t\nweb.example.com\t1.2.3.4");
+    expect(subdomainListText(rows)).toBe("mail.other.net\nweb.example.com");
+  });
+
+  it("adds an ip column to the CSV when asked", () => {
+    const rows = subdomainExportRows(ipItems);
+    expect(buildSubdomainCsv(rows, true)).toBe(
+      "domain,subdomain,ip\nother.net,mail.other.net,\nexample.com,web.example.com,1.2.3.4",
+    );
+  });
+});

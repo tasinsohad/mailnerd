@@ -5,7 +5,14 @@ import type { DomainHealth, Indicator, HealthAction } from "./health-types";
 import { rollUp } from "./health-types";
 
 // Re-export the shared health types so existing importers of "@/server/health" keep working.
-export type { HealthStatus, HealthAction, Indicator, DomainHealth } from "./health-types";
+export type {
+  HealthStatus,
+  HealthAction,
+  Indicator,
+  DomainHealth,
+  FixSeverity,
+  FixGuidance,
+} from "./health-types";
 
 // Domain-level deliverability checks: the DNS-authentication records for each sending
 // subdomain (MX, SPF, DKIM key-match, DMARC) plus the mailbox count. The VPS/IP-level checks
@@ -44,9 +51,26 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
       }),
     );
     const okN = results.filter(Boolean).length;
-    if (okN === subs.length) add({ id, label, status: "ok", detail: `Present on all ${subs.length} subdomains.` });
-    else if (okN === 0) add({ id, label, status: "fail", detail: `Missing on all ${subs.length} subdomains.`, fix, action });
-    else add({ id, label, status: "warn", detail: `Present on ${okN}/${subs.length} subdomains.`, fix, action });
+    if (okN === subs.length)
+      add({ id, label, status: "ok", detail: `Present on all ${subs.length} subdomains.` });
+    else if (okN === 0)
+      add({
+        id,
+        label,
+        status: "fail",
+        detail: `Missing on all ${subs.length} subdomains.`,
+        fix,
+        action,
+      });
+    else
+      add({
+        id,
+        label,
+        status: "warn",
+        detail: `Present on ${okN}/${subs.length} subdomains.`,
+        fix,
+        action,
+      });
   };
 
   await agg(
@@ -54,7 +78,11 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
     "MX records",
     async (s) => {
       const mx = await doh(s, "MX");
-      return mx.some((m) => (m.trim().split(/\s+/).pop() || "").toLowerCase().replace(/\.$/, "") === mailHost.toLowerCase());
+      return mx.some(
+        (m) =>
+          (m.trim().split(/\s+/).pop() || "").toLowerCase().replace(/\.$/, "") ===
+          mailHost.toLowerCase(),
+      );
     },
     "Push DNS to set MX → mail host.",
     "pushDns",
@@ -88,19 +116,54 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
   // Mailbox count (this domain's planned inboxes vs what Mailcow reports).
   if (mailcowHostname && mailcowApiKey) {
     try {
-      const { json } = await mailcowRequest(mailcowHostname, mailcowApiKey, "get/mailbox/all", undefined, { timeoutMs: 8000 });
+      const { json } = await mailcowRequest(
+        mailcowHostname,
+        mailcowApiKey,
+        "get/mailbox/all",
+        undefined,
+        { timeoutMs: 8000 },
+      );
       const count = Array.isArray(json) ? json.length : 0;
       if (plannedInboxCount > 0 && count >= plannedInboxCount)
-        add({ id: "mailboxes", label: "Mailboxes", status: "ok", detail: `${count} of ${plannedInboxCount} planned mailboxes exist.` });
+        add({
+          id: "mailboxes",
+          label: "Mailboxes",
+          status: "ok",
+          detail: `${count} of ${plannedInboxCount} planned mailboxes exist.`,
+        });
       else if (count > 0)
-        add({ id: "mailboxes", label: "Mailboxes", status: "warn", detail: `${count} of ${plannedInboxCount || "?"} planned mailboxes exist.`, fix: "Run Set up / Recreate mailboxes.", action: "recreate" });
+        add({
+          id: "mailboxes",
+          label: "Mailboxes",
+          status: "warn",
+          detail: `${count} of ${plannedInboxCount || "?"} planned mailboxes exist.`,
+          fix: "Run Set up / Recreate mailboxes.",
+          action: "recreate",
+        });
       else
-        add({ id: "mailboxes", label: "Mailboxes", status: "fail", detail: `No mailboxes exist (planned ${plannedInboxCount || "?"}).`, fix: "Run Set up mailboxes.", action: "recreate" });
+        add({
+          id: "mailboxes",
+          label: "Mailboxes",
+          status: "fail",
+          detail: `No mailboxes exist (planned ${plannedInboxCount || "?"}).`,
+          fix: "Run Set up mailboxes.",
+          action: "recreate",
+        });
     } catch {
-      add({ id: "mailboxes", label: "Mailboxes", status: "skip", detail: "Could not query mailboxes." });
+      add({
+        id: "mailboxes",
+        label: "Mailboxes",
+        status: "skip",
+        detail: "Could not query mailboxes.",
+      });
     }
   } else {
-    add({ id: "mailboxes", label: "Mailboxes", status: "skip", detail: "Server not provisioned yet." });
+    add({
+      id: "mailboxes",
+      label: "Mailboxes",
+      status: "skip",
+      detail: "Server not provisioned yet.",
+    });
   }
 
   const { status, score } = rollUp(ind);
@@ -122,7 +185,8 @@ async function checkDkimMatch(
 
   const states = await Promise.all(
     subs.map(async (s): Promise<"match" | "mismatch" | "missing"> => {
-      const recName = s === name ? `dkim._domainkey.${name}` : `dkim._domainkey.${s.split(".")[0]}.${name}`;
+      const recName =
+        s === name ? `dkim._domainkey.${name}` : `dkim._domainkey.${s.split(".")[0]}.${name}`;
       let dnsTxt: string[] = [];
       try {
         dnsTxt = await doh(recName, "TXT");
@@ -131,7 +195,13 @@ async function checkDkimMatch(
       }
       let pubkey = "";
       try {
-        const { json } = await mailcowRequest(mailcowHostname, mailcowApiKey, `get/dkim/${s}`, undefined, { timeoutMs: 8000 });
+        const { json } = await mailcowRequest(
+          mailcowHostname,
+          mailcowApiKey,
+          `get/dkim/${s}`,
+          undefined,
+          { timeoutMs: 8000 },
+        );
         pubkey = String((json as any)?.pubkey ?? "");
       } catch {
         /* no key from mailcow */
@@ -148,13 +218,33 @@ async function checkDkimMatch(
   const missingN = states.filter((x) => x === "missing").length;
 
   if (matchN === subs.length) {
-    add({ id: "dkim", label: "DKIM", status: "ok", detail: `Key published and matches Mailcow on all ${subs.length} subdomains.` });
+    add({
+      id: "dkim",
+      label: "DKIM",
+      status: "ok",
+      detail: `Key published and matches Mailcow on all ${subs.length} subdomains.`,
+    });
   } else if (missingN === subs.length) {
-    add({ id: "dkim", label: "DKIM", status: "fail", detail: `DKIM key missing on all ${subs.length} subdomains.`, fix: "Run Sync DKIM to publish the DKIM key.", action: "syncDkim" });
+    add({
+      id: "dkim",
+      label: "DKIM",
+      status: "fail",
+      detail: `DKIM key missing on all ${subs.length} subdomains.`,
+      fix: "Run Sync DKIM to publish the DKIM key.",
+      action: "syncDkim",
+    });
   } else {
     const bits = [];
-    if (mismatchN) bits.push(`${mismatchN} published but NOT matching Mailcow's current key (rotated?)`);
+    if (mismatchN)
+      bits.push(`${mismatchN} published but NOT matching Mailcow's current key (rotated?)`);
     if (missingN) bits.push(`${missingN} missing`);
-    add({ id: "dkim", label: "DKIM", status: "warn", detail: `${matchN}/${subs.length} matching — ${bits.join(", ")}.`, fix: "Run Sync DKIM to publish Mailcow's current key.", action: "syncDkim" });
+    add({
+      id: "dkim",
+      label: "DKIM",
+      status: "warn",
+      detail: `${matchN}/${subs.length} matching — ${bits.join(", ")}.`,
+      fix: "Run Sync DKIM to publish Mailcow's current key.",
+      action: "syncDkim",
+    });
   }
 }

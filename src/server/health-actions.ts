@@ -31,7 +31,13 @@ async function appendHistory(
     const rows = await db
       .select({ id: healthHistory.id })
       .from(healthHistory)
-      .where(and(eq(healthHistory.userId, userId), eq(healthHistory.scope, scope), eq(healthHistory.targetKey, targetKey)))
+      .where(
+        and(
+          eq(healthHistory.userId, userId),
+          eq(healthHistory.scope, scope),
+          eq(healthHistory.targetKey, targetKey),
+        ),
+      )
       .orderBy(desc(healthHistory.checkedAt));
     const excess = rows.slice(100).map((r: any) => r.id);
     if (excess.length) await db.delete(healthHistory).where(inArray(healthHistory.id, excess));
@@ -46,7 +52,9 @@ async function runDomainOne(db: any, domain: any): Promise<DomainHealth> {
     .select()
     .from(plannedInboxes)
     .where(eq(plannedInboxes.domainId, domain.id));
-  const subdomains = Array.from(new Set(inboxes.map((i: any) => String(i.subdomainFqdn)))) as string[];
+  const subdomains = Array.from(
+    new Set(inboxes.map((i: any) => String(i.subdomainFqdn))),
+  ) as string[];
 
   const health = await checkDomainHealth({
     name: domain.name,
@@ -56,7 +64,10 @@ async function runDomainOne(db: any, domain: any): Promise<DomainHealth> {
     plannedInboxCount: inboxes.length,
   });
 
-  await db.update(domains).set({ health, healthCheckedAt: new Date() }).where(eq(domains.id, domain.id));
+  await db
+    .update(domains)
+    .set({ health, healthCheckedAt: new Date() })
+    .where(eq(domains.id, domain.id));
   await appendHistory(db, domain.userId, "domain", domain.id, domain.name, health);
   return health;
 }
@@ -101,6 +112,34 @@ async function runServerOne(db: any, userId: string, rep: any): Promise<DomainHe
   return health;
 }
 
+// How many checks a sweep runs at once. Domains are DNS/HTTP-bound so they fan out wider; servers
+// each hold an SSH session and run real commands, so they stay tighter.
+const DOMAIN_CONCURRENCY = 8;
+const SERVER_CONCURRENCY = 4;
+
+// Run tasks with bounded concurrency. A sweep used to await each domain, then each server, strictly
+// one at a time: every check is mostly waiting on DNS/SSH/HTTP, so on a real account that serialised
+// into minutes of dead time ("Re-check all" spinning with nothing to show). The cap keeps us from
+// opening an unbounded number of SSH sessions / API calls at once.
+export async function mapLimit<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<unknown>,
+): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      try {
+        await fn(item);
+      } catch {
+        /* one bad domain/server must not abort the sweep */
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
 // Group a batch's domains by IP, choosing the best SSH/Mailcow representative for each server.
 function representativesByIp(rows: any[]): any[] {
   const byIp = new Map<string, any>();
@@ -126,7 +165,9 @@ function summarize(rows: any[]) {
       }
     }
   }
-  const topIssues = Object.values(issueTally).sort((a, b) => b.count - a.count).slice(0, 5);
+  const topIssues = Object.values(issueTally)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
   return { total: rows.length, counts, topIssues };
 }
 
@@ -162,22 +203,12 @@ export const runJobHealth = createServerFn({ method: "POST" })
       .from(domains)
       .where(and(eq(domains.userId, userId), eq(domains.batchId, data.batchId)));
 
-    // Per-domain DNS checks.
-    for (const d of rows) {
-      try {
-        await runDomainOne(db, d);
-      } catch {
-        /* per-domain failure reflected as unknown; continue */
-      }
-    }
-    // Per-server checks, deduped by IP.
-    for (const rep of representativesByIp(rows)) {
-      try {
-        await runServerOne(db, userId, rep);
-      } catch {
-        /* continue */
-      }
-    }
+    // Per-domain DNS checks, then per-server checks deduped by IP. Both fanned out: a job with
+    // many domains used to run these one at a time and take minutes.
+    await mapLimit(rows, DOMAIN_CONCURRENCY, (d) => runDomainOne(db, d));
+    await mapLimit(representativesByIp(rows), SERVER_CONCURRENCY, (rep) =>
+      runServerOne(db, userId, rep),
+    );
 
     const fresh = await db
       .select()
@@ -193,20 +224,11 @@ export const runAllHealth = createServerFn({ method: "POST" })
     const { db, userId } = context as any;
     if (!db) return { error: "Database not connected" };
     const rows = await db.select().from(domains).where(eq(domains.userId, userId));
-    for (const d of rows) {
-      try {
-        await runDomainOne(db, d);
-      } catch {
-        /* continue */
-      }
-    }
-    for (const rep of representativesByIp(rows)) {
-      try {
-        await runServerOne(db, userId, rep);
-      } catch {
-        /* continue */
-      }
-    }
+    // Domains first (DNS-bound), then servers (SSH-bound) — both fanned out rather than serialised.
+    await mapLimit(rows, DOMAIN_CONCURRENCY, (d) => runDomainOne(db, d));
+    await mapLimit(representativesByIp(rows), SERVER_CONCURRENCY, (rep) =>
+      runServerOne(db, userId, rep),
+    );
     const fresh = await db.select().from(domains).where(eq(domains.userId, userId));
     return { summary: summarize(fresh) };
   });
@@ -217,9 +239,19 @@ export const getHealthOverview = createServerFn({ method: "GET" })
   .handler(async ({ context }) => {
     const { db, userId } = context as any;
     if (!db)
-      return { total: 0, counts: { healthy: 0, warning: 0, critical: 0, unknown: 0 }, topIssues: [], lastCheckedAt: null };
+      return {
+        total: 0,
+        counts: { healthy: 0, warning: 0, critical: 0, unknown: 0 },
+        topIssues: [],
+        lastCheckedAt: null,
+      };
     const rows = await db.select().from(domains).where(eq(domains.userId, userId));
-    const lastCheckedAt = rows.map((r: any) => r.healthCheckedAt).filter(Boolean).sort().pop() ?? null;
+    const lastCheckedAt =
+      rows
+        .map((r: any) => r.healthCheckedAt)
+        .filter(Boolean)
+        .sort()
+        .pop() ?? null;
     return { ...summarize(rows), lastCheckedAt };
   });
 
@@ -256,11 +288,18 @@ export const getHealthHistory = createServerFn({ method: "GET" })
       const curr = rows[0];
       const prev = rows[1];
       const diff = curr
-        ? diffSnapshots((prev?.indicators as IndicatorSnap[]) ?? null, (curr.indicators as IndicatorSnap[]) ?? [])
+        ? diffSnapshots(
+            (prev?.indicators as IndicatorSnap[]) ?? null,
+            (curr.indicators as IndicatorSnap[]) ?? [],
+          )
         : { regressed: [], recovered: [] };
 
       // Return chronological (oldest → newest) for the sparkline.
-      return { history: rows.slice().reverse(), regressed: diff.regressed, recovered: diff.recovered };
+      return {
+        history: rows.slice().reverse(),
+        regressed: diff.regressed,
+        recovered: diff.recovered,
+      };
     } catch {
       return { history: [], regressed: [], recovered: [] };
     }
@@ -278,7 +317,9 @@ export const getBatchServerHealth = createServerFn({ method: "GET" })
         .select()
         .from(domains)
         .where(and(eq(domains.userId, userId), eq(domains.batchId, data.batchId)));
-      const ips = Array.from(new Set(rows.map((d: any) => d.ipAddress).filter(Boolean))) as string[];
+      const ips = Array.from(
+        new Set(rows.map((d: any) => d.ipAddress).filter(Boolean)),
+      ) as string[];
       if (ips.length === 0) return { servers: [] };
       const sh = await db
         .select()

@@ -1,0 +1,1039 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { useState, useRef, useEffect, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Stethoscope,
+  Loader2,
+  Play,
+  ChevronDown,
+  Server,
+  ShieldCheck,
+  Wrench,
+  Copy,
+  Check,
+  Square,
+  Terminal,
+  Download,
+  FileText,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { toast } from "sonner";
+import { troubleshootServer, quickFixServer, getServerLog } from "@/server/troubleshoot";
+import { sortByPriority } from "@/server/health-checks";
+import type {
+  DomainHealth,
+  HealthStatus,
+  Indicator,
+  FixGuidance,
+  FixSeverity,
+} from "@/server/health";
+
+// Indicator ids Quick fix knows how to remediate: the Cloudflare un-proxy cascade (mailhost,
+// fcrdns, submission), a Mailcow restart (containers, listeners, mailcow), the host firewall,
+// and a queue flush.
+const FIXABLE_IDS = new Set([
+  "mailhost",
+  "fcrdns",
+  "submission",
+  "containers",
+  "listeners",
+  "mailcow",
+  "firewall",
+  "queue",
+  "maillog",
+  "ipv6",
+]);
+
+export const Route = createFileRoute("/_app/troubleshoot")({
+  component: TroubleshootPage,
+});
+
+const DOT: Record<HealthStatus, string> = {
+  ok: "text-success",
+  warn: "text-warning",
+  fail: "text-destructive",
+  skip: "text-muted-foreground",
+};
+
+const SEVERITY: Record<FixSeverity, { label: string; cls: string }> = {
+  info: { label: "Info", cls: "border-border text-muted-foreground" },
+  warning: { label: "Warning", cls: "border-warning/40 bg-warning/10 text-warning" },
+  high: { label: "High", cls: "border-destructive/40 bg-destructive/10 text-destructive" },
+  critical: { label: "Critical", cls: "border-destructive/60 bg-destructive/15 text-destructive" },
+};
+
+const OVERALL: Record<string, { color: string; label: string }> = {
+  healthy: { color: "text-success", label: "Healthy" },
+  warning: { color: "text-warning", label: "Needs attention" },
+  critical: { color: "text-destructive", label: "Critical" },
+  unknown: { color: "text-muted-foreground", label: "Inconclusive" },
+};
+
+// A labelled group inside the guidance panel. Sentence-case, on the type scale — deliberately not
+// a tracked-uppercase kicker: one of those above every group is scaffolding, not wayfinding.
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <h4 className="text-xs font-semibold text-foreground">{title}</h4>
+      {children}
+    </div>
+  );
+}
+
+// Literal machine text — commands, DNS records, log lines — rendered on the console material.
+// One material for anything the machine says or you'd paste into a shell; light surfaces stay for
+// UI chrome. Reuses the design system's .console instrument rather than inventing a code style.
+function CodeBlock({ title, lines }: { title: string; lines: string[] }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("Couldn't copy to clipboard");
+    }
+  };
+  return (
+    <div className="console overflow-hidden">
+      <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-1.5">
+        <span className="font-sans text-xs font-medium text-white/55">{title}</span>
+        <button
+          onClick={copy}
+          className="-m-1 rounded p-1 text-white/55 transition-colors duration-150 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+          title="Copy to clipboard"
+          aria-label={`Copy ${title}`}
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+      </div>
+      <pre className="overflow-x-auto px-3 py-2.5 text-white/85">{lines.join("\n")}</pre>
+    </div>
+  );
+}
+
+// The expanded detail for a row: severity, explanation, causes, steps, commands, DNS, verification.
+// A recessed well, not a card — this already lives inside the results card, and a bordered box here
+// (holding further bordered code blocks) would be cards three deep. The inset surface + hairline
+// says "revealed detail" without adding another frame.
+function GuidancePanel({ guidance, fallback }: { guidance?: FixGuidance; fallback?: string }) {
+  if (!guidance) {
+    return fallback ? (
+      <div className="reveal mt-3 border-t border-border bg-muted/50 px-6 py-3 text-sm text-muted-foreground">
+        <span className="font-medium text-foreground">How to fix: </span>
+        {fallback}
+      </div>
+    ) : null;
+  }
+  return (
+    <div className="reveal mt-3 flex flex-col gap-4 border-t border-border bg-muted/50 px-6 py-4">
+      {/* Body copy capped for readability; code blocks below run full width on purpose. */}
+      <p className="max-w-[70ch] text-sm leading-relaxed text-muted-foreground text-pretty">
+        {guidance.explanation}
+      </p>
+
+      {guidance.causes?.length ? (
+        <Section title="Likely causes">
+          <ul className="max-w-[70ch] list-disc space-y-1 pl-4 text-sm text-muted-foreground marker:text-muted-foreground/50">
+            {guidance.causes.map((c, i) => (
+              <li key={i} className="pl-0.5">
+                {c}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+
+      {guidance.steps?.length ? (
+        <Section title="How to fix">
+          <ol className="max-w-[70ch] list-decimal space-y-1.5 pl-4 text-sm text-muted-foreground marker:font-medium marker:text-muted-foreground/70">
+            {guidance.steps.map((s, i) => (
+              <li key={i} className="pl-0.5">
+                {s}
+              </li>
+            ))}
+          </ol>
+        </Section>
+      ) : null}
+
+      {guidance.logs?.length ? (
+        <CodeBlock title="Recent log lines from your server" lines={guidance.logs} />
+      ) : null}
+
+      {guidance.commands?.length ? (
+        <CodeBlock title="Commands to run" lines={guidance.commands} />
+      ) : null}
+
+      {guidance.dns?.length ? <CodeBlock title="DNS configuration" lines={guidance.dns} /> : null}
+
+      {guidance.verification?.length ? (
+        // A to-do list, NOT results. Empty boxes in a muted colour on purpose: green ticks here
+        // would read as "these already passed", which is exactly backwards while the check fails.
+        <Section title="Confirm after fixing">
+          <ul className="max-w-[70ch] space-y-1.5 text-sm text-muted-foreground">
+            {guidance.verification.map((v, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <Square className="mt-[3px] h-3.5 w-3.5 shrink-0 text-muted-foreground/55" />
+                <span>{v}</span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+
+      {guidance.nextStep ? (
+        <p className="max-w-[70ch] text-sm text-muted-foreground">
+          <span className="font-semibold text-foreground">Next step. </span>
+          {guidance.nextStep}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+// Read-only indicator list — no one-click fixes here, since we don't own this server. Each row
+// expands to a full "How to Fix" guidance panel (severity, causes, steps, commands, verification).
+function IndicatorRows({
+  indicators,
+  onFix,
+  busy,
+}: {
+  indicators: Indicator[];
+  onFix?: (id: string) => void;
+  busy?: boolean;
+}) {
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  return (
+    <ul className="divide-y divide-border">
+      {sortByPriority(indicators).map((ind) => {
+        const isOpen = !!open[ind.id];
+        const expandable = !!(ind.guidance || ind.fix);
+        const sev = ind.guidance ? SEVERITY[ind.guidance.severity] : null;
+        // We can actually run this one's fix on the server, so offer it right on the row.
+        const canFix =
+          !!onFix && (ind.status === "fail" || ind.status === "warn") && FIXABLE_IDS.has(ind.id);
+        const toggle = () => expandable && setOpen((o) => ({ ...o, [ind.id]: !o[ind.id] }));
+        return (
+          <li key={ind.id} className={cn(isOpen && "bg-muted/25")}>
+            {/* The whole row is the hit target — a 16px chevron is a needlessly small one. */}
+            <div
+              role={expandable ? "button" : undefined}
+              tabIndex={expandable ? 0 : undefined}
+              aria-expanded={expandable ? isOpen : undefined}
+              onClick={toggle}
+              onKeyDown={(e) => {
+                if (!expandable) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  toggle();
+                }
+              }}
+              className={cn(
+                "flex items-center gap-3 px-6 py-3 transition-colors duration-150",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                expandable && "cursor-pointer hover:bg-muted/40",
+              )}
+            >
+              <span
+                className={cn(
+                  "status-dot shrink-0",
+                  DOT[ind.status],
+                  ind.status === "fail" && "status-dot--pulse",
+                )}
+              />
+              {/* Label + detail share the elastic space and stack when the column gets narrow;
+                  min-w-0 lets them actually shrink instead of forcing the actions to wrap away. */}
+              <div className="flex min-w-0 flex-1 flex-col gap-x-3 gap-y-0.5 sm:flex-row sm:items-baseline">
+                <span className="shrink-0 text-sm font-medium text-foreground sm:w-40">
+                  {ind.label}
+                </span>
+                <span className="min-w-0 flex-1 text-sm text-muted-foreground">{ind.detail}</span>
+              </div>
+              {/* Actions stay pinned to the row at every width — a Fix button that wraps onto its
+                  own line reads as belonging to the next check. */}
+              <div className="flex shrink-0 items-center gap-2">
+                {sev && ind.status !== "ok" && (
+                  <span
+                    className={cn(
+                      "hidden rounded-full border px-2 py-0.5 text-xs font-medium sm:inline",
+                      sev.cls,
+                    )}
+                  >
+                    {sev.label}
+                  </span>
+                )}
+                {canFix && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2.5 text-xs"
+                    disabled={busy}
+                    // Stop the click bubbling to the row toggle underneath.
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onFix!(ind.id);
+                    }}
+                    title="Run this fix on the server now"
+                  >
+                    <Wrench aria-hidden className="h-3 w-3" />
+                    Fix
+                  </Button>
+                )}
+                {expandable && (
+                  <ChevronDown
+                    aria-hidden
+                    className={cn(
+                      "h-4 w-4 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
+                      isOpen && "rotate-180",
+                    )}
+                  />
+                )}
+              </div>
+            </div>
+            {isOpen && <GuidancePanel guidance={ind.guidance} fallback={ind.fix} />}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+type ConsoleLine = { kind: "cmd" | "out" | "info" | "error"; text: string };
+
+// Subscribe to a run's console BEFORE starting it, so no output is missed. The runId is generated
+// here (client-side) precisely so the stream can exist before the server begins emitting.
+function openConsole(onLine: (fn: (prev: ConsoleLine[]) => ConsoleLine[]) => void): {
+  runId: string;
+  close: () => void;
+} {
+  const runId = globalThis.crypto?.randomUUID?.() ?? `run-${Math.random().toString(36).slice(2)}`;
+  let es: EventSource | null = null;
+  try {
+    es = new EventSource(`/api/sse?runId=${encodeURIComponent(runId)}`);
+    es.onmessage = (e) => {
+      try {
+        const line = JSON.parse(e.data) as ConsoleLine;
+        if (line?.text) onLine((prev) => [...prev, line]);
+      } catch {
+        /* ignore malformed frames */
+      }
+    };
+    // The transcript in the response is the fallback — don't surface stream hiccups.
+    es.onerror = () => {};
+  } catch {
+    es = null;
+  }
+  return { runId, close: () => es?.close() };
+}
+
+// Tones for the console's own dark canvas — these can't reference the page's ink tokens, which
+// invert with the theme. The instrument stays dark, so its palette is fixed to it.
+const LINE_TONE: Record<ConsoleLine["kind"], string> = {
+  cmd: "text-terminal-foreground", // what we ran — the instrument's signal green
+  out: "text-white/85", // what the server said
+  info: "text-white/50", // our own narration
+  error: "text-[oklch(0.72_0.19_25)]", // a red that survives the dark canvas
+};
+
+// Flatten the console to plain text — what Copy/Download hand over.
+function consoleText(lines: ConsoleLine[]): string {
+  return lines.map((l) => (l.kind === "cmd" ? `$ ${l.text}` : l.text)).join("\n");
+}
+
+// Save text to a file the user can attach or keep.
+function downloadText(filename: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Live terminal for a run: shows each command we send and the server's output as it arrives.
+function LiveConsole({
+  lines,
+  running,
+  filenameBase,
+}: {
+  lines: ConsoleLine[];
+  running: boolean;
+  filenameBase: string;
+}) {
+  const endRef = useRef<HTMLDivElement>(null);
+  const [stick, setStick] = useState(true);
+  const [copied, setCopied] = useState(false);
+
+  // Follow the tail while it streams, unless the user has scrolled up to read something.
+  useEffect(() => {
+    if (stick) endRef.current?.scrollIntoView({ block: "end" });
+  }, [lines, stick]);
+
+  const copyAll = async () => {
+    try {
+      await navigator.clipboard.writeText(consoleText(lines));
+      setCopied(true);
+      toast.success(`Copied ${lines.length} line${lines.length === 1 ? "" : "s"}`);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("Couldn't copy to clipboard");
+    }
+  };
+
+  return (
+    // The console is the design system's instrument (.console): dark canvas + mono, in both
+    // themes. It's the one surface that is literally the machine talking.
+    <div className="console overflow-hidden">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-b border-white/10 px-4 py-2.5">
+        <Terminal aria-hidden className="h-4 w-4 text-white/55" />
+        <h3 className="font-sans text-sm font-semibold text-white/90">Console</h3>
+        {running && <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin text-white/55" />}
+        <span className="ml-auto font-sans text-xs tabular-nums text-white/55">
+          {lines.length} line{lines.length === 1 ? "" : "s"}
+        </span>
+        <button
+          onClick={() => setStick((s) => !s)}
+          aria-pressed={stick}
+          className={cn(
+            "rounded px-2 py-1 font-sans text-xs transition-colors duration-150",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
+            stick ? "text-terminal-foreground" : "text-white/55 hover:text-white/80",
+          )}
+          title={stick ? "Following new output — click to pause" : "Paused — click to follow"}
+        >
+          {stick ? "Following" : "Paused"}
+        </button>
+        <button
+          onClick={copyAll}
+          disabled={lines.length === 0}
+          className="inline-flex items-center gap-1.5 rounded border border-white/15 px-2 py-1 font-sans text-xs text-white/80 transition-colors duration-150 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:pointer-events-none disabled:opacity-40"
+          title="Copy the whole console"
+        >
+          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          Copy
+        </button>
+        <button
+          onClick={() => downloadText(`${filenameBase}-console.log`, consoleText(lines))}
+          disabled={lines.length === 0}
+          className="inline-flex items-center gap-1.5 rounded border border-white/15 px-2 py-1 font-sans text-xs text-white/80 transition-colors duration-150 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:pointer-events-none disabled:opacity-40"
+          title="Download the whole console"
+        >
+          <Download className="h-3 w-3" />
+          Download
+        </button>
+      </div>
+      <div
+        className="max-h-[22rem] overflow-auto px-4 py-3"
+        onWheel={() => setStick(false)}
+        role="log"
+        aria-live="polite"
+        aria-label="Server console output"
+      >
+        {lines.length === 0 ? (
+          <p className="py-6 text-center text-white/40">Waiting for output…</p>
+        ) : (
+          <pre className="whitespace-pre-wrap break-words">
+            {lines.map((l, i) => (
+              <div key={i} className={LINE_TONE[l.kind]}>
+                {l.kind === "cmd" ? (
+                  <>
+                    <span className="select-none text-white/30">$ </span>
+                    {l.text}
+                  </>
+                ) : (
+                  l.text
+                )}
+              </div>
+            ))}
+          </pre>
+        )}
+        <div ref={endRef} />
+      </div>
+    </div>
+  );
+}
+
+function TroubleshootPage() {
+  const [form, setForm] = useState({
+    ipAddress: "",
+    sshUser: "root",
+    sshPassword: "",
+    mailcowHostname: "",
+    mailcowApiKey: "",
+    sendingDomain: "",
+  });
+  // Read the Mailcow API key off the server over SSH when the user hasn't supplied one.
+  const [fetchApiKey, setFetchApiKey] = useState(true);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [fixing, setFixing] = useState(false);
+  const [consoleLines, setConsoleLines] = useState<ConsoleLine[]>([]);
+  const [logBusy, setLogBusy] = useState(false);
+  const [result, setResult] = useState<{
+    health: DomainHealth;
+    mailcowHostname: string | null;
+    hostnameAutodetected: boolean;
+    sendingDomain: string | null;
+    apiKeyAutodetected: boolean;
+    apiKeySource: "mailcow.conf" | "database" | "provided" | null;
+    apiKeyRestricted: boolean;
+    apiAllowFrom: string | null;
+    apiKeyWanted: boolean;
+  } | null>(null);
+
+  const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  const run = async (opts?: { silent?: boolean }) => {
+    if (!form.ipAddress.trim() || !form.sshPassword) {
+      toast.error("Enter the server IP and SSH password.");
+      return;
+    }
+    setBusy(true);
+    setResult(null);
+    setConsoleLines([]);
+    const { runId, close } = openConsole(setConsoleLines);
+    try {
+      const res: any = await troubleshootServer({
+        data: {
+          ipAddress: form.ipAddress.trim(),
+          sshUser: form.sshUser.trim() || "root",
+          sshPassword: form.sshPassword,
+          mailcowHostname: form.mailcowHostname.trim() || undefined,
+          mailcowApiKey: form.mailcowApiKey.trim() || undefined,
+          sendingDomain: form.sendingDomain.trim() || undefined,
+          fetchApiKey,
+          runId,
+        },
+      });
+      // Fall back to the transcript if the live stream never connected.
+      if (Array.isArray(res?.transcript) && res.transcript.length) {
+        setConsoleLines((prev) => (prev.length > 1 ? prev : res.transcript));
+      }
+      if (res?.error) {
+        toast.error(res.error);
+        return null;
+      }
+      setResult(res);
+      if (!opts?.silent) toast.success("Diagnostics complete");
+      return res;
+    } catch (e: any) {
+      toast.error(e?.message ?? "Diagnostics failed");
+      return null;
+    } finally {
+      close();
+      setBusy(false);
+    }
+  };
+
+  // Indicators Quick fix can act on right now.
+  const fixableIndicators =
+    result?.health.indicators.filter(
+      (i) => (i.status === "fail" || i.status === "warn") && FIXABLE_IDS.has(i.id),
+    ) ?? [];
+  // A missing API key isn't an indicator failure (we simply couldn't check), but Quick fix can
+  // create one — so it counts as fixable work.
+  const canCreateApiKey = !!result?.apiKeyWanted && !result?.apiKeyAutodetected;
+  const allFixableIds = [
+    ...fixableIndicators.map((i) => i.id),
+    ...(canCreateApiKey ? ["apikey"] : []),
+  ];
+  const fixableCount = allFixableIds.length;
+
+  // Spell out exactly what will change before touching anything — these run commands on the
+  // server, change live DNS, restart mail services and can add API access. Asked once, up front;
+  // the repair loop may then run several rounds without re-prompting.
+  const confirmPlan = (fixableIds: string[]): boolean => {
+    const ids = new Set(fixableIds);
+    const planned: string[] = [];
+    if (["mailhost", "fcrdns", "submission"].some((i) => ids.has(i)))
+      planned.push(
+        `un-proxy the mail host${result?.mailcowHostname ? ` (${result.mailcowHostname})` : ""} in Cloudflare`,
+      );
+    if (["containers", "listeners", "mailcow"].some((i) => ids.has(i)))
+      planned.push("restart the Mailcow stack (brief mail interruption)");
+    if (ids.has("firewall")) planned.push("open the mail ports on the server firewall (ufw)");
+    if (ids.has("ipv6"))
+      planned.push(
+        "set Postfix to IPv4-only so it stops stalling on IPv6, restart it, and retry the queue",
+      );
+    else if (ids.has("queue") || ids.has("maillog"))
+      planned.push("flush the mail queue (retry now)");
+    if (ids.has("apikey"))
+      planned.push(
+        "create a Mailcow API key on the server (API access limited to this app's IP; applying it recreates Mailcow's containers)",
+      );
+    if (!planned.length) return true;
+    return confirm(
+      `This will run commands on the server, re-checking and retrying until the checks pass:\n\n• ${planned.join("\n• ")}\n\nContinue?`,
+    );
+  };
+
+  const quickFix = async (fixableIds: string[]) => {
+    if (!result || fixableIds.length === 0) return null;
+    setFixing(true);
+    setConsoleLines([]);
+    toast.loading("Applying fixes…", { id: "quickfix" });
+    const { runId, close } = openConsole(setConsoleLines);
+
+    try {
+      const res: any = await quickFixServer({
+        data: {
+          ipAddress: form.ipAddress.trim(),
+          sshUser: form.sshUser.trim() || "root",
+          sshPassword: form.sshPassword,
+          mailcowHostname: result.mailcowHostname || form.mailcowHostname.trim() || undefined,
+          issues: fixableIds,
+          runId,
+        },
+      });
+      // If the live stream never connected, fall back to the full transcript so the console
+      // still shows exactly what ran.
+      if (Array.isArray(res?.transcript) && res.transcript.length) {
+        setConsoleLines((prev) => (prev.length ? prev : res.transcript));
+      }
+      const fixes = (res?.results ?? []) as { label: string; status: string; detail: string }[];
+      const applied = fixes.filter((f) => f.status === "fixed").length;
+      if (fixes.length === 0) {
+        toast.info("Nothing to auto-fix.", { id: "quickfix" });
+      } else if (applied > 0) {
+        toast.success(`Applied ${applied} fix${applied === 1 ? "" : "es"} — re-checking…`, {
+          id: "quickfix",
+        });
+      } else if (fixes.every((f) => f.status === "noop")) {
+        // Everything was already in the desired state — nothing needed changing.
+        toast.info(fixes[0].detail, { id: "quickfix", duration: 7000 });
+      } else {
+        // Couldn't apply — surface the most actionable reason (skipped/failed over noop).
+        const reason =
+          fixes.find((f) => f.status === "skipped" || f.status === "failed") ?? fixes[0];
+        toast.warning(reason.detail, { id: "quickfix", duration: 9000 });
+      }
+      return { applied, fixes };
+    } catch (e: any) {
+      toast.error(e?.message ?? "Quick fix failed", { id: "quickfix" });
+    } finally {
+      close();
+      setFixing(false);
+    }
+  };
+
+  // Pull a raw log off the server into the console, where it can be read, copied or downloaded.
+  // This is the fastest way to see WHY mail is deferring without SSHing in by hand.
+  const getLog = async (source: "postfix" | "mailcow" | "queue" | "journal") => {
+    if (!form.ipAddress.trim() || !form.sshPassword) {
+      toast.error("Enter the server IP and SSH password.");
+      return;
+    }
+    setLogBusy(true);
+    toast.loading(`Fetching ${source} log…`, { id: "getlog" });
+    try {
+      const res: any = await getServerLog({
+        data: {
+          ipAddress: form.ipAddress.trim(),
+          sshUser: form.sshUser.trim() || "root",
+          sshPassword: form.sshPassword,
+          source,
+          lines: 500,
+        },
+      });
+      if (res?.error) {
+        toast.error(res.error, { id: "getlog" });
+        return;
+      }
+      const text = String(res?.text ?? "");
+      if (!text.trim()) {
+        toast.info(`The ${source} log came back empty.`, { id: "getlog" });
+        return;
+      }
+      // Replace the console with the log so Copy/Download hand over exactly these lines.
+      setConsoleLines([
+        { kind: "info", text: `--- ${source} log (${res.lines} lines) from ${form.ipAddress} ---` },
+        ...text.split("\n").map((t) => ({ kind: "out" as const, text: t })),
+      ]);
+      toast.success(`Fetched ${res.lines} lines — use Copy or Download below.`, {
+        id: "getlog",
+        duration: 6000,
+      });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Couldn't fetch the log", { id: "getlog" });
+    } finally {
+      setLogBusy(false);
+    }
+  };
+
+  // Which of the targeted ids are STILL unhealthy in a fresh result.
+  const stillBroken = (fresh: any, targeted: string[]): string[] => {
+    const set = new Set(targeted);
+    const bad = (fresh?.health?.indicators ?? [])
+      .filter((i: Indicator) => (i.status === "fail" || i.status === "warn") && set.has(i.id))
+      .map((i: Indicator) => i.id);
+    // The API key isn't an indicator — it's only "still broken" if we wanted one and still lack it.
+    if (set.has("apikey") && fresh?.apiKeyWanted && !fresh?.apiKeyAutodetected) bad.push("apikey");
+    return bad;
+  };
+
+  // Fix → re-check → fix again, until the targeted checks actually pass. Bounded, and it stops the
+  // moment a round changes nothing: retrying a fix that isn't landing (a provider port-25 block,
+  // say) would just spin forever and hammer the server.
+  const MAX_ROUNDS = 3;
+  const repairUntilFixed = async (only?: string[]) => {
+    if (!result) return;
+    let target = only ?? allFixableIds;
+    if (target.length === 0) return;
+    if (!confirmPlan(target)) return;
+
+    for (let round = 1; round <= MAX_ROUNDS; round++) {
+      const outcome = await quickFix(target);
+      if (!outcome) return;
+      const fresh = await run({ silent: true });
+      if (!fresh) return;
+
+      const remaining = stillBroken(fresh, target);
+      if (remaining.length === 0) {
+        toast.success(
+          `Fixed — the targeted checks are healthy${round > 1 ? ` after ${round} rounds` : ""}.`,
+          {
+            id: "quickfix",
+            duration: 7000,
+          },
+        );
+        return;
+      }
+      if (outcome.applied === 0) {
+        toast.warning(
+          `Still failing: ${remaining.join(", ")}. Nothing changed this round, so retrying won't help — open the row for the manual steps.`,
+          { id: "quickfix", duration: 11000 },
+        );
+        return;
+      }
+      if (round === MAX_ROUNDS) {
+        toast.warning(
+          `Still failing after ${MAX_ROUNDS} rounds: ${remaining.join(", ")}. Open the row for the manual steps.`,
+          { id: "quickfix", duration: 11000 },
+        );
+        return;
+      }
+      toast.loading(`Round ${round + 1}: still fixing ${remaining.join(", ")}…`, {
+        id: "quickfix",
+      });
+      target = remaining;
+    }
+  };
+
+  const overall = result ? OVERALL[result.health.status] : null;
+
+  return (
+    <div className="flex flex-col gap-6 p-8">
+      <header className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+          <Stethoscope aria-hidden className="h-5 w-5 text-primary" />
+        </div>
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground text-balance">
+            Troubleshoot a server
+          </h1>
+          <p className="mt-1 max-w-[70ch] text-sm text-muted-foreground text-pretty">
+            Check any mail VPS — even one whose mailboxes weren&apos;t created here. Enter its IP
+            and SSH login to probe DNS, outbound port 25, the mail queue, IP reputation and more.
+          </p>
+        </div>
+      </header>
+
+      <div className="grid items-start gap-6 lg:grid-cols-[20rem_minmax(0,1fr)]">
+        {/* Connection form */}
+        <div className="rounded-xl border border-border bg-card p-6 h-fit">
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void run();
+            }}
+          >
+            <div className="grid gap-2">
+              <Label>Server IP</Label>
+              <Input
+                placeholder="1.2.3.4"
+                value={form.ipAddress}
+                onChange={(e) => set("ipAddress", e.target.value)}
+                className="rounded-xl font-mono"
+                autoComplete="off"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>SSH user</Label>
+              <Input
+                placeholder="root"
+                value={form.sshUser}
+                onChange={(e) => set("sshUser", e.target.value)}
+                className="rounded-xl"
+                autoComplete="off"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>SSH password</Label>
+              <Input
+                type="password"
+                placeholder="••••••••"
+                value={form.sshPassword}
+                onChange={(e) => set("sshPassword", e.target.value)}
+                className="rounded-xl"
+                autoComplete="new-password"
+              />
+            </div>
+
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+              <Checkbox
+                checked={showAdvanced}
+                onCheckedChange={(v) => setShowAdvanced(v === true)}
+              />
+              Advanced (mail host, sending domain &amp; API key)
+            </label>
+
+            {showAdvanced && (
+              <div className="flex flex-col gap-4 rounded-lg bg-muted/30 p-4">
+                <div className="grid gap-2">
+                  <Label>Mailcow hostname</Label>
+                  <Input
+                    placeholder="auto-detected from the server"
+                    value={form.mailcowHostname}
+                    onChange={(e) => set("mailcowHostname", e.target.value)}
+                    className="rounded-xl"
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Leave blank to auto-detect. Enables mail-host DNS, submission ports and TLS
+                    checks.
+                  </p>
+                </div>
+                <div className="grid gap-2">
+                  <Label>Sending domain</Label>
+                  <Input
+                    placeholder="auto-detected from the mail host"
+                    value={form.sendingDomain}
+                    onChange={(e) => set("sendingDomain", e.target.value)}
+                    className="rounded-xl"
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    The domain you send from. Checks its MX, SPF, DKIM and DMARC records.
+                  </p>
+                </div>
+                <div className="grid gap-2">
+                  <Label>Mailcow API key</Label>
+                  <Input
+                    placeholder={fetchApiKey ? "read from the server automatically" : "optional"}
+                    value={form.mailcowApiKey}
+                    onChange={(e) => set("mailcowApiKey", e.target.value)}
+                    className="rounded-xl font-mono"
+                    autoComplete="off"
+                  />
+                  <label className="flex cursor-pointer items-start gap-2 text-xs text-muted-foreground">
+                    <Checkbox
+                      checked={fetchApiKey}
+                      onCheckedChange={(v) => setFetchApiKey(v === true)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      If no key is given, read it from the server over SSH (mailcow.conf, then
+                      Mailcow&apos;s database). Enables container health and DKIM key-match checks.
+                      The key is used for this check only — it&apos;s never stored or shown.
+                    </span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            <Button type="submit" disabled={busy} className="rounded-xl mt-1 gap-2">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              {busy ? "Running diagnostics…" : "Run diagnostics"}
+            </Button>
+
+            {/* Pull raw logs straight off the server — the fastest way to see why mail defers. */}
+            <div className="mt-2 flex flex-col gap-2.5 border-t border-border pt-4">
+              <div className="flex items-center gap-2">
+                <FileText aria-hidden className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium text-foreground">Copy a log from the server</h3>
+                {logBusy && (
+                  <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    ["postfix", "Postfix (mail)"],
+                    ["queue", "Mail queue"],
+                    ["mailcow", "All Mailcow"],
+                    ["journal", "Host journal"],
+                  ] as const
+                ).map(([src, label]) => (
+                  <Button
+                    key={src}
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2.5 text-xs"
+                    disabled={logBusy || busy || fixing}
+                    onClick={() => getLog(src)}
+                    title={`Fetch the ${label} log from the server`}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground text-pretty">
+                Loads the last 500 lines into the console, where you can copy or download them.
+                Secrets are redacted.
+              </p>
+            </div>
+
+            <p className="text-xs text-muted-foreground text-pretty">
+              Credentials are used only for this check and are never stored.
+            </p>
+          </form>
+        </div>
+
+        {/* Results */}
+        <div className="min-h-[19rem] rounded-xl border border-border bg-card">
+          {!result ? (
+            busy ? (
+              // Skeleton, not a spinner in the middle of nothing: the shape it settles into is
+              // the shape it's loading, so the panel doesn't jump when results land.
+              <div aria-busy="true" aria-live="polite">
+                <div className="flex items-center gap-3 border-b border-border px-6 py-4">
+                  <Server aria-hidden className="h-5 w-5 text-muted-foreground" />
+                  <div className="flex flex-col gap-1.5">
+                    <span className="ident text-base font-semibold text-foreground">
+                      {form.ipAddress || "the server"}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      Connecting over SSH and running checks…
+                    </span>
+                  </div>
+                </div>
+                <ul className="divide-y divide-border">
+                  {Array.from({ length: 7 }).map((_, i) => (
+                    <li key={i} className="flex items-center gap-3 px-6 py-3">
+                      <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-muted-foreground/25" />
+                      <span className="h-3.5 w-44 shrink-0 animate-pulse rounded bg-muted-foreground/15" />
+                      <span
+                        className="h-3.5 flex-1 animate-pulse rounded bg-muted-foreground/10"
+                        style={{ maxWidth: `${52 + ((i * 13) % 34)}%` }}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              // Teach the interface: name what it will check and what it needs, rather than
+              // announcing emptiness.
+              <div className="flex h-full flex-col items-center justify-center gap-3 p-12 text-center">
+                <ShieldCheck aria-hidden className="h-10 w-10 text-muted-foreground/70" />
+                <p className="text-sm font-medium text-foreground">No diagnostics yet</p>
+                <p className="max-w-sm text-sm text-muted-foreground text-pretty">
+                  Enter the server IP and SSH password, then run diagnostics. You&apos;ll get every
+                  check below with a severity, the reason, and a one-click fix where we can apply
+                  one.
+                </p>
+                <p className="max-w-sm text-xs text-muted-foreground">
+                  Checks DNS &amp; reverse DNS · outbound port 25 · submission ports · Mailcow
+                  containers · the mail queue · IP reputation · SPF, DKIM &amp; DMARC
+                </p>
+              </div>
+            )
+          ) : (
+            <>
+              {/* Identity + verdict + action on one line; the meta gets its own row beneath so a
+                  long hostname can't crowd the score badge or the primary action. */}
+              <div className="border-b border-border px-6 py-4">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <Server aria-hidden className="h-5 w-5 shrink-0 text-muted-foreground" />
+                  {/* An IP is technical data — the system says identifiers are always mono. */}
+                  <h2 className="ident mr-auto text-base font-semibold text-foreground">
+                    {form.ipAddress}
+                  </h2>
+                  {overall && (
+                    <span className="inline-flex shrink-0 items-center gap-2 rounded-full border border-border px-3 py-1 text-xs font-medium text-foreground">
+                      <span className={cn("status-dot", overall.color)} />
+                      {overall.label}
+                      <span className="ident tabular-nums text-muted-foreground">
+                        {result.health.score}%
+                      </span>
+                    </span>
+                  )}
+                  {fixableCount > 0 && (
+                    <Button
+                      size="sm"
+                      className="h-9 gap-1.5"
+                      onClick={() => repairUntilFixed()}
+                      disabled={fixing || busy}
+                      title={`Fix ${fixableCount} issue${fixableCount === 1 ? "" : "s"} automatically`}
+                    >
+                      {fixing ? (
+                        <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Wrench aria-hidden className="h-4 w-4" />
+                      )}
+                      Quick fix
+                      <span className="ident tabular-nums opacity-80">{fixableCount}</span>
+                    </Button>
+                  )}
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground text-pretty">
+                  {result.mailcowHostname
+                    ? `Mail host ${result.mailcowHostname}${result.hostnameAutodetected ? " (auto-detected)" : ""}`
+                    : "Mail host unknown"}
+                  {result.sendingDomain ? ` · sending domain ${result.sendingDomain}` : ""}
+                  {result.apiKeyAutodetected
+                    ? ` · API key read from ${result.apiKeySource === "database" ? "Mailcow's database" : "mailcow.conf"}`
+                    : ""}
+                  {` · checked ${new Date(result.health.checkedAt).toLocaleTimeString()}`}
+                </p>
+              </div>
+              <IndicatorRows
+                indicators={result.health.indicators}
+                onFix={(id) => repairUntilFixed([id])}
+                busy={fixing || busy}
+              />
+              {/* The key's IP allow-list can reject us even though the key itself is valid. */}
+              {result.apiKeyAutodetected && result.apiKeyRestricted && (
+                <div className="border-t border-border px-6 py-3 text-xs text-warning">
+                  The Mailcow API key on this server is restricted to specific IPs
+                  {result.apiAllowFrom ? ` (API_ALLOW_FROM: ${result.apiAllowFrom})` : ""}, so API
+                  checks may be rejected even though the key is valid. Add this app's IP to that
+                  allow-list to enable them.
+                </div>
+              )}
+              {/* Wanted a key, looked, found nothing — Quick fix can create one. */}
+              {canCreateApiKey && result.mailcowHostname && (
+                <div className="border-t border-border px-6 py-3 text-xs text-muted-foreground">
+                  No Mailcow API key found on the server (checked mailcow.conf and Mailcow's
+                  database), so the API/UI reachability and DKIM key-match checks were skipped.{" "}
+                  <span className="text-foreground">Quick fix can create one for you</span> — or
+                  make one in Mailcow → Configuration → API and paste it under Advanced.
+                </div>
+              )}
+              {!form.mailcowHostname && !result.mailcowHostname && (
+                <div className="border-t border-border px-6 py-3 text-xs text-muted-foreground">
+                  Couldn't auto-detect a Mailcow hostname, so DNS / submission / TLS checks were
+                  skipped. Add it under Advanced to include them.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Live console — streams each run, and holds any fetched log so it can be copied/downloaded. */}
+      {(fixing || busy || logBusy || consoleLines.length > 0) && (
+        <LiveConsole
+          lines={consoleLines}
+          running={fixing || busy || logBusy}
+          filenameBase={form.ipAddress.trim() || "server"}
+        />
+      )}
+    </div>
+  );
+}

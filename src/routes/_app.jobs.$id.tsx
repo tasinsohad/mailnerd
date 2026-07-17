@@ -127,11 +127,13 @@ function JobPipelinePage() {
   // Unique subdomains (apex excluded) across every domain in the job — ready once inboxes are
   // planned, mailboxes need not exist.
   const nameById = new Map<string, string>(domains.map((d: any) => [d.id, d.name]));
+  const ipById = new Map<string, string | null>(domains.map((d: any) => [d.id, d.ipAddress]));
   const subRows = subdomainExportRows(
     inboxes.map((ib: any) => ({
       domainName: nameById.get(ib.domainId) ?? "",
       subdomainPrefix: ib.subdomainPrefix,
       subdomainFqdn: ib.subdomainFqdn,
+      ipAddress: ipById.get(ib.domainId),
     })),
   );
 

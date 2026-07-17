@@ -1,10 +1,10 @@
 import Redis from "ioredis";
 import { createClient } from "@supabase/supabase-js";
-import { users, domains } from "../lib/db/schema";
+import { users, domains } from "../src/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { getDb } from "../lib/db";
-import { jobEvents } from "./events";
-import { consoleChannel } from "./console-bus";
+import { getDb } from "../src/lib/db";
+import { jobEvents } from "../src/server/events";
+import { consoleChannel } from "../src/server/console-bus";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 // Live console for an ad-hoc troubleshoot run. Not tied to a domain — the runId is an
@@ -19,16 +19,13 @@ function streamConsole(runId: string, req: IncomingMessage, res: ServerResponse)
   res.flushHeaders();
 
   const channel = consoleChannel(runId);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const send = (data: any) => {
     if (res.writableEnded) return;
     res.write(`data: ${JSON.stringify(data)}\n\n`);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (typeof (res as any).flush === "function") (res as any).flush();
   };
 
   send({ kind: "info", text: "Console connected." });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const listener = (data: any) => send(data);
   jobEvents.on(channel, listener);
 

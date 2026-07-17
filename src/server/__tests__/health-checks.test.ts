@@ -25,6 +25,15 @@ describe("fcrdnsVerdict", () => {
     expect(fcrdnsVerdict("1.2.3.4", ["mail.x.com"], ["9.9.9.9"])).toBe("mismatch");
     expect(fcrdnsVerdict("1.2.3.4", [], [])).toBe("missing");
   });
+
+  it("reports 'proxied' (not a mismatch) when a correct PTR is masked by a proxy", () => {
+    // PTR is set, but the host forward-resolves to proxy IPs — reverse DNS itself is fine.
+    expect(fcrdnsVerdict("1.2.3.4", ["mail.x.com"], ["104.21.17.99"], true)).toBe("proxied");
+    // No PTR at all still wins, even if the forward set is proxied.
+    expect(fcrdnsVerdict("1.2.3.4", [], ["104.21.17.99"], true)).toBe("missing");
+    // A genuine mismatch (non-proxy IPs) is unaffected.
+    expect(fcrdnsVerdict("1.2.3.4", ["mail.x.com"], ["9.9.9.9"], false)).toBe("mismatch");
+  });
 });
 
 describe("dkimKeyMatch", () => {
@@ -79,13 +88,102 @@ describe("parsePostfixQueue", () => {
 
 describe("queueVerdict / dominantDeferral", () => {
   it("ok when empty, warn/fail past thresholds", () => {
-    expect(queueVerdict({ count: 0, oldestAgeMinutes: null, deferrals: { timeout: 0, rejected: 0, other: 0 } })).toBe("ok");
-    expect(queueVerdict({ count: 60, oldestAgeMinutes: 10, deferrals: { timeout: 0, rejected: 0, other: 0 } })).toBe("warn");
-    expect(queueVerdict({ count: 60, oldestAgeMinutes: 500, deferrals: { timeout: 0, rejected: 0, other: 0 } })).toBe("fail");
+    expect(
+      queueVerdict({
+        count: 0,
+        oldestAgeMinutes: null,
+        deferrals: { timeout: 0, rejected: 0, other: 0 },
+      }),
+    ).toBe("ok");
+    expect(
+      queueVerdict({
+        count: 60,
+        oldestAgeMinutes: 10,
+        deferrals: { timeout: 0, rejected: 0, other: 0 },
+      }),
+    ).toBe("warn");
+    expect(
+      queueVerdict({
+        count: 60,
+        oldestAgeMinutes: 500,
+        deferrals: { timeout: 0, rejected: 0, other: 0 },
+      }),
+    ).toBe("fail");
   });
+  it("warns on a small but stuck queue that keeps deferring", () => {
+    // Real case: 26 messages, oldest 6h, dominated by connection timeouts. Under both hard
+    // thresholds, but mail is plainly not being delivered — must not read as healthy.
+    expect(
+      queueVerdict({
+        count: 26,
+        oldestAgeMinutes: 360,
+        deferrals: { timeout: 24, rejected: 0, other: 2 },
+      }),
+    ).toBe("warn");
+    // Even a couple of messages that have been failing for an hour is worth flagging.
+    expect(
+      queueVerdict({
+        count: 2,
+        oldestAgeMinutes: 90,
+        deferrals: { timeout: 2, rejected: 0, other: 0 },
+      }),
+    ).toBe("warn");
+  });
+
+  it("fails (not warns) once mail has been stuck for a day or more", () => {
+    // Real case: 31 messages, oldest 78h. Under the count threshold, but mail this old is on a
+    // countdown to bouncing — reporting it as a mere warning understates it.
+    expect(
+      queueVerdict({
+        count: 31,
+        oldestAgeMinutes: 78 * 60,
+        deferrals: { timeout: 24, rejected: 0, other: 7 },
+      }),
+    ).toBe("fail");
+    // Even a single message stuck over a day is a failure.
+    expect(
+      queueVerdict({
+        count: 1,
+        oldestAgeMinutes: 1500,
+        deferrals: { timeout: 1, rejected: 0, other: 0 },
+      }),
+    ).toBe("fail");
+  });
+
+  it("stays ok for a young queue that is simply in flight", () => {
+    // Fresh mail with no deferral reasons is normal throughput, not a problem.
+    expect(
+      queueVerdict({
+        count: 5,
+        oldestAgeMinutes: 2,
+        deferrals: { timeout: 0, rejected: 0, other: 0 },
+      }),
+    ).toBe("ok");
+    // Deferrals that are still young (greylisting clears on retry) stay ok.
+    expect(
+      queueVerdict({
+        count: 3,
+        oldestAgeMinutes: 10,
+        deferrals: { timeout: 1, rejected: 0, other: 0 },
+      }),
+    ).toBe("ok");
+  });
+
   it("picks the dominant deferral reason", () => {
-    expect(dominantDeferral({ count: 3, oldestAgeMinutes: 1, deferrals: { timeout: 2, rejected: 1, other: 0 } })).toBe("timeout");
-    expect(dominantDeferral({ count: 0, oldestAgeMinutes: null, deferrals: { timeout: 0, rejected: 0, other: 0 } })).toBeNull();
+    expect(
+      dominantDeferral({
+        count: 3,
+        oldestAgeMinutes: 1,
+        deferrals: { timeout: 2, rejected: 1, other: 0 },
+      }),
+    ).toBe("timeout");
+    expect(
+      dominantDeferral({
+        count: 0,
+        oldestAgeMinutes: null,
+        deferrals: { timeout: 0, rejected: 0, other: 0 },
+      }),
+    ).toBeNull();
   });
 });
 

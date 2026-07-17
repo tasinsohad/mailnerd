@@ -3,7 +3,31 @@
 // import them without a cycle.
 
 export type HealthStatus = "ok" | "warn" | "fail" | "skip";
-export type HealthAction = "pushDns" | "syncDkim" | "fixDns" | "recreate" | "provision";
+export type HealthAction =
+  | "pushDns"
+  | "syncDkim"
+  | "fixDns"
+  | "restartMailcow" // bring up / restart the Mailcow stack over SSH
+  | "openFirewall" // ufw allow the mail ports over SSH
+  | "recreate"
+  | "provision";
+
+// Finer-grained severity for the "How to Fix" guidance (independent of the ok/warn/fail dot).
+export type FixSeverity = "info" | "warning" | "high" | "critical";
+
+// Structured remediation guidance attached to an indicator. Only `severity` + `explanation` are
+// always present; the rest are filled in when relevant to the specific verdict.
+export interface FixGuidance {
+  severity: FixSeverity;
+  explanation: string; // what the problem means AND why it affects email delivery
+  causes?: string[]; // most likely root causes, most-common first
+  steps?: string[]; // step-by-step remediation
+  commands?: string[]; // shell commands to run (Linux)
+  dns?: string[]; // DNS configuration example lines
+  logs?: string[]; // real log lines captured from the server, when relevant
+  verification?: string[]; // checklist to confirm the fix worked
+  nextStep?: string; // when we can't diagnose further: the next command/test to run
+}
 
 export interface Indicator {
   id: string;
@@ -12,6 +36,7 @@ export interface Indicator {
   detail: string;
   fix?: string;
   action?: HealthAction;
+  guidance?: FixGuidance; // rich "How to Fix" block for the troubleshoot UI
 }
 
 export interface DomainHealth {

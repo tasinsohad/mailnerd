@@ -40,39 +40,46 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-/* "Relay" — a dark mail-infrastructure control console.
-   Deep slate canvas, electric indigo accent for actions/identity, and status colors
-   (green/amber/red) reserved to carry meaning. Dark is the default. */
+/* "Relay" — a mail-infrastructure control console.
+   Light is the default: this is a daylight desk tool, read alongside a terminal, a DNS panel and
+   a provider dashboard, so the canvas is a cool near-white tinted toward the brand's own indigo
+   (never warm/cream). Electric indigo carries actions and identity; status colors (green/amber/red)
+   are reserved to carry meaning and are darkened here so they stay legible on white.
+   The console keeps its dark canvas in both themes — it is an instrument, not a surface. */
 :root {
   --radius: 0.75rem;
-  --background: oklch(0.17 0.012 265); /* deep slate canvas */
-  --foreground: oklch(0.97 0.004 250);
-  --card: oklch(0.205 0.015 265); /* raised surfaces */
-  --card-foreground: oklch(0.97 0.004 250);
-  --popover: oklch(0.23 0.016 265);
-  --popover-foreground: oklch(0.97 0.004 250);
-  --primary: oklch(0.62 0.2 277); /* electric indigo / iris */
+  --background: oklch(0.977 0.004 265); /* cool near-white, tinted toward the brand indigo */
+  --foreground: oklch(0.21 0.02 265); /* indigo-tinted ink */
+  --card: oklch(1 0 0); /* raised surfaces read lighter than the canvas */
+  --card-foreground: oklch(0.21 0.02 265);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.02 265);
+  --primary: oklch(
+    0.55 0.21 277
+  ); /* electric indigo / iris — darkened so white label text passes */
   --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.26 0.016 265);
-  --secondary-foreground: oklch(0.97 0.004 250);
-  --muted: oklch(0.255 0.015 265);
-  --muted-foreground: oklch(0.67 0.02 262);
-  --accent: oklch(0.3 0.05 277); /* indigo-tinted surface */
-  --accent-foreground: oklch(0.97 0.004 250);
-  --destructive: oklch(0.62 0.22 25); /* failed */
+  --secondary: oklch(0.955 0.006 265);
+  --secondary-foreground: oklch(0.25 0.02 265);
+  --muted: oklch(0.962 0.005 265);
+  --muted-foreground: oklch(
+    0.5 0.02 265
+  ); /* 6.0:1 on card — body-text legal, not decorative gray */
+  --accent: oklch(0.95 0.025 277); /* indigo-tinted surface */
+  --accent-foreground: oklch(0.3 0.08 277);
+  --destructive: oklch(0.55 0.22 25); /* failed */
   --destructive-foreground: oklch(0.99 0 0);
-  --success: oklch(0.72 0.17 155); /* ready / healthy */
-  --success-foreground: oklch(0.15 0.02 265);
-  --warning: oklch(0.8 0.15 80); /* in-progress */
-  --warning-foreground: oklch(0.18 0.03 80);
-  --border: oklch(1 0 0 / 9%);
-  --input: oklch(1 0 0 / 12%);
-  --ring: oklch(0.62 0.2 277);
-  --terminal: oklch(0.13 0.01 265); /* the live log instrument */
+  --success: oklch(0.52 0.12 155); /* ready / healthy — in sRGB gamut at this chroma */
+  --success-foreground: oklch(0.99 0 0);
+  --warning: oklch(0.55 0.12 70); /* in-progress — amber must go dark to survive a white bg */
+  --warning-foreground: oklch(0.99 0 0);
+  --border: oklch(0.21 0.02 265 / 12%);
+  --input: oklch(0.21 0.02 265 / 18%);
+  --ring: oklch(0.55 0.21 277);
+  --terminal: oklch(0.16 0.012 265); /* the live log instrument — dark in both themes */
   --terminal-foreground: oklch(0.86 0.15 160);
 }
 
-/* The app is dark by default; keep .dark as an alias so dark: variants still resolve. */
+/* Dark theme — the original console canvas. Add `dark` to <html> (or a theme toggle) to use it. */
 .dark {
   --background: oklch(0.17 0.012 265);
   --foreground: oklch(0.97 0.004 250);
@@ -114,7 +121,10 @@
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
   }
-  h1, h2, h3, .font-display {
+  h1,
+  h2,
+  h3,
+  .font-display {
     font-family: var(--font-display);
     letter-spacing: -0.01em;
   }
@@ -140,21 +150,53 @@
     animation: relay-pulse 1.6s ease-in-out infinite;
   }
   @keyframes relay-pulse {
-    0%, 100% { box-shadow: 0 0 0 2px color-mix(in oklch, currentColor 22%, transparent); opacity: 1; }
-    50% { box-shadow: 0 0 0 5px color-mix(in oklch, currentColor 8%, transparent); opacity: 0.7; }
+    0%,
+    100% {
+      box-shadow: 0 0 0 2px color-mix(in oklch, currentColor 22%, transparent);
+      opacity: 1;
+    }
+    50% {
+      box-shadow: 0 0 0 5px color-mix(in oklch, currentColor 8%, transparent);
+      opacity: 0.7;
+    }
   }
   @media (prefers-reduced-motion: reduce) {
-    .status-dot--pulse { animation: none; }
+    .status-dot--pulse {
+      animation: none;
+    }
   }
 
-  /* The live provisioning log — the dark "instrument" centerpiece. */
+  /* The live provisioning log — the dark "instrument" centerpiece. Also used for any literal
+     machine text (commands, DNS records, log excerpts) so one material means "the machine". */
   .console {
     background: var(--color-terminal);
     color: var(--color-terminal-foreground);
     font-family: var(--font-mono);
     font-size: 0.8125rem;
     line-height: 1.55;
-    border: 1px solid var(--color-border);
+    /* Its own hairline: --border is an ink-alpha that vanishes on the dark canvas in light mode. */
+    border: 1px solid oklch(1 0 0 / 12%);
     border-radius: var(--radius);
+  }
+
+  /* Detail revealed in place (an expanded check). Enhances an already-visible default: the content
+     is painted regardless, this only softens its arrival, so a headless render is never blank. */
+  .reveal {
+    animation: relay-reveal 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes relay-reveal {
+    from {
+      opacity: 0;
+      transform: translateY(-2px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal {
+      animation: none;
+    }
   }
 }

@@ -17,7 +17,7 @@ export default defineConfig({
       name: "sse-dev-plugin",
       configureServer(server) {
         server.middlewares.use("/api/sse", sseHandler);
-      }
+      },
     },
     tsConfigPaths(),
     // Note: tanstackRouter plugin completely removed due to Windows + Vite HMR conflicts
@@ -29,7 +29,7 @@ export default defineConfig({
       minify: false, // Drizzle ORM crashes if the server build is minified
       externals: {
         external: nativeExternals,
-      }
+      },
     } as any),
     react(),
     tailwindcss(),

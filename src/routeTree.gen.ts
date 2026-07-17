@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
+import { Route as AppTroubleshootRouteImport } from './routes/_app.troubleshoot'
 import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as AppServersRouteImport } from './routes/_app.servers'
 import { Route as AppJobsRouteImport } from './routes/_app.jobs'
@@ -33,6 +34,11 @@ const AppRoute = AppRouteImport.update({
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTroubleshootRoute = AppTroubleshootRouteImport.update({
+  id: '/troubleshoot',
+  path: '/troubleshoot',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSettingsRoute = AppSettingsRouteImport.update({
@@ -83,6 +89,7 @@ export interface FileRoutesByFullPath {
   '/jobs': typeof AppJobsRouteWithChildren
   '/servers': typeof AppServersRoute
   '/settings': typeof AppSettingsRoute
+  '/troubleshoot': typeof AppTroubleshootRoute
   '/domains/$id': typeof AppDomainsIdRoute
   '/jobs/$id': typeof AppJobsIdRoute
   '/domains/': typeof AppDomainsIndexRoute
@@ -92,6 +99,7 @@ export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
   '/servers': typeof AppServersRoute
   '/settings': typeof AppSettingsRoute
+  '/troubleshoot': typeof AppTroubleshootRoute
   '/': typeof AppIndexRoute
   '/domains/$id': typeof AppDomainsIdRoute
   '/jobs/$id': typeof AppJobsIdRoute
@@ -106,6 +114,7 @@ export interface FileRoutesById {
   '/_app/jobs': typeof AppJobsRouteWithChildren
   '/_app/servers': typeof AppServersRoute
   '/_app/settings': typeof AppSettingsRoute
+  '/_app/troubleshoot': typeof AppTroubleshootRoute
   '/_app/': typeof AppIndexRoute
   '/_app/domains/$id': typeof AppDomainsIdRoute
   '/_app/jobs/$id': typeof AppJobsIdRoute
@@ -121,6 +130,7 @@ export interface FileRouteTypes {
     | '/jobs'
     | '/servers'
     | '/settings'
+    | '/troubleshoot'
     | '/domains/$id'
     | '/jobs/$id'
     | '/domains/'
@@ -130,6 +140,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/servers'
     | '/settings'
+    | '/troubleshoot'
     | '/'
     | '/domains/$id'
     | '/jobs/$id'
@@ -143,6 +154,7 @@ export interface FileRouteTypes {
     | '/_app/jobs'
     | '/_app/servers'
     | '/_app/settings'
+    | '/_app/troubleshoot'
     | '/_app/'
     | '/_app/domains/$id'
     | '/_app/jobs/$id'
@@ -176,6 +188,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/troubleshoot': {
+      id: '/_app/troubleshoot'
+      path: '/troubleshoot'
+      fullPath: '/troubleshoot'
+      preLoaderRoute: typeof AppTroubleshootRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/settings': {
@@ -269,6 +288,7 @@ interface AppRouteChildren {
   AppJobsRoute: typeof AppJobsRouteWithChildren
   AppServersRoute: typeof AppServersRoute
   AppSettingsRoute: typeof AppSettingsRoute
+  AppTroubleshootRoute: typeof AppTroubleshootRoute
   AppIndexRoute: typeof AppIndexRoute
 }
 
@@ -277,6 +297,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppJobsRoute: AppJobsRouteWithChildren,
   AppServersRoute: AppServersRoute,
   AppSettingsRoute: AppSettingsRoute,
+  AppTroubleshootRoute: AppTroubleshootRoute,
   AppIndexRoute: AppIndexRoute,
 }
 

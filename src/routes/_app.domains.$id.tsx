@@ -112,6 +112,7 @@ function DomainDetailsPage() {
       domainName: domain?.name ?? "",
       subdomainPrefix: ib.subdomainPrefix,
       subdomainFqdn: ib.subdomainFqdn,
+      ipAddress: domain?.ipAddress,
     })),
   );
 

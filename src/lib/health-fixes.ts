@@ -2,6 +2,7 @@ import type { HealthAction } from "@/server/health";
 import { pushDnsToCloudflare, repairDomainDns } from "@/server/domains";
 import { fetchDkimAndSync, setupMailcowDomain } from "@/server/mailcow";
 import { provisionServer } from "@/server/provisioning";
+import { restartMailcowForDomain, openFirewallForDomain } from "@/server/server-fixes";
 
 // Single source of truth mapping a health indicator's `action` to its human label, the server
 // function that performs it, and whether it's destructive (needs a confirm). Used by the
@@ -11,6 +12,8 @@ export const ACTION_LABEL: Record<HealthAction, string> = {
   fixDns: "Fix DNS",
   pushDns: "Push DNS",
   syncDkim: "Sync DKIM",
+  openFirewall: "Open mail ports",
+  restartMailcow: "Restart Mailcow",
   recreate: "Recreate mailboxes",
   provision: "Re-provision",
 };
@@ -20,12 +23,16 @@ export const ACTION_ORDER: HealthAction[] = [
   "fixDns",
   "pushDns",
   "syncDkim",
+  "openFirewall",
+  "restartMailcow",
   "recreate",
   "provision",
 ];
 
-// These rebuild real state (delete+recreate mailboxes, wipe+reinstall the server) — confirm first.
+// These rebuild real state (delete+recreate mailboxes, wipe+reinstall the server) or briefly
+// interrupt mail (a stack restart) — confirm first.
 export const DESTRUCTIVE_ACTIONS: ReadonlySet<HealthAction> = new Set<HealthAction>([
+  "restartMailcow",
   "recreate",
   "provision",
 ]);
@@ -39,6 +46,10 @@ export function runHealthFix(action: HealthAction, domainId: string): Promise<an
       return fetchDkimAndSync({ data: { domainId } });
     case "fixDns":
       return repairDomainDns({ data: { domainId } });
+    case "openFirewall":
+      return openFirewallForDomain({ data: { domainId } });
+    case "restartMailcow":
+      return restartMailcowForDomain({ data: { domainId } });
     case "recreate":
       return setupMailcowDomain({ data: { domainId, recreate: true } });
     case "provision":

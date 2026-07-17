@@ -8,12 +8,14 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Copy, Check, Download } from "lucide-react";
 import { toast } from "sonner";
 import { downloadCsv } from "@/lib/csv";
 import {
   buildSubdomainCsv,
   subdomainListText,
+  subdomainRowsHaveIps,
   type SubdomainRow,
 } from "@/lib/subdomains";
 
@@ -33,7 +35,10 @@ export function ExportSubdomainsDialog({
   title?: string;
 }) {
   const [copied, setCopied] = useState(false);
-  const text = subdomainListText(rows);
+  const [includeIp, setIncludeIp] = useState(false);
+  const hasIps = subdomainRowsHaveIps(rows);
+  const withIp = includeIp && hasIps;
+  const text = subdomainListText(rows, withIp);
 
   const copy = async () => {
     try {
@@ -47,7 +52,7 @@ export function ExportSubdomainsDialog({
   };
 
   const download = () => {
-    downloadCsv(`${filenameBase}_subdomains.csv`, buildSubdomainCsv(rows));
+    downloadCsv(`${filenameBase}_subdomains.csv`, buildSubdomainCsv(rows, withIp));
   };
 
   return (
@@ -74,6 +79,15 @@ export function ExportSubdomainsDialog({
               onFocus={(e) => e.currentTarget.select()}
               className="min-h-[220px] resize-none font-mono text-xs leading-relaxed"
             />
+            {hasIps && (
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+                <Checkbox
+                  checked={includeIp}
+                  onCheckedChange={(v) => setIncludeIp(v === true)}
+                />
+                Include VPS IPs next to each subdomain
+              </label>
+            )}
             <DialogFooter className="gap-2 sm:gap-2">
               <Button variant="outline" onClick={copy} className="gap-2">
                 {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}

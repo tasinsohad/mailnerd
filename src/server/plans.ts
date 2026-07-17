@@ -103,6 +103,7 @@ export const getSubdomainExport = createServerFn({ method: "GET" })
     if (domainIds.length === 0) return { rows: [] };
 
     const nameById = new Map<string, string>(doms.map((d: any) => [d.id, d.name]));
+    const ipById = new Map<string, string | null>(doms.map((d: any) => [d.id, d.ipAddress]));
     const inbs = await db
       .select()
       .from(plannedInboxes)
@@ -113,6 +114,7 @@ export const getSubdomainExport = createServerFn({ method: "GET" })
         domainName: nameById.get(ib.domainId) ?? "",
         subdomainPrefix: ib.subdomainPrefix,
         subdomainFqdn: ib.subdomainFqdn,
+        ipAddress: ipById.get(ib.domainId),
       })),
     );
     return { rows };

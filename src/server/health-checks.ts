@@ -17,11 +17,16 @@ const PRIORITY: Record<string, number> = {
   spf: 40,
   dkim: 40,
   dmarc: 40,
+  ipv6: 15, // a broken-IPv6 stall blocks delivery outright — rank it just under a port-25 block
   queue: 50,
+  listeners: 52, // postfix not listening explains a submission failure — surface it first
+  firewall: 54,
   submission: 55,
+  containers: 56,
   mailhost: 58,
   tls: 60,
   mailcow: 70,
+  maillog: 75,
   mailboxes: 80,
 };
 
@@ -53,13 +58,248 @@ export function classifyPort25(verdicts: PortVerdict[]): "open" | "blocked" | "p
 /* ---------- FCrDNS ---------- */
 
 // Forward-confirmed reverse DNS: PTR exists AND the PTR hostname forward-resolves back to the IP.
+// `forwardProxied` signals that the forward A lookup returned only CDN/proxy IPs (e.g. Cloudflare
+// orange-cloud) — the PTR is correct but a proxy is masking the real IP, so we don't call it a
+// mismatch (that would blame the reverse DNS, which is fine; the fix is un-proxying the host).
 export function fcrdnsVerdict(
   ip: string,
   ptrHosts: string[],
   forwardIps: string[],
-): "confirmed" | "mismatch" | "missing" {
+  forwardProxied = false,
+): "confirmed" | "mismatch" | "missing" | "proxied" {
   if (!ptrHosts || ptrHosts.length === 0) return "missing";
-  return forwardIps.includes(ip) ? "confirmed" : "mismatch";
+  if (forwardIps.includes(ip)) return "confirmed";
+  if (forwardProxied) return "proxied";
+  return "mismatch";
+}
+
+/* ---------- Mailcow shell helpers ---------- */
+
+// Locate the Mailcow directory and pick the right compose command before running anything in it.
+// Handles a non-standard install path and both `docker compose` (v2) and legacy `docker-compose`.
+// Pure string; lives here so SSH callers don't have to import the network-touching engine.
+export const MAILCOW_SHELL_PRELUDE =
+  `MCDIR=$(dirname "$(find /opt -maxdepth 3 -name mailcow.conf 2>/dev/null | head -1)" 2>/dev/null); ` +
+  `[ -d "$MCDIR" ] || MCDIR=/opt/mailcow-dockerized; cd "$MCDIR" 2>/dev/null; ` +
+  `DC="docker compose"; $DC version >/dev/null 2>&1 || DC="docker-compose"; `;
+
+/* ---------- Mailcow containers (docker ps) ---------- */
+
+// The core Mailcow services. Matched as substrings because compose prefixes/suffixes the real
+// container names (e.g. "mailcowdockerized-postfix-mailcow-1").
+export const REQUIRED_CONTAINERS = ["postfix", "dovecot", "nginx", "rspamd", "mysql", "redis"];
+
+export interface ContainerRow {
+  name: string;
+  running: boolean;
+  unhealthy: boolean;
+}
+
+// Parse `docker ps -a --format '{{.Names}}\t{{.State}}\t{{.Status}}'`.
+export function parseDockerPs(output: string): ContainerRow[] {
+  const rows: ContainerRow[] = [];
+  for (const line of String(output ?? "").split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    const [name, state = "", status = ""] = t.split("\t");
+    if (!name) continue;
+    rows.push({
+      name: name.trim(),
+      running: state.trim().toLowerCase() === "running",
+      unhealthy: /\(unhealthy\)/i.test(status),
+    });
+  }
+  return rows;
+}
+
+// Which required services are missing entirely, stopped, or running-but-unhealthy.
+export function containersVerdict(rows: ContainerRow[]): {
+  status: "ok" | "warn" | "fail";
+  missing: string[];
+  stopped: string[];
+  unhealthy: string[];
+} {
+  const missing: string[] = [];
+  const stopped: string[] = [];
+  const unhealthy: string[] = [];
+  for (const svc of REQUIRED_CONTAINERS) {
+    const match = rows.filter((r) => r.name.toLowerCase().includes(svc));
+    if (match.length === 0) {
+      missing.push(svc);
+    } else if (!match.some((r) => r.running)) {
+      stopped.push(svc);
+    } else if (match.some((r) => r.running && r.unhealthy)) {
+      unhealthy.push(svc);
+    }
+  }
+  // Missing/stopped core services break mail outright; unhealthy is a warning.
+  const status = missing.length || stopped.length ? "fail" : unhealthy.length ? "warn" : "ok";
+  return { status, missing, stopped, unhealthy };
+}
+
+/* ---------- Mailcow container API response ---------- */
+
+export type ContainerApiResult =
+  | { kind: "containers"; running: number; total: number }
+  | { kind: "apiError"; message: string }
+  | { kind: "unexpected" };
+
+// Interpret `get/status/containers`. Mailcow reports failures as {"type":"error","msg":"..."}
+// (see mailcow-helpers), which naively Object.values()'d counts as TWO entries with zero
+// "running" — reporting a perfectly healthy server as "0/2 containers running". Real container
+// entries always carry a `state`, so keying off that tells a genuine reply from an error body.
+export function parseContainerApi(json: unknown): ContainerApiResult {
+  if (!json || typeof json !== "object") return { kind: "unexpected" };
+  const entries = Array.isArray(json) ? json : [json];
+  const err = entries.find(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (e: any) => e && typeof e === "object" && (e.type === "error" || e.type === "danger"),
+  );
+  if (err) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const msg = (err as any).msg;
+    return {
+      kind: "apiError",
+      message: typeof msg === "string" ? msg : JSON.stringify(msg ?? err),
+    };
+  }
+  if (Array.isArray(json)) return { kind: "unexpected" };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vals = Object.values(json as Record<string, any>);
+  const containers = vals.filter((v) => v && typeof v === "object" && "state" in v);
+  if (containers.length === 0) return { kind: "unexpected" };
+  return {
+    kind: "containers",
+    running: containers.filter((c) => c.state === "running").length,
+    total: containers.length,
+  };
+}
+
+/* ---------- listening ports (ss -tlnp) ---------- */
+
+// The ports Postfix/Dovecot should be listening on locally.
+export const EXPECTED_LISTEN_PORTS = [25, 465, 587];
+
+// Parse `ss -tlnp` / `netstat -tlnp`: collect every port in a LISTEN row's local address.
+export function parseListeningPorts(output: string): number[] {
+  const ports = new Set<number>();
+  for (const line of String(output ?? "").split("\n")) {
+    if (!/^\s*(LISTEN|tcp\S*\s)/i.test(line) && !/\bLISTEN\b/.test(line)) continue;
+    // Local address is the field before the peer address; match "<addr>:<port>" tokens.
+    const tokens = line.trim().split(/\s+/);
+    for (const tok of tokens) {
+      const m = tok.match(/:(\d{1,5})$/);
+      if (!m) continue;
+      const p = Number(m[1]);
+      if (p > 0 && p <= 65535) ports.add(p);
+      break; // only the first addr:port token (the local address)
+    }
+  }
+  return [...ports].sort((a, b) => a - b);
+}
+
+// Which of the expected SMTP ports aren't listening on the host.
+export function listenersVerdict(
+  listening: number[],
+  expected: number[] = EXPECTED_LISTEN_PORTS,
+): { status: "ok" | "fail"; missing: number[] } {
+  const set = new Set(listening);
+  const missing = expected.filter((p) => !set.has(p));
+  return { status: missing.length ? "fail" : "ok", missing };
+}
+
+/* ---------- host firewall (ufw status) ---------- */
+
+// Every port a Mailcow host should accept.
+export const FIREWALL_PORTS = [25, 465, 587, 80, 443, 993, 995];
+
+// Parse `ufw status`: whether it's active, and which ports are explicitly ALLOWed.
+export function parseUfwStatus(output: string): { active: boolean; allowed: number[] } {
+  const text = String(output ?? "");
+  const active = /Status:\s*active/i.test(text);
+  const allowed = new Set<number>();
+  for (const line of text.split("\n")) {
+    // e.g. "25/tcp   ALLOW   Anywhere" or "587   ALLOW   Anywhere"
+    const m = line.match(/^\s*(\d{1,5})(?:\/tcp)?\s+ALLOW\b/i);
+    if (m) allowed.add(Number(m[1]));
+  }
+  return { active, allowed: [...allowed].sort((a, b) => a - b) };
+}
+
+// An inactive ufw isn't blocking anything — that's fine. When active, every mail port must be open.
+export function firewallVerdict(
+  parsed: { active: boolean; allowed: number[] },
+  required: number[] = FIREWALL_PORTS,
+): { status: "ok" | "fail"; blocked: number[] } {
+  if (!parsed.active) return { status: "ok", blocked: [] };
+  const set = new Set(parsed.allowed);
+  const blocked = required.filter((p) => !set.has(p));
+  return { status: blocked.length ? "fail" : "ok", blocked };
+}
+
+/* ---------- Postfix log errors ---------- */
+
+// Classify notable delivery errors in recent postfix logs (step 9 of the runbook).
+export function summarizeMailLog(output: string): {
+  deferred: number;
+  bounced: number;
+  timeouts: number;
+  hostNotFound: number;
+  blocked: number;
+  ipv6Timeouts: number;
+  ipv4Timeouts: number;
+  samples: string[];
+} {
+  const text = String(output ?? "");
+  const lines = text.split("\n").filter((l) => l.trim());
+  const count = (re: RegExp) => lines.filter((l) => re.test(l)).length;
+  const samples = lines
+    .filter((l) =>
+      /status=(deferred|bounced)|Connection timed out|Host not found|550 5\.7|Name service error/i.test(
+        l,
+      ),
+    )
+    .slice(-5)
+    .map((l) => l.trim().slice(0, 240));
+
+  // Postfix logs the address it actually dialled in brackets:
+  //   connect to mx.example.com[2a00:1450:400c::1a]:25: Connection timed out   <- IPv6
+  //   connect to mx.example.com[142.250.1.26]:25: Connection timed out         <- IPv4
+  // Splitting these apart matters: timeouts ONLY on IPv6 while IPv4 works is the classic
+  // broken-IPv6-egress case, which has a completely different fix from a real port-25 block.
+  const failedConnect = lines.filter((l) =>
+    /(Connection timed out|Network is unreachable|No route to host)/i.test(l),
+  );
+  const bracketed = (l: string) => l.match(/\[([^\]]+)\]:\d+:/)?.[1] ?? "";
+  const isIpv6 = (a: string) => a.includes(":");
+  return {
+    deferred: count(/status=deferred/i),
+    bounced: count(/status=bounced/i),
+    timeouts: count(/Connection timed out/i),
+    hostNotFound: count(/Host not found|Name service error/i),
+    blocked: count(/550 5\.7/i),
+    ipv6Timeouts: failedConnect.filter((l) => isIpv6(bracketed(l))).length,
+    ipv4Timeouts: failedConnect.filter((l) => {
+      const a = bracketed(l);
+      return !!a && !isIpv6(a);
+    }).length,
+    samples,
+  };
+}
+
+// Is broken IPv6 egress the reason mail is deferring? True when connections are timing out on
+// IPv6 and IPv4 is demonstrably fine — Postfix prefers AAAA, hangs, and defers, even though the
+// server can reach the internet perfectly well over IPv4. The fix is to stop Postfix using IPv6,
+// which is completely different from "the provider blocks port 25".
+export function ipv6DeliveryVerdict(
+  log: { ipv6Timeouts: number; ipv4Timeouts: number },
+  outboundPort25Open: boolean,
+): "broken-ipv6" | "ok" {
+  if (log.ipv6Timeouts <= 0) return "ok";
+  // If IPv4 is also timing out, this isn't an IPv6-specific fault — don't misdiagnose it.
+  if (!outboundPort25Open) return "ok";
+  if (log.ipv4Timeouts >= log.ipv6Timeouts) return "ok";
+  return "broken-ipv6";
 }
 
 /* ---------- DKIM key match ---------- */
@@ -97,8 +337,18 @@ export interface QueueStats {
 }
 
 const MONTHS: Record<string, number> = {
-  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
-  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+  Jan: 0,
+  Feb: 1,
+  Mar: 2,
+  Apr: 3,
+  May: 4,
+  Jun: 5,
+  Jul: 6,
+  Aug: 7,
+  Sep: 8,
+  Oct: 9,
+  Nov: 10,
+  Dec: 11,
 };
 
 // Parse `postqueue -p` output: queue depth, age of the oldest message, and a classification of the
@@ -125,7 +375,8 @@ export function parsePostfixQueue(output: string, nowMs: number): QueueStats {
     let year = now.getUTCFullYear();
     let ts = Date.UTC(year, mon, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
     // Arrival can't be in the future — if it is, it belongs to last year (Dec seen in Jan).
-    if (ts > nowMs + 24 * 3600 * 1000) ts = Date.UTC(year - 1, mon, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+    if (ts > nowMs + 24 * 3600 * 1000)
+      ts = Date.UTC(year - 1, mon, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
     if (oldestMs === null || ts < oldestMs) oldestMs = ts;
   }
 
@@ -136,9 +387,17 @@ export function parsePostfixQueue(output: string, nowMs: number): QueueStats {
   let r: RegExpExecArray | null;
   while ((r = reasonRe.exec(text)) !== null) {
     const reason = r[1].toLowerCase();
-    if (/timed out|timeout|connection refused|no route to host|network is unreachable|connect to/.test(reason)) {
+    if (
+      /timed out|timeout|connection refused|no route to host|network is unreachable|connect to/.test(
+        reason,
+      )
+    ) {
       deferrals.timeout++;
-    } else if (/said:\s*[45]\d\d|blocked|blacklist|spam|reputation|rejected|access denied|not authorized/.test(reason)) {
+    } else if (
+      /said:\s*[45]\d\d|blocked|blacklist|spam|reputation|rejected|access denied|not authorized/.test(
+        reason,
+      )
+    ) {
       deferrals.rejected++;
     } else {
       deferrals.other++;
@@ -153,15 +412,33 @@ export function parsePostfixQueue(output: string, nowMs: number): QueueStats {
 // Turn queue stats into a health verdict given thresholds.
 export function queueVerdict(
   stats: QueueStats,
-  opts: { maxCount?: number; maxAgeMinutes?: number } = {},
+  opts: {
+    maxCount?: number;
+    maxAgeMinutes?: number;
+    deferAgeMinutes?: number;
+    failAgeMinutes?: number;
+  } = {},
 ): "ok" | "warn" | "fail" {
   const maxCount = opts.maxCount ?? 50;
   const maxAge = opts.maxAgeMinutes ?? 360; // 6h
+  const deferAge = opts.deferAgeMinutes ?? 60; // 1h
+  const failAge = opts.failAgeMinutes ?? 1440; // 24h
   if (stats.count === 0) return "ok";
+  const age = stats.oldestAgeMinutes;
+  // Mail that has been stuck for a day is failing, not "worth a look" — Postfix gives up and
+  // bounces around 5 days, so this is a countdown to lost mail regardless of queue depth.
+  if (age !== null && age >= failAge) return "fail";
   const overCount = stats.count > maxCount;
-  const overAge = stats.oldestAgeMinutes !== null && stats.oldestAgeMinutes > maxAge;
+  // >= so a queue sitting exactly at the limit isn't reported as healthy.
+  const overAge = age !== null && age >= maxAge;
   if (overCount && overAge) return "fail";
   if (overCount || overAge) return "warn";
+  // Mail that keeps failing to deliver is a problem well before the hard thresholds: a queue
+  // aging past deferAge with real deferral reasons means delivery is repeatedly failing, even
+  // if it's only a handful of messages.
+  const deferring = stats.deferrals.timeout + stats.deferrals.rejected > 0;
+  if (deferring && stats.oldestAgeMinutes !== null && stats.oldestAgeMinutes >= deferAge)
+    return "warn";
   return "ok";
 }
 

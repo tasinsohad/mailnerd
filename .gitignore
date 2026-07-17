@@ -25,3 +25,14 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 nul
+
+# Scratch / one-off scripts (session debugging)
+/clear-queue.ts
+/diag-batch.ts
+/fix-sogo.ts
+/verify-mailcow.ts
+/script*.ts
+/scratch/
+
+# Local Claude Code settings
+.claude/settings.local.json
