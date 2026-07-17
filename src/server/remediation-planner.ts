@@ -36,6 +36,15 @@ function statusOf(health: DomainHealth | null, id: string): HealthStatus | "abse
 }
 const bad = (s: HealthStatus | "absent") => s === "fail" || s === "warn";
 
+// One-line summary of a plan ("2 fixes, 1 manual"). Exported so the UI can label a focused
+// single-issue plan the same way the full plan is labelled, without duplicating the wording.
+export function summarizePlan(steps: RemediationStep[], manual: ManualItem[]): string {
+  return (
+    `${steps.length} fix${steps.length === 1 ? "" : "es"}` +
+    (manual.length ? `, ${manual.length} manual` : "")
+  );
+}
+
 export function buildRemediationPlan(
   domainHealth: DomainHealth | null,
   serverHealth: DomainHealth | null,
@@ -186,8 +195,5 @@ export function buildRemediationPlan(
     });
   }
 
-  const summary =
-    `${steps.length} fix${steps.length === 1 ? "" : "es"}` +
-    (manual.length ? `, ${manual.length} manual` : "");
-  return { steps, manual, summary };
+  return { steps, manual, summary: summarizePlan(steps, manual) };
 }
