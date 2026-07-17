@@ -22,7 +22,8 @@ import {
 } from "./mailcow-helpers";
 import { resolveAndSaveCfZoneId } from "./cloudflare";
 import { fetchAllCfDnsRecords, createCfDnsRecordResilient } from "./cloudflare.functions";
-import { pushDns as pipelinePushDns, unproxyDns } from "./pipeline";
+import { unproxyDns } from "./pipeline";
+import { pushDnsForDomain } from "./domains-heal";
 
 // Re-exported for any existing importers of these modules.
 export { cfTxtContent };
@@ -459,7 +460,7 @@ export const pushDnsToCloudflare = createServerFn({ method: "POST" })
     if (!domain) return { error: "Domain not found" };
 
     try {
-      const { results } = await pipelinePushDns(db, domain, userId);
+      const { results } = await pushDnsForDomain(db, domain, userId);
       return { results };
     } catch (err) {
       return { error: String(err) };

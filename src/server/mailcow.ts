@@ -3,8 +3,9 @@ import { requireAuth } from "@/lib/auth";
 import { z } from "zod";
 import { domains } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
-import { ensureMailDomains, createMailboxes, syncDkim } from "./pipeline";
+import { ensureMailDomains, createMailboxes } from "./pipeline";
 import { ensureWorkingApiKey } from "./mailcow-key";
+import { syncDkimForDomain } from "./domains-heal";
 
 export const setupMailcowDomain = createServerFn({ method: "POST" })
   .middleware([requireAuth])
@@ -54,7 +55,8 @@ export const fetchDkimAndSync = createServerFn({ method: "POST" })
     }
 
     try {
-      return await syncDkim(db, domain, userId);
+      const { results } = await syncDkimForDomain(db, domain, userId);
+      return { results };
     } catch (err) {
       return { error: String(err) };
     }
