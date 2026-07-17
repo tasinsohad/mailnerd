@@ -245,25 +245,55 @@ export const runJobRemediation = createServerFn({ method: "POST" })
     const { serverSteps, domainSteps } = dedupePlanByServer(perDomain);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const byId = new Map<string, any>(rows.map((d: any) => [d.id, d]));
+
+    // Best-credentialed representative per IP. Server steps SSH into the shared box, so use the
+    // sibling domain that actually has usable creds (sshPassword, ideally + mailcowApiKey) rather
+    // than whichever domain first surfaced the step: a rejected-API-key domain can win the dedup
+    // race with a null sshPassword and spuriously fail an otherwise-fixable box. Mirrors the
+    // representativesByIp selection in health-actions.ts.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const repByIp = new Map<string, any>();
+    for (const d of rows as any[]) {
+      if (!d.ipAddress) continue;
+      const cur = repByIp.get(d.ipAddress);
+      const dBest = !!d.sshPassword && !!d.mailcowApiKey;
+      const curBest = !!cur?.sshPassword && !!cur?.mailcowApiKey;
+      if (!cur || (d.sshPassword && !cur.sshPassword) || (dBest && !curBest)) {
+        repByIp.set(d.ipAddress, d);
+      }
+    }
+    const targetForIp = (ip: string): SshTarget | null => {
+      const rep = repByIp.get(ip);
+      return rep?.sshPassword
+        ? { ipAddress: ip, sshUser: rep.sshUser || "root", sshPassword: rep.sshPassword }
+        : null;
+    };
+
     const results: StepResult[] = [];
     log.info(
       `Job auto-heal for ${rows.length} domain(s): ${serverSteps.length} server step(s), ${domainSteps.length} domain step(s).`,
     );
 
-    for (const { step, domainId } of serverSteps) {
-      const domain = byId.get(domainId);
-      const target: SshTarget | null =
-        domain.ipAddress && domain.sshPassword
-          ? { ipAddress: domain.ipAddress, sshUser: domain.sshUser || "root", sshPassword: domain.sshPassword }
-          : null;
-      log.cmd(`${step.label} (server ${domain.ipAddress})`);
-      results.push(await executeStep(step, { db, userId, domain, target }, log));
-    }
+    type ServerEntry = { ipAddress: string; step: RemediationStep; domainId: string };
+    const runServerStep = async (e: ServerEntry) => {
+      log.cmd(`${e.step.label} (server ${e.ipAddress})`);
+      const domain = byId.get(e.domainId);
+      results.push(
+        await executeStep(e.step, { db, userId, domain, target: targetForIp(e.ipAddress) }, log),
+      );
+    };
+
+    // Re-impose the planner's cross-target order across the batch (dedup groups by target and loses
+    // it): everything except the queue flush, then per-domain DNS/auth, then the flush LAST — so the
+    // box is up and mail is authed before any retry. The single-domain executor keeps plan order for
+    // free; the batch has to rebuild it.
+    for (const e of serverSteps.filter((s) => s.step.action !== "flushQueue")) await runServerStep(e);
     for (const { step, domainId } of domainSteps) {
       const domain = byId.get(domainId);
       log.cmd(`${step.label} (${domain.name})`);
       results.push(await executeStep(step, { db, userId, domain, target: null }, log));
     }
+    for (const e of serverSteps.filter((s) => s.step.action === "flushQueue")) await runServerStep(e);
 
     log.info(`Job auto-heal done: ${results.filter((r) => r.status === "fixed").length} applied.`);
     return { results, transcript: log.transcript() };
