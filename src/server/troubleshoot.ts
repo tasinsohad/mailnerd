@@ -4,16 +4,12 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { userSecrets } from "@/lib/db/schema";
 import { checkServerHealth, deriveSendingDomain } from "./health-server";
-import {
-  fixRestartMailcow,
-  fixOpenFirewall,
-  fixFlushQueue,
-  fixCreateApiKey,
-  fixPostfixIpv4Only,
-} from "./server-fixes";
 import { readMailcowConfigOverSsh } from "./mailcow-key";
 import { ConsoleLog, redact } from "./console-bus";
 import { fetchServerLog } from "./server-fixes";
+import { buildRemediationPlan } from "./remediation-planner";
+import { executeStep } from "./remediation";
+import type { DomainHealth, Indicator } from "./health-types";
 
 // Ad-hoc troubleshooting for an EXTERNAL VPS that this system did not provision (mailboxes were
 // created elsewhere). The user supplies just the IP + SSH login; we reuse the same deliverability
@@ -162,8 +158,6 @@ export interface QuickFixResult {
 
 // Indicator ids the Cloudflare un-proxy fix resolves.
 const DNS_CASCADE_IDS = ["mailhost", "fcrdns", "submission"];
-// Indicator ids the Mailcow restart resolves (stopped/unhealthy containers, ports not listening).
-const MAILCOW_RESTART_IDS = ["containers", "listeners", "mailcow"];
 
 function cfHeaders(token: string) {
   return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
@@ -317,8 +311,15 @@ export const quickFixServer = createServerFn({ method: "POST" })
         sshUser: z.string().trim().min(1).default("root"),
         sshPassword: z.string().min(1),
         mailcowHostname: z.string().trim().optional(),
-        // Indicator ids currently failing/warning — tells us which fixes to attempt.
+        // Indicator ids currently failing/warning — the caller-targeted subset to attempt this
+        // round (respects the per-row "fix just this" and the retry loop's narrowing).
         issues: z.array(z.string()).default([]),
+        // The full health snapshot (id + status per indicator) driving the shared planner, so the
+        // fix ordering and smart ipv6/queue gating match the system flow instead of being
+        // hand-rolled here. Passed fresh each round so box-down → restart-then-rest converges.
+        indicators: z
+          .array(z.object({ id: z.string(), status: z.enum(["ok", "warn", "fail", "skip"]) }))
+          .default([]),
         // Client-generated id for the live console stream (see console-bus.ts).
         runId: z.string().trim().optional(),
       })
@@ -331,7 +332,13 @@ export const quickFixServer = createServerFn({ method: "POST" })
     const log = new ConsoleLog(data.runId);
     log.info(`Quick fix starting for ${data.ipAddress} — ${data.issues.length} issue(s).`);
 
-    // 1. Un-proxy the mail host if any DNS-cascade check is unhealthy and we know the host.
+    const secrets = db
+      ? await db.query.userSecrets.findFirst({ where: eq(userSecrets.userId, userId) })
+      : null;
+
+    // 1. Un-proxy the mail host in Cloudflare. This is the ONE fix that can't route through the
+    // shared executeStep: that path (fixDns) un-proxies via a persisted domain row, and the
+    // external flow has no such row — so keep the direct Cloudflare call, gated on the DNS cascade.
     if (DNS_CASCADE_IDS.some((id) => data.issues.includes(id))) {
       if (!data.mailcowHostname) {
         results.push({
@@ -340,29 +347,24 @@ export const quickFixServer = createServerFn({ method: "POST" })
           status: "skipped",
           detail: "No mail host known — add it under Advanced, then re-run.",
         });
+      } else if (!secrets?.cfApiToken) {
+        results.push({
+          id: "mailhost",
+          label: "Un-proxy mail host",
+          status: "skipped",
+          detail: `No Cloudflare token in Settings, so I can't change DNS. Un-proxy ${data.mailcowHostname} manually (set it DNS-only / grey cloud).`,
+        });
       } else {
-        const secrets = db
-          ? await db.query.userSecrets.findFirst({ where: eq(userSecrets.userId, userId) })
-          : null;
-        if (!secrets?.cfApiToken) {
-          results.push({
-            id: "mailhost",
-            label: "Un-proxy mail host",
-            status: "skipped",
-            detail: `No Cloudflare token in Settings, so I can't change DNS. Un-proxy ${data.mailcowHostname} manually (set it DNS-only / grey cloud).`,
-          });
-        } else {
-          const r = await cloudflareUnproxyMailHost(
-            secrets.cfApiToken,
-            secrets.cfAccountId ?? null,
-            data.mailcowHostname,
-            data.ipAddress,
-          ).catch((e) => ({
-            status: "failed" as QuickFixOutcome,
-            detail: e instanceof Error ? e.message : String(e),
-          }));
-          results.push({ id: "mailhost", label: "Un-proxy mail host", ...r });
-        }
+        const r = await cloudflareUnproxyMailHost(
+          secrets.cfApiToken,
+          secrets.cfAccountId ?? null,
+          data.mailcowHostname,
+          data.ipAddress,
+        ).catch((e) => ({
+          status: "failed" as QuickFixOutcome,
+          detail: e instanceof Error ? e.message : String(e),
+        }));
+        results.push({ id: "mailhost", label: "Un-proxy mail host", ...r });
       }
     }
 
@@ -372,38 +374,51 @@ export const quickFixServer = createServerFn({ method: "POST" })
       sshPassword: data.sshPassword,
     };
 
-    // 2. Bring up / restart the Mailcow stack when containers are down or ports aren't listening.
-    if (MAILCOW_RESTART_IDS.some((id) => data.issues.includes(id))) {
-      const r = await fixRestartMailcow(target, log);
-      results.push({ id: "containers", label: "Restart Mailcow", ...r });
-    }
+    // 2. Every server fix now flows through the shared remediation planner + executeStep, so the
+    // ordering (restart → api key → firewall → force-IPv4 → flush LAST) and the smart gating
+    // (IPv4 before flush; no flush when the queue is stuck on a port-25 block or reputation) are
+    // the SAME logic the system-created flow uses — no longer hand-rolled here.
+    //
+    // Two adaptations bridge the external vocabulary to the planner's inputs:
+    //   • a mail-log error is a queue problem to the planner (it only models "queue")
+    //   • the "apikey" pseudo-issue (server has no usable key) is the planner's mailcow="warn"
+    const indicators: Indicator[] = data.indicators.map((i) => ({
+      id: i.id,
+      status: i.status,
+      label: "",
+      detail: "",
+    }));
+    const elevate = (id: string, status: "warn" | "fail") => {
+      const ind = indicators.find((x) => x.id === id);
+      if (!ind) indicators.push({ id, status, label: "", detail: "" });
+      else if (ind.status === "ok" || ind.status === "skip") ind.status = status;
+    };
+    if (data.issues.includes("maillog")) elevate("queue", "fail");
+    if (data.issues.includes("apikey")) elevate("mailcow", "warn");
 
-    // 3. Open the mail ports on the host firewall.
-    if (data.issues.includes("firewall")) {
-      const r = await fixOpenFirewall(target, log);
-      results.push({ id: "firewall", label: "Open mail ports", ...r });
-    }
+    const health: DomainHealth = { status: "unknown", score: 0, checkedAt: "", indicators };
+    const plan = buildRemediationPlan(health, health, {
+      hasCloudflareToken: !!secrets?.cfApiToken,
+    });
 
-    // 4. Broken IPv6 egress — the actual cause behind "port 25 open but everything times out".
-    // Must run BEFORE the flush, otherwise the retry just stalls on IPv6 again. This fix also
-    // flushes on the way out, so skip the separate flush when it succeeds.
-    let ipv6Fixed = false;
-    if (data.issues.includes("ipv6")) {
-      const r = await fixPostfixIpv4Only(target, log);
-      results.push({ id: "ipv6", label: "Force Postfix to IPv4", ...r });
-      ipv6Fixed = r.status === "fixed";
-    }
-
-    // 5. Flush a backed-up mail queue / retry mail that's logging delivery errors.
-    if (!ipv6Fixed && (data.issues.includes("queue") || data.issues.includes("maillog"))) {
-      const r = await fixFlushQueue(target, log);
-      results.push({ id: "queue", label: "Flush mail queue", ...r });
-    }
-
-    // 6. Create a Mailcow API key when the server has none, so the API-only checks can run.
-    if (data.issues.includes("apikey")) {
-      const r = await fixCreateApiKey(target, log);
-      results.push({ id: "apikey", label: "Create Mailcow API key", ...r });
+    // Which caller-targeted issues each server step resolves — run a step only if the caller asked
+    // for one of them, so the per-row "fix just this" and the retry loop's narrowing still hold.
+    const STEP_ISSUES: Record<string, string[]> = {
+      restartMailcow: ["containers", "listeners"],
+      createApiKey: ["mailcow", "apikey"],
+      openFirewall: ["firewall"],
+      forcePostfixIPv4: ["ipv6"],
+      flushQueue: ["queue", "maillog"],
+    };
+    for (const step of plan.steps) {
+      // Domain-target steps (fixDns/pushDns/syncDkim) need a persisted domain row — not available
+      // for a server we don't manage. fixDns is handled above; the rest don't apply externally.
+      if (step.target !== "server") continue;
+      const sources = STEP_ISSUES[step.action] ?? [];
+      if (!sources.some((id) => data.issues.includes(id))) continue;
+      log.cmd(step.label);
+      const r = await executeStep(step, { db, userId, domain: null, target }, log);
+      results.push({ id: step.id, label: step.label, status: r.status, detail: r.detail });
     }
 
     log.info("Quick fix finished.");

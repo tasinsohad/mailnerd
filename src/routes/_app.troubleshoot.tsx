@@ -421,7 +421,7 @@ function TroubleshootPage() {
     );
   };
 
-  const quickFix = async (fixableIds: string[]) => {
+  const quickFix = async (fixableIds: string[], indicators: Indicator[]) => {
     if (!result || fixableIds.length === 0) return null;
     setFixing(true);
     setConsoleLines([]);
@@ -436,6 +436,7 @@ function TroubleshootPage() {
           sshPassword: form.sshPassword,
           mailcowHostname: result.mailcowHostname || form.mailcowHostname.trim() || undefined,
           issues: fixableIds,
+          indicators: indicators.map((i) => ({ id: i.id, status: i.status })),
           runId,
         },
       });
@@ -535,11 +536,16 @@ function TroubleshootPage() {
     if (target.length === 0) return;
     if (!confirmPlan(target)) return;
 
+    // Pass the health snapshot fresh each round: the planner needs real statuses (box-down →
+    // restart first, then the rest next round), and React state (`result`) is stale inside this
+    // loop, so thread the re-check's indicators through explicitly.
+    let indicators = result.health.indicators;
     for (let round = 1; round <= MAX_ROUNDS; round++) {
-      const outcome = await quickFix(target);
+      const outcome = await quickFix(target, indicators);
       if (!outcome) return;
       const fresh = await run({ silent: true });
       if (!fresh) return;
+      indicators = fresh.health.indicators;
 
       const remaining = stillBroken(fresh, target);
       if (remaining.length === 0) {
