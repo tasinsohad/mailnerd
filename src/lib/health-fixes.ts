@@ -2,7 +2,13 @@ import type { HealthAction } from "@/server/health";
 import { pushDnsToCloudflare, repairDomainDns } from "@/server/domains";
 import { fetchDkimAndSync, setupMailcowDomain } from "@/server/mailcow";
 import { provisionServer } from "@/server/provisioning";
-import { restartMailcowForDomain, openFirewallForDomain } from "@/server/server-fixes";
+import {
+  restartMailcowForDomain,
+  openFirewallForDomain,
+  flushQueueForDomain,
+  forcePostfixIPv4ForDomain,
+  createApiKeyForDomain,
+} from "@/server/server-fixes";
 
 // Single source of truth mapping a health indicator's `action` to its human label, the server
 // function that performs it, and whether it's destructive (needs a confirm). Used by the
@@ -14,6 +20,9 @@ export const ACTION_LABEL: Record<HealthAction, string> = {
   syncDkim: "Sync DKIM",
   openFirewall: "Open mail ports",
   restartMailcow: "Restart Mailcow",
+  forcePostfixIPv4: "Force IPv4",
+  flushQueue: "Flush queue",
+  createApiKey: "Create API key",
   recreate: "Recreate mailboxes",
   provision: "Re-provision",
 };
@@ -24,7 +33,9 @@ export const ACTION_ORDER: HealthAction[] = [
   "pushDns",
   "syncDkim",
   "openFirewall",
-  "restartMailcow",
+  "createApiKey",
+  "forcePostfixIPv4",
+  "flushQueue",
   "recreate",
   "provision",
 ];
@@ -33,6 +44,8 @@ export const ACTION_ORDER: HealthAction[] = [
 // interrupt mail (a stack restart) — confirm first.
 export const DESTRUCTIVE_ACTIONS: ReadonlySet<HealthAction> = new Set<HealthAction>([
   "restartMailcow",
+  "createApiKey",
+  "forcePostfixIPv4",
   "recreate",
   "provision",
 ]);
@@ -50,6 +63,12 @@ export function runHealthFix(action: HealthAction, domainId: string): Promise<an
       return openFirewallForDomain({ data: { domainId } });
     case "restartMailcow":
       return restartMailcowForDomain({ data: { domainId } });
+    case "flushQueue":
+      return flushQueueForDomain({ data: { domainId } });
+    case "forcePostfixIPv4":
+      return forcePostfixIPv4ForDomain({ data: { domainId } });
+    case "createApiKey":
+      return createApiKeyForDomain({ data: { domainId } });
     case "recreate":
       return setupMailcowDomain({ data: { domainId, recreate: true } });
     case "provision":

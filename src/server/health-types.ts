@@ -7,8 +7,11 @@ export type HealthAction =
   | "pushDns"
   | "syncDkim"
   | "fixDns"
-  | "restartMailcow" // bring up / restart the Mailcow stack over SSH
-  | "openFirewall" // ufw allow the mail ports over SSH
+  | "openFirewall"
+  | "restartMailcow"
+  | "forcePostfixIPv4"
+  | "flushQueue"
+  | "createApiKey"
   | "recreate"
   | "provision";
 

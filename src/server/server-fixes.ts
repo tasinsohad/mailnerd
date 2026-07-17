@@ -385,3 +385,39 @@ export const openFirewallForDomain = createServerFn({ method: "POST" })
     const r = await fixOpenFirewall(target);
     return r.status === "failed" ? { error: r.detail } : { success: true, detail: r.detail };
   });
+
+export const flushQueueForDomain = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .inputValidator(domainInput)
+  .handler(async ({ data, context }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { db, userId } = context as any;
+    const { target, error } = await targetForDomain(db, userId, data.domainId);
+    if (error || !target) return { error };
+    const r = await fixFlushQueue(target);
+    return r.status === "failed" ? { error: r.detail } : { success: true, detail: r.detail };
+  });
+
+export const forcePostfixIPv4ForDomain = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .inputValidator(domainInput)
+  .handler(async ({ data, context }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { db, userId } = context as any;
+    const { target, error } = await targetForDomain(db, userId, data.domainId);
+    if (error || !target) return { error };
+    const r = await fixPostfixIpv4Only(target);
+    return r.status === "failed" ? { error: r.detail } : { success: true, detail: r.detail };
+  });
+
+export const createApiKeyForDomain = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .inputValidator(domainInput)
+  .handler(async ({ data, context }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { db, userId } = context as any;
+    const { target, error } = await targetForDomain(db, userId, data.domainId);
+    if (error || !target) return { error };
+    const r = await fixCreateApiKey(target);
+    return r.status === "failed" ? { error: r.detail } : { success: true, detail: r.detail };
+  });
