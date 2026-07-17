@@ -283,17 +283,32 @@ export const runJobRemediation = createServerFn({ method: "POST" })
       );
     };
 
-    // Re-impose the planner's cross-target order across the batch (dedup groups by target and loses
-    // it): everything except the queue flush, then per-domain DNS/auth, then the flush LAST — so the
-    // box is up and mail is authed before any retry. The single-domain executor keeps plan order for
-    // free; the batch has to rebuild it.
-    for (const e of serverSteps.filter((s) => s.step.action !== "flushQueue")) await runServerStep(e);
+    // Re-impose the planner's cross-target order across the batch (dedup groups steps by target and
+    // loses both the canonical order AND the plan's interleaving). Rank the server steps and split
+    // them: PRE-auth (restart → create key → open firewall) runs first, then every domain's DNS /
+    // auth, then POST-auth (force-IPv4 → flush) LAST. This matters two ways the old insertion-order
+    // pass got wrong: (1) siblings on one IP can emit different steps, so createApiKey could run
+    // before restart — ranking fixes that; (2) forcePostfixIPv4 does a `postqueue -f`, so it must
+    // run AFTER auth, alongside the flush, or it retries mail before SPF/DKIM/DMARC are published.
+    const SERVER_RANK: Record<string, number> = {
+      restartMailcow: 1,
+      createApiKey: 2,
+      openFirewall: 3,
+      forcePostfixIPv4: 4,
+      flushQueue: 5,
+    };
+    const rankOf = (e: ServerEntry) => SERVER_RANK[e.step.action] ?? 99;
+    const ranked = [...serverSteps].sort((a, b) => rankOf(a) - rankOf(b));
+    const preAuth = ranked.filter((e) => rankOf(e) <= 3);
+    const postAuth = ranked.filter((e) => rankOf(e) >= 4); // force-IPv4 (4) before flush (5)
+
+    for (const e of preAuth) await runServerStep(e);
     for (const { step, domainId } of domainSteps) {
       const domain = byId.get(domainId);
       log.cmd(`${step.label} (${domain.name})`);
       results.push(await executeStep(step, { db, userId, domain, target: null }, log));
     }
-    for (const e of serverSteps.filter((s) => s.step.action === "flushQueue")) await runServerStep(e);
+    for (const e of postAuth) await runServerStep(e);
 
     log.info(`Job auto-heal done: ${results.filter((r) => r.status === "fixed").length} applied.`);
     return { results, transcript: log.transcript() };

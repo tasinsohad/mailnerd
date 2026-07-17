@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapLimit } from "../health-actions";
+import { mapLimit } from "../map-limit";
 
 // "Re-check all" awaited each domain, then each server, strictly one at a time. Every check is
 // mostly waiting on DNS/SSH/HTTP, so a real account serialised into minutes of dead time.

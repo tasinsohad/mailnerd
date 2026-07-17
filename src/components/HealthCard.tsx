@@ -38,7 +38,9 @@ const OVERALL: Record<string, { color: string; label: string }> = {
 const INDICATOR_PLAN_IDS: Record<string, string[]> = {
   containers: ["restartMailcow"],
   listeners: ["restartMailcow"],
-  mailcow: ["createApiKey"],
+  // fail → restart the stack; warn → create an API key. The planner emits whichever fits the
+  // status, so the row surfaces the right one.
+  mailcow: ["createApiKey", "restartMailcow"],
   mailhost: ["fixDns"],
   fcrdns: ["fixDns", "ptr"],
   firewall: ["openFirewall"],

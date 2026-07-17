@@ -39,10 +39,22 @@ describe("buildRemediationPlan", () => {
     expect(manualIds(p)).toContain("blacklist");
   });
 
-  it("mailcow API warn → createApiKey, disruptive", () => {
+  it("mailcow API warn (no usable key) → createApiKey, not restart, disruptive", () => {
     const p = buildRemediationPlan(null, mk({ mailcow: "warn" }), {});
     expect(ids(p)).toContain("createApiKey");
+    expect(ids(p)).not.toContain("restartMailcow");
     expect(p.steps.find((s) => s.id === "createApiKey")!.disruptive).toBe(true);
+  });
+
+  it("mailcow API fail (stack failed/unreachable) → restartMailcow, not createApiKey", () => {
+    const p = buildRemediationPlan(null, mk({ mailcow: "fail" }), {});
+    expect(ids(p)).toContain("restartMailcow");
+    expect(ids(p)).not.toContain("createApiKey");
+  });
+
+  it("mailcow fail + containers warn → a SINGLE restartMailcow (not duplicated)", () => {
+    const p = buildRemediationPlan(null, mk({ mailcow: "fail", containers: "warn" }), {});
+    expect(ids(p).filter((id) => id === "restartMailcow")).toEqual(["restartMailcow"]);
   });
 
   it("containers warn (not a short-circuit) → restartMailcow AND pushDns both run", () => {

@@ -404,7 +404,10 @@ export const quickFixServer = createServerFn({ method: "POST" })
     // Which caller-targeted issues each server step resolves — run a step only if the caller asked
     // for one of them, so the per-row "fix just this" and the retry loop's narrowing still hold.
     const STEP_ISSUES: Record<string, string[]> = {
-      restartMailcow: ["containers", "listeners"],
+      // "mailcow" maps to BOTH: a failed/unreachable stack restarts, a missing key creates one —
+      // the planner picks which by status (fail → restart, warn → createApiKey), so listing it on
+      // both is safe (only one step is ever emitted for a given mailcow status).
+      restartMailcow: ["containers", "listeners", "mailcow"],
       createApiKey: ["mailcow", "apikey"],
       openFirewall: ["firewall"],
       forcePostfixIPv4: ["ipv6"],

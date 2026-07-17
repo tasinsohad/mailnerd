@@ -6,6 +6,7 @@ import { eq, and, inArray, desc } from "drizzle-orm";
 import { checkDomainHealth, type DomainHealth } from "./health";
 import { checkServerHealth } from "./health-server";
 import { diffSnapshots, toSnapshot, type IndicatorSnap } from "./health-history";
+import { mapLimit, DOMAIN_CONCURRENCY, SERVER_CONCURRENCY } from "./map-limit";
 
 // Append a compact history row for a check run, then prune to the newest ~100 for that target.
 // Tolerant of an unmigrated table (logs and moves on).
@@ -112,42 +113,22 @@ async function runServerOne(db: any, userId: string, rep: any): Promise<DomainHe
   return health;
 }
 
-// How many checks a sweep runs at once. Domains are DNS/HTTP-bound so they fan out wider; servers
-// each hold an SSH session and run real commands, so they stay tighter.
-const DOMAIN_CONCURRENCY = 8;
-const SERVER_CONCURRENCY = 4;
-
-// Run tasks with bounded concurrency. A sweep used to await each domain, then each server, strictly
-// one at a time: every check is mostly waiting on DNS/SSH/HTTP, so on a real account that serialised
-// into minutes of dead time ("Re-check all" spinning with nothing to show). The cap keeps us from
-// opening an unbounded number of SSH sessions / API calls at once.
-export async function mapLimit<T>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<unknown>,
-): Promise<void> {
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const item = items[next++];
-      try {
-        await fn(item);
-      } catch {
-        /* one bad domain/server must not abort the sweep */
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-}
-
 // Group a batch's domains by IP, choosing the best SSH/Mailcow representative for each server.
+// Preference is tiered — sshPassword+apiKey > sshPassword-only > no credentials — so a server check
+// isn't run credential-less (and the box reported unreachable) when a credentialed sibling exists on
+// the same IP. Matches repByIp in remediation.ts so the health check and the auto-heal agree.
 function representativesByIp(rows: any[]): any[] {
   const byIp = new Map<string, any>();
   for (const d of rows) {
     if (!d.ipAddress) continue;
     const cur = byIp.get(d.ipAddress);
-    const better = d.sshPassword && d.mailcowApiKey;
-    if (!cur || (better && !(cur.sshPassword && cur.mailcowApiKey))) byIp.set(d.ipAddress, d);
+    if (!cur) {
+      byIp.set(d.ipAddress, d);
+      continue;
+    }
+    const dBest = d.sshPassword && d.mailcowApiKey;
+    const curBest = cur.sshPassword && cur.mailcowApiKey;
+    if ((d.sshPassword && !cur.sshPassword) || (dBest && !curBest)) byIp.set(d.ipAddress, d);
   }
   return [...byIp.values()];
 }

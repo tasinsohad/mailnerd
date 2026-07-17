@@ -8,10 +8,13 @@ import { jobEvents } from "./events";
 // run (no chicken-and-egg). The runId is an unguessable UUID, so knowing it is the capability to
 // read that run's output — nothing else is keyed off it and it's never persisted.
 //
-// In-process only (jobEvents), unlike the provisioning queue's Redis channel: the troubleshoot
-// server fn and the SSE handler run in the same process. Callers always get the full transcript
-// back in the response too, so the console degrades to "shown at the end" if a stream can't
-// connect rather than losing anything.
+// In-process only (jobEvents), unlike the provisioning queue's Redis channel. In a single-process
+// deployment (dev, or a long-running Node server) the server fn and the SSE handler share the same
+// jobEvents emitter, so lines stream live. On serverless (Vercel), the fn and the SSE route can land
+// on DIFFERENT lambda instances that don't share the emitter, so the live stream stays silent there.
+// Either way callers always get the full transcript back in the response, and every consumer applies
+// it as a fallback, so the console degrades to "shown at the end" rather than losing anything. Making
+// it stream in prod would mean moving this channel onto Redis pub/sub like the provisioning queue.
 
 export const consoleChannel = (runId: string) => `console:${runId}`;
 

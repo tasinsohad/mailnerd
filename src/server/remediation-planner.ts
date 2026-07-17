@@ -67,13 +67,16 @@ export function buildRemediationPlan(
       disruptive: true,
     });
   } else {
-    if (sv("containers") === "warn") {
+    // Restart when containers are unhealthy, OR when the Mailcow API itself reports the stack as
+    // failed / unreachable (mailcow="fail"). A missing/unusable API KEY is a different problem
+    // (mailcow="warn" → create a key below), so only "fail" — not "warn" — restarts here.
+    if (sv("containers") === "warn" || sv("mailcow") === "fail") {
       steps.push({
         id: "restartMailcow",
         action: "restartMailcow",
         target: "server",
         label: "Restart Mailcow",
-        why: "One or more Mailcow containers are unhealthy; restart the stack.",
+        why: "One or more Mailcow containers are unhealthy or the API is unreachable; restart the stack.",
         disruptive: true,
       });
     }
