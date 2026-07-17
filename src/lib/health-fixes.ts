@@ -33,6 +33,7 @@ export const ACTION_ORDER: HealthAction[] = [
   "pushDns",
   "syncDkim",
   "openFirewall",
+  "restartMailcow",
   "createApiKey",
   "forcePostfixIPv4",
   "flushQueue",
