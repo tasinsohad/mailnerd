@@ -6,7 +6,9 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { HealthAction, DomainHealth, Indicator } from "@/server/health";
 import { runJobHealth, getBatchServerHealth } from "@/server/health-actions";
+import { runJobRemediation } from "@/server/remediation";
 import { ACTION_LABEL, ACTION_ORDER, DESTRUCTIVE_ACTIONS, runHealthFix } from "@/lib/health-fixes";
+import { LiveConsole, openConsole, type ConsoleLine } from "@/components/LiveConsole";
 
 type Domain = { id: string; name: string; ipAddress?: string | null; health?: DomainHealth | null };
 
@@ -107,6 +109,8 @@ export function JobIssuesPanel({
   onChanged?: () => void;
 }) {
   const [runningAction, setRunningAction] = useState<HealthAction | null>(null);
+  const [healing, setHealing] = useState(false);
+  const [consoleLines, setConsoleLines] = useState<ConsoleLine[]>([]);
 
   const { data: serverData } = useQuery({
     queryKey: ["batch-server-health", batchId],
@@ -160,13 +164,69 @@ export function JobIssuesPanel({
     );
   };
 
+  // Primary CTA: diagnose + plan every domain, collapse shared-IP server steps to one run each, and
+  // execute in the planner's order — streaming to the live console. runJobRemediation doesn't
+  // re-check (a batch re-check is heavier), so trigger runJobHealth here to refresh the badges.
+  const autoHeal = async () => {
+    setHealing(true);
+    setConsoleLines([]);
+    const { runId, close } = openConsole(setConsoleLines);
+    try {
+      const res: any = await runJobRemediation({ data: { batchId, runId } });
+      if (Array.isArray(res?.transcript) && res.transcript.length) {
+        setConsoleLines((prev) => (prev.length ? prev : res.transcript));
+      }
+      if (res?.error) {
+        toast.error(res.error);
+        return;
+      }
+      const applied = (res.results ?? []).filter((r: any) => r.status === "fixed").length;
+      toast.success(`Applied ${applied} fix${applied === 1 ? "" : "es"} — re-checking…`, {
+        duration: 8000,
+      });
+      try {
+        await runJobHealth({ data: { batchId } });
+      } catch {
+        /* re-check is best-effort — the fixes already ran */
+      }
+      onChanged?.();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Auto-heal failed");
+    } finally {
+      close();
+      setHealing(false);
+    }
+  };
+
+  const anyRunning = runningAction !== null || healing;
+
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="flex items-center gap-3 border-b border-border px-6 py-4">
         <Wrench className="h-5 w-5 text-muted-foreground" />
         <h2 className="font-display text-base font-semibold text-foreground">Troubleshooting</h2>
-        <span className="text-xs text-muted-foreground">Issues across this job's domains &amp; servers</span>
+        <span className="text-xs text-muted-foreground">
+          Issues across this job's domains &amp; servers
+        </span>
+        {fixes.length > 0 && (
+          <Button
+            size="sm"
+            className="ml-auto h-9 shrink-0 gap-1.5"
+            onClick={autoHeal}
+            disabled={anyRunning}
+            title="Diagnose every domain & server in this job and fix what's safely fixable, in the right order"
+          >
+            {healing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4" />}
+            Auto-heal all
+          </Button>
+        )}
       </div>
+
+      {(healing || consoleLines.length > 0) && (
+        <div className="border-b border-border px-6 py-4">
+          <LiveConsole lines={consoleLines} running={healing} filenameBase={`job-${batchId}`} />
+        </div>
+      )}
 
       {fixes.length > 0 && (
         <ul className="divide-y divide-border">
@@ -187,7 +247,7 @@ export function JobIssuesPanel({
                 size="sm"
                 variant={b.hasFail ? "default" : "outline"}
                 className="h-9 shrink-0 gap-1.5"
-                disabled={runningAction !== null}
+                disabled={anyRunning}
                 onClick={() => runFix(b)}
               >
                 {runningAction === b.action ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4" />}
