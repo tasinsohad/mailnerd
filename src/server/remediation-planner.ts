@@ -153,31 +153,56 @@ export function buildRemediationPlan(
         disruptive: true,
       });
     }
-    // Queue (last) — smart branch
+    // Queue (last) — smart branch. Identify an upstream blocker that makes a flush pointless, but
+    // NEVER silently withhold the flush at fail-level: a fail-level queue is 24h+ old (mail is about
+    // to bounce past Postfix's ~5-day limit), so a retry is worth attempting even if a blocker might
+    // re-defer it — we just annotate the caveat. Only a warn-level queue defers to a manual note
+    // when a blocker is present.
     if (bad(sv("queue"))) {
+      const failing = sv("queue") === "fail";
+      const blocker: "port25" | "reputation" | null =
+        sv("port25") === "fail"
+          ? "port25"
+          : sv("blacklist") === "fail" || bad(dm("dkim")) || bad(dm("spf")) || bad(dm("dmarc"))
+            ? "reputation"
+            : null;
+      const queuePort25 = {
+        id: "queue-port25",
+        label: "Mail queue (port 25 blocked)",
+        why: "The queue is stuck on outbound-25 blocks. A flush won't clear it — unblock port 25 with the provider or set a relayhost.",
+      };
+      const queueReputation = {
+        id: "queue-reputation",
+        label: "Mail queue (rejections)",
+        why: "The queue is stuck on remote rejections. A flush won't clear it — fix IP reputation and SPF/DKIM/DMARC first.",
+      };
+
       if (ipv6Stall) {
-        // forcePostfixIPv4 already retries the queue — no separate flush.
-      } else if (sv("port25") === "fail") {
-        manual.push({
-          id: "queue-port25",
-          label: "Mail queue (port 25 blocked)",
-          why: "The queue is stuck on outbound-25 blocks. A flush won't help — unblock port 25 with the provider or set a relayhost.",
-        });
-      } else if (sv("blacklist") === "fail" || bad(dm("dkim")) || bad(dm("spf")) || bad(dm("dmarc"))) {
-        manual.push({
-          id: "queue-reputation",
-          label: "Mail queue (rejections)",
-          why: "The queue is stuck on remote rejections. A flush won't help — fix IP reputation and SPF/DKIM/DMARC first.",
-        });
-      } else {
+        // forcePostfixIPv4 already retries the queue on its way out — no separate flush.
+      } else if (!blocker || failing) {
+        // No blocker, OR a fail-level queue we always try to flush. Warn when a blocker is present.
+        const caveat =
+          blocker === "port25"
+            ? " Outbound port 25 looks blocked, so this may re-defer until you unblock it."
+            : blocker === "reputation"
+              ? " Reputation or SPF/DKIM/DMARC looks off, so some may re-defer until that's fixed."
+              : "";
         steps.push({
           id: "flushQueue",
           action: "flushQueue",
           target: "server",
           label: "Flush mail queue",
-          why: "Retry the deferred mail now that the blockers are cleared.",
+          why: `Retry the deferred mail now.${caveat}`,
           disruptive: false,
         });
+        // Still surface the root cause (so the user fixes it, not just the symptom) when we flushed
+        // into a known blocker.
+        if (blocker === "port25") manual.push(queuePort25);
+        else if (blocker === "reputation") manual.push(queueReputation);
+      } else if (blocker === "port25") {
+        manual.push(queuePort25);
+      } else {
+        manual.push(queueReputation);
       }
     }
   }

@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { runDomainHealth } from "@/server/health-actions";
 import { runRemediationPlan } from "@/server/remediation";
+import { flushQueueForDomain } from "@/server/server-fixes";
 import type { DomainHealth, HealthStatus, Indicator } from "@/server/health";
 import { sortByPriority } from "@/server/health-checks";
 import {
@@ -58,11 +59,13 @@ function IndicatorRows({
   busy,
   fixStepFor,
   onFix,
+  onForceFlush,
 }: {
   indicators: Indicator[];
   busy: boolean;
   fixStepFor: (indicatorId: string) => RemediationStep | null;
   onFix: (indicatorId: string) => void;
+  onForceFlush: () => void;
 }) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   return (
@@ -84,16 +87,34 @@ function IndicatorRows({
               <span className="flex-1 truncate text-sm text-muted-foreground" title={ind.detail}>
                 {ind.detail}
               </span>
-              {fixStep && ind.status !== "ok" && ind.status !== "skip" && (
+              {ind.id === "queue" && (ind.status === "fail" || ind.status === "warn") ? (
+                // The queue always gets a direct "Flush now" that bypasses the planner's smart
+                // gating — so a stuck queue can always be retried on demand, even when the planner
+                // would otherwise withhold the flush (e.g. a suspected upstream block).
                 <Button
                   size="sm"
                   variant="outline"
                   className="h-8"
                   disabled={busy}
-                  onClick={() => onFix(ind.id)}
+                  onClick={onForceFlush}
+                  title="Run postqueue -f on the server now, regardless of the auto-heal plan"
                 >
-                  {fixStep.label}
+                  Flush now
                 </Button>
+              ) : (
+                fixStep &&
+                ind.status !== "ok" &&
+                ind.status !== "skip" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8"
+                    disabled={busy}
+                    onClick={() => onFix(ind.id)}
+                  >
+                    {fixStep.label}
+                  </Button>
+                )
               )}
               {ind.fix && (
                 <button
@@ -169,6 +190,26 @@ export function HealthCard({
       setBusy(false);
     }
   }, [domainId]);
+
+  // Direct "Flush now" override — runs postqueue -f on the server regardless of the planner's
+  // gating, so a stuck queue can always be retried on demand, then re-checks so the row updates.
+  const flushNow = useCallback(async () => {
+    setBusy(true);
+    toast.loading("Flushing the mail queue…", { id: "flushnow" });
+    try {
+      const res: any = await flushQueueForDomain({ data: { domainId } });
+      if (res?.error) toast.error(res.error, { id: "flushnow" });
+      else
+        toast.success(`${res?.detail ?? "Queue flushed"} — re-checking…`, {
+          id: "flushnow",
+          duration: 7000,
+        });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Flush failed", { id: "flushnow" });
+    } finally {
+      await recheck();
+    }
+  }, [domainId, recheck]);
 
   useEffect(() => {
     if (!health && !busy) void recheck();
@@ -318,6 +359,7 @@ export function HealthCard({
             busy={rowsBusy}
             fixStepFor={fixStepFor}
             onFix={openPlan}
+            onForceFlush={flushNow}
           />
 
           <div className="flex items-center justify-between border-t border-border px-6 pt-4 pb-1">
@@ -333,6 +375,7 @@ export function HealthCard({
               busy={rowsBusy}
               fixStepFor={fixStepFor}
               onFix={openPlan}
+              onForceFlush={flushNow}
             />
           ) : (
             <div className="px-6 py-3 text-sm text-muted-foreground">

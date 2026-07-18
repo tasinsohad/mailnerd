@@ -69,17 +69,30 @@ describe("buildRemediationPlan", () => {
     expect(ids(p)).not.toContain("flushQueue");
   });
 
-  it("queue stuck + port 25 blocked → manual relayhost, NO flush", () => {
-    const p = buildRemediationPlan(null, mk({ queue: "fail", port25: "fail" }), {});
+  it("queue WARN + port 25 blocked → manual relayhost, NO flush (would just re-defer)", () => {
+    const p = buildRemediationPlan(null, mk({ queue: "warn", port25: "fail" }), {});
     expect(ids(p)).not.toContain("flushQueue");
     expect(manualIds(p)).toContain("queue-port25");
   });
 
-  it("queue stuck + blacklisted → manual reputation, NO flush", () => {
-    const p = buildRemediationPlan(null, mk({ queue: "fail", port25: "ok", blacklist: "fail" }), {});
+  it("queue FAIL (24h+) + port 25 blocked → flush offered anyway, with caveat + manual root cause", () => {
+    const p = buildRemediationPlan(null, mk({ queue: "fail", port25: "fail" }), {});
+    expect(ids(p)).toContain("flushQueue");
+    expect(p.steps.find((s) => s.id === "flushQueue")!.why).toMatch(/port 25/i);
+    expect(manualIds(p)).toContain("queue-port25");
+  });
+
+  it("queue WARN + blacklisted → manual reputation, NO flush", () => {
+    const p = buildRemediationPlan(null, mk({ queue: "warn", port25: "ok", blacklist: "fail" }), {});
     expect(ids(p)).not.toContain("flushQueue");
     expect(manualIds(p)).toContain("queue-reputation");
     expect(manualIds(p)).not.toContain("blacklist");
+  });
+
+  it("queue FAIL + blacklisted → flush offered anyway + manual reputation", () => {
+    const p = buildRemediationPlan(null, mk({ queue: "fail", port25: "ok", blacklist: "fail" }), {});
+    expect(ids(p)).toContain("flushQueue");
+    expect(manualIds(p)).toContain("queue-reputation");
   });
 
   it("queue stuck + everything else fine → flushQueue", () => {
