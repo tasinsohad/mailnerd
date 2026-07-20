@@ -7,6 +7,13 @@ import {
   queueVerdict,
   dominantDeferral,
   sortByPriority,
+  blacklistVerdict,
+  spfLookupCount,
+  spfVerdict,
+  dmarcPolicyVerdict,
+  mxTargetVerdict,
+  parseSmtpDialogue,
+  smtpBannerVerdict,
 } from "../health-checks";
 import type { Indicator } from "../health-types";
 
@@ -184,6 +191,77 @@ describe("queueVerdict / dominantDeferral", () => {
         deferrals: { timeout: 0, rejected: 0, other: 0 },
       }),
     ).toBeNull();
+  });
+});
+
+describe("blacklistVerdict", () => {
+  const MAJOR = ["zen.spamhaus.org", "b.barracudacentral.org", "bl.spamcop.net"];
+  it("clean → ok", () => expect(blacklistVerdict([], MAJOR)).toBe("ok"));
+  it("major listing → fail", () =>
+    expect(blacklistVerdict(["zen.spamhaus.org"], MAJOR)).toBe("fail"));
+  it("secondary-only → warn", () =>
+    expect(blacklistVerdict(["dnsbl.sorbs.net", "psbl.surriel.com"], MAJOR)).toBe("warn"));
+  it("major + secondary → fail (major wins)", () =>
+    expect(blacklistVerdict(["dnsbl.sorbs.net", "bl.spamcop.net"], MAJOR)).toBe("fail"));
+});
+
+describe("spfLookupCount / spfVerdict", () => {
+  it("counts DNS-lookup mechanisms only", () => {
+    expect(spfLookupCount("v=spf1 include:a.com include:b.com mx a ip4:1.2.3.0/24 ~all")).toBe(4);
+    expect(spfLookupCount("v=spf1 ip4:1.2.3.4 ip6:::1 -all")).toBe(0);
+    expect(spfLookupCount("v=spf1 redirect=_spf.example.com")).toBe(1);
+  });
+  it("missing / multiple → fail", () => {
+    expect(spfVerdict([]).status).toBe("fail");
+    expect(spfVerdict(["v=spf1 -all", "v=spf1 ~all"]).status).toBe("fail");
+  });
+  it(">10 lookups → warn (permerror)", () => {
+    const rec = "v=spf1 " + Array.from({ length: 11 }, (_, i) => `include:d${i}.com`).join(" ") + " ~all";
+    expect(spfVerdict([rec]).status).toBe("warn");
+  });
+  it("+all / ?all → warn", () => {
+    expect(spfVerdict(["v=spf1 include:a.com +all"]).status).toBe("warn");
+    expect(spfVerdict(["v=spf1 all"]).status).toBe("warn"); // bare all = +all
+  });
+  it("clean ~all/-all → ok", () => {
+    expect(spfVerdict(["v=spf1 include:a.com ~all"]).status).toBe("ok");
+    expect(spfVerdict(["v=spf1 mx -all"]).status).toBe("ok");
+  });
+});
+
+describe("dmarcPolicyVerdict", () => {
+  it("p=none → warn (monitor only)", () =>
+    expect(dmarcPolicyVerdict("v=DMARC1; p=none; rua=mailto:x@y.com").status).toBe("warn"));
+  it("p=quarantine / p=reject → ok", () => {
+    expect(dmarcPolicyVerdict("v=DMARC1; p=quarantine").status).toBe("ok");
+    expect(dmarcPolicyVerdict("v=DMARC1; p=reject; rua=mailto:x@y.com").status).toBe("ok");
+  });
+  it("no policy / not DMARC → fail", () => {
+    expect(dmarcPolicyVerdict("v=DMARC1; rua=mailto:x@y.com").status).toBe("fail");
+    expect(dmarcPolicyVerdict("v=spf1 -all").status).toBe("fail");
+  });
+});
+
+describe("mxTargetVerdict", () => {
+  it("IP literal → warn", () => expect(mxTargetVerdict("1.2.3.4", true).status).toBe("warn"));
+  it("hostname without A → warn", () =>
+    expect(mxTargetVerdict("mail.example.com", false).status).toBe("warn"));
+  it("resolvable hostname → ok", () =>
+    expect(mxTargetVerdict("mail.example.com", true).status).toBe("ok"));
+});
+
+describe("parseSmtpDialogue / smtpBannerVerdict", () => {
+  it("extracts banner host + STARTTLS cap", () => {
+    const raw = "220 mail.example.com ESMTP Postfix\r\n250-mail.example.com\r\n250-PIPELINING\r\n250-STARTTLS\r\n250 8BITMIME\r\n221 Bye\r\n";
+    const d = parseSmtpDialogue(raw);
+    expect(d.bannerHost).toBe("mail.example.com");
+    expect(d.caps).toContain("STARTTLS");
+  });
+  it("banner FQDN → ok; localhost/IP → warn", () => {
+    expect(smtpBannerVerdict("mail.example.com").status).toBe("ok");
+    expect(smtpBannerVerdict("localhost").status).toBe("warn");
+    expect(smtpBannerVerdict("127.0.0.1").status).toBe("warn");
+    expect(smtpBannerVerdict("").status).toBe("warn");
   });
 });
 

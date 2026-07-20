@@ -6,7 +6,15 @@ import type { SSHAuth } from "@/types";
 import type { DomainHealth, Indicator } from "./health-types";
 import { rollUp } from "./health-types";
 import type { ConsoleLog } from "./console-bus";
-import { doh, dohOne, txtValue, isCloudflareIp, DNSBLS, DOH_RESOLVERS } from "./health-net";
+import {
+  doh,
+  dohOne,
+  txtValue,
+  isCloudflareIp,
+  DNSBLS,
+  DNSBL_MAJOR,
+  DOH_RESOLVERS,
+} from "./health-net";
 import {
   classifyPort25,
   fcrdnsVerdict,
@@ -14,6 +22,12 @@ import {
   parsePostfixQueue,
   queueVerdict,
   dominantDeferral,
+  blacklistVerdict,
+  spfVerdict,
+  dmarcPolicyVerdict,
+  mxTargetVerdict,
+  parseSmtpDialogue,
+  smtpBannerVerdict,
   parseDockerPs,
   containersVerdict,
   REQUIRED_CONTAINERS,
@@ -297,22 +311,46 @@ export async function checkSendingDns(
         detail: `${domain} has no MX record.`,
         guidance: mxGuidance("missing", ctx),
       });
-    } else if (hosts.includes(mailHost.toLowerCase())) {
-      out.push({
-        id: "mx",
-        label: "MX record",
-        status: "ok",
-        detail: `${domain} MX → ${mailHost}.`,
-        guidance: mxGuidance("ok", ctx),
-      });
     } else {
-      out.push({
-        id: "mx",
-        label: "MX record",
-        status: "warn",
-        detail: `${domain} MX → ${hosts.join(", ")} (expected ${mailHost}).`,
-        guidance: mxGuidance("wrong", ctx),
-      });
+      // Quality of the primary MX target: it must be a hostname (not an IP literal) that resolves.
+      const primary = hosts[0];
+      const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(primary) || primary.includes(":");
+      let hasAddr = true;
+      if (!isIp) {
+        try {
+          hasAddr = (await doh(primary, "A")).length > 0;
+        } catch {
+          hasAddr = true; // don't fail MX on a transient A-lookup error
+        }
+      }
+      const q = mxTargetVerdict(primary, hasAddr);
+      const routesRight = hosts.includes(mailHost.toLowerCase());
+      if (q.status === "warn") {
+        out.push({
+          id: "mx",
+          label: "MX record",
+          status: "warn",
+          detail: `${domain} MX → ${hosts.join(", ")}. ${q.reason}.`,
+          fix: "Point MX at a resolvable mail hostname (with an A record), not an IP literal.",
+          guidance: mxGuidance(routesRight ? "ok" : "wrong", ctx),
+        });
+      } else if (routesRight) {
+        out.push({
+          id: "mx",
+          label: "MX record",
+          status: "ok",
+          detail: `${domain} MX → ${mailHost}.`,
+          guidance: mxGuidance("ok", ctx),
+        });
+      } else {
+        out.push({
+          id: "mx",
+          label: "MX record",
+          status: "warn",
+          detail: `${domain} MX → ${hosts.join(", ")} (expected ${mailHost}).`,
+          guidance: mxGuidance("wrong", ctx),
+        });
+      }
     }
   } catch {
     out.push({
@@ -344,12 +382,15 @@ export async function checkSendingDns(
         guidance: spfGuidance("multiple", ctx),
       });
     } else {
+      const v = spfVerdict(spfs);
       out.push({
         id: "spf",
         label: "SPF",
-        status: "ok",
-        detail: `SPF: ${spfs[0]}`,
-        guidance: spfGuidance("ok", ctx),
+        status: v.status,
+        detail: `SPF (${v.reason}): ${spfs[0]}`,
+        ...(v.status === "ok"
+          ? { guidance: spfGuidance("ok", ctx) }
+          : { fix: "Keep SPF to one record, ≤10 DNS lookups, ending in ~all or -all (not +all)." }),
       });
     }
   } catch {
@@ -418,12 +459,17 @@ export async function checkSendingDns(
     const txt = await doh(`_dmarc.${domain}`, "TXT");
     const dmarc = txt.map(txtValue).find((t) => /v=DMARC1/i.test(t));
     if (dmarc) {
+      const v = dmarcPolicyVerdict(dmarc);
       out.push({
         id: "dmarc",
         label: "DMARC",
-        status: "ok",
-        detail: `DMARC: ${dmarc}`,
-        guidance: dmarcGuidance("ok", ctx),
+        status: v.status,
+        detail: `DMARC (${v.reason}): ${dmarc}`,
+        ...(v.status === "ok"
+          ? { guidance: dmarcGuidance("ok", ctx) }
+          : {
+              fix: "Move DMARC to p=quarantine (then p=reject) once aligned, and set rua= to collect reports.",
+            }),
       });
     } else {
       out.push({
@@ -440,6 +486,41 @@ export async function checkSendingDns(
       label: "DMARC",
       status: "skip",
       detail: `Could not query _dmarc.${domain}.`,
+    });
+  }
+
+  // Nameservers → a domain should have at least two (redundancy). Pure DNS, informational.
+  try {
+    const ns = await doh(domain, "NS");
+    if (ns.length >= 2) {
+      out.push({
+        id: "nameservers",
+        label: "Nameservers",
+        status: "ok",
+        detail: `${ns.length} nameservers for ${domain}.`,
+      });
+    } else if (ns.length === 1) {
+      out.push({
+        id: "nameservers",
+        label: "Nameservers",
+        status: "warn",
+        detail: `Only 1 nameserver for ${domain} — use at least 2 for redundancy.`,
+        fix: "Add a second nameserver at your DNS provider so a single NS outage can't drop your mail DNS.",
+      });
+    } else {
+      out.push({
+        id: "nameservers",
+        label: "Nameservers",
+        status: "skip",
+        detail: `Could not read NS records for ${domain}.`,
+      });
+    }
+  } catch {
+    out.push({
+      id: "nameservers",
+      label: "Nameservers",
+      status: "skip",
+      detail: `Could not query NS for ${domain}.`,
     });
   }
 
@@ -673,6 +754,10 @@ async function checkServerInternals(
     "ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null",
     'echo "---UFW---"',
     "ufw status 2>/dev/null || sudo -n ufw status 2>/dev/null",
+    // SMTP banner + EHLO capabilities from localhost:25 via bash /dev/tcp (portable, no netcat).
+    // The sleep lets the 220 banner arrive before we EHLO; cat drains the whole reply until QUIT.
+    'echo "---SMTP---"',
+    "timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/25 && { sleep 0.5; printf \"EHLO healthcheck\\r\\nQUIT\\r\\n\" >&3; cat <&3; }' 2>/dev/null || echo SMTP_UNAVAILABLE",
     // The prelude cd's into the Mailcow dir, so it goes last — nothing after it needs the old cwd.
     'echo "---LOGS---"',
     MAILCOW_SHELL_PRELUDE +
@@ -689,7 +774,7 @@ async function checkServerInternals(
   // Pull one marked section out of the combined output. Bounded by the NEXT KNOWN marker, not by
   // the next "---": log lines legitimately contain dashes, and splitting on those would silently
   // truncate the log (losing the very timeout counts the IPv6/queue checks read).
-  const MARKERS = ["PS", "LISTEN", "UFW", "LOGS", "END"];
+  const MARKERS = ["PS", "LISTEN", "UFW", "SMTP", "LOGS", "END"];
   const sect = (name: string): string => {
     const tag = `---${name}---`;
     const i = res.stdout.indexOf(tag);
@@ -884,6 +969,53 @@ async function checkServerInternals(
     }
   }
 
+  // --- SMTP banner + STARTTLS on port 25 (read over SSH from localhost:25) ---
+  const smtpRaw = sect("SMTP");
+  if (!smtpRaw || smtpRaw.includes("SMTP_UNAVAILABLE")) {
+    out.push({
+      id: "smtpbanner",
+      label: "SMTP banner",
+      status: "skip",
+      detail: "Port 25 didn't answer on localhost (Postfix down, or /dev/tcp unavailable).",
+    });
+  } else {
+    const { bannerHost, caps } = parseSmtpDialogue(smtpRaw);
+    const bv = smtpBannerVerdict(bannerHost);
+    out.push({
+      id: "smtpbanner",
+      label: "SMTP banner",
+      status: bv.status,
+      detail: bv.reason,
+      ...(bv.status !== "ok"
+        ? { fix: "Set Postfix myhostname to your mail FQDN so the 220 banner advertises it." }
+        : {}),
+    });
+    const hasStartTls = caps.includes("STARTTLS");
+    out.push({
+      id: "starttls25",
+      label: "STARTTLS on :25",
+      status: hasStartTls ? "ok" : "warn",
+      detail: hasStartTls
+        ? "STARTTLS offered on port 25 — inbound mail can be encrypted."
+        : "STARTTLS not advertised on port 25 — inbound mail falls back to plaintext.",
+      ...(hasStartTls
+        ? {}
+        : { fix: "Enable smtpd_tls_security_level = may (or encrypt) in Postfix." }),
+    });
+  }
+
+  // --- Open relay (honest) — not testable from our vantage point ---
+  // A meaningful open-relay test must come from an EXTERNAL IP: localhost is trusted by Postfix's
+  // mynetworks (would falsely "relay"), and serverless outbound :25 is blocked. So we report skip
+  // rather than a fake pass. Mailcow refuses unauthenticated relay by default.
+  out.push({
+    id: "openrelay",
+    label: "Open relay",
+    status: "skip",
+    detail:
+      "Not testable from here — needs an external IP connecting to port 25. Mailcow rejects unauthenticated relay by default.",
+  });
+
   return out;
 }
 
@@ -891,31 +1023,36 @@ async function checkServerInternals(
 async function checkBlacklist(ip: string, ctx: GuidanceContext): Promise<Indicator> {
   try {
     const rev = ip.split(".").reverse().join(".");
-    const listings: string[] = [];
-    await Promise.all(
+    // Query every list in parallel; a lookup error counts as "not listed" (never a false positive).
+    const results = await Promise.all(
       DNSBLS.map(async (bl) => {
         try {
           const a = await dohOne(DOH_RESOLVERS[0], `${rev}.${bl}`, "A", 5000);
-          if (a.some((x) => /^127\.0\.0\.\d{1,3}$/.test(x))) listings.push(bl);
+          return a.some((x) => /^127\.0\.0\.\d{1,3}$/.test(x)) ? bl : null;
         } catch {
-          /* not listed */
+          return null; // not listed / lookup failed
         }
       }),
     );
-    if (listings.length === 0)
+    const listings = results.filter((b): b is string => b !== null);
+    const status = blacklistVerdict(listings, DNSBL_MAJOR);
+    if (status === "ok")
       return {
         id: "blacklist",
         label: "IP reputation",
         status: "ok",
-        detail: `${ip} not on Spamhaus / Barracuda / SpamCop.`,
+        detail: `${ip} clean on all ${DNSBLS.length} blacklists checked.`,
         guidance: blacklistGuidance(false, ctx),
       };
+    const major = listings.filter((b) => DNSBL_MAJOR.includes(b));
     return {
       id: "blacklist",
       label: "IP reputation",
-      status: "fail",
-      detail: `${ip} listed on: ${listings.join(", ")}.`,
-      fix: "Request delisting at the listing provider and warm up the IP (send gently).",
+      status, // fail if on a major list, warn if secondary-only
+      detail: `${ip} listed on ${listings.length} of ${DNSBLS.length}: ${listings.join(", ")}.${
+        major.length ? "" : " (secondary lists only — lower impact.)"
+      }`,
+      fix: "Request delisting at each listing provider and warm up the IP (send gently).",
       guidance: blacklistGuidance(true, { ...ctx, blacklists: listings }),
     };
   } catch {

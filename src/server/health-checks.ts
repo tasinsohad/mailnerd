@@ -25,9 +25,13 @@ const PRIORITY: Record<string, number> = {
   containers: 56,
   mailhost: 58,
   tls: 60,
+  smtpbanner: 62, // mail-server identity checks sit near TLS/submission
+  starttls25: 63,
   mailcow: 70,
   maillog: 75,
   mailboxes: 80,
+  nameservers: 85, // DNS-hygiene, informational
+  openrelay: 90,
 };
 
 export function indicatorPriority(id: string): number {
@@ -440,6 +444,97 @@ export function queueVerdict(
   if (deferring && stats.oldestAgeMinutes !== null && stats.oldestAgeMinutes >= deferAge)
     return "warn";
   return "ok";
+}
+
+// Blacklist verdict from the lists an IP was found on. Any MAJOR listing (Spamhaus/Barracuda/
+// SpamCop) is deliverability-killing → fail; a SECONDARY-only listing is worth flagging → warn;
+// none → ok. A lookup ERROR must be treated by the caller as "not listed", never a hit — a false
+// blacklist positive is worse than a miss.
+export function blacklistVerdict(
+  hits: readonly string[],
+  major: readonly string[],
+): "ok" | "warn" | "fail" {
+  if (hits.length === 0) return "ok";
+  return hits.some((h) => major.includes(h)) ? "fail" : "warn";
+}
+
+// --- DNS record quality (mxtoolbox-style) ---
+
+// Count the DNS-lookup-incurring terms in an SPF record (RFC 7208 caps these at 10 before a
+// permerror): include, a, mx, ptr, exists, and the redirect modifier. `all`, `ip4`, `ip6` don't
+// count.
+export function spfLookupCount(record: string): number {
+  let n = 0;
+  for (const raw of record.trim().split(/\s+/)) {
+    const t = raw.replace(/^[+\-~?]/, "").toLowerCase();
+    if (/^(include:|exists:)/.test(t) || /^redirect=/.test(t)) n++;
+    else if (/^(a|mx|ptr)(:|$)/.test(t)) n++;
+  }
+  return n;
+}
+
+// Verdict for a domain's SPF TXT records (the ones already filtered to v=spf1). 0 → fail (missing),
+// >1 → fail (invalid), else warn on >10 lookups / permissive `all` / deprecated ptr, otherwise ok.
+export function spfVerdict(spfRecords: string[]): { status: "ok" | "warn" | "fail"; reason: string } {
+  if (spfRecords.length === 0) return { status: "fail", reason: "no SPF record" };
+  if (spfRecords.length > 1)
+    return { status: "fail", reason: `${spfRecords.length} SPF records — only one is valid` };
+  const rec = spfRecords[0];
+  const lookups = spfLookupCount(rec);
+  if (lookups > 10)
+    return { status: "warn", reason: `${lookups} DNS lookups (>10 causes an SPF permerror)` };
+  const allQual = rec.match(/(?:^|\s)([+\-~?]?)all(?:\s|$)/i)?.[1] || "+";
+  if (allQual === "+" || allQual === "?")
+    return { status: "warn", reason: `ends in "${allQual}all" (too permissive — use ~all or -all)` };
+  if (/(?:^|\s)[+\-~?]?ptr(?::|\s|$)/i.test(rec))
+    return { status: "warn", reason: "uses the deprecated ptr mechanism" };
+  return { status: "ok", reason: `${lookups} DNS lookups, ends in "${allQual}all"` };
+}
+
+// Verdict for a DMARC record. p=none is monitor-only (warn — not actually enforcing); quarantine/
+// reject enforce (ok). Missing policy or record → fail.
+export function dmarcPolicyVerdict(record: string): { status: "ok" | "warn" | "fail"; reason: string } {
+  if (!/v=dmarc1/i.test(record)) return { status: "fail", reason: "no DMARC record" };
+  const p = (record.match(/\bp\s*=\s*(none|quarantine|reject)/i)?.[1] ?? "").toLowerCase();
+  if (!p) return { status: "fail", reason: "DMARC record has no policy (p=)" };
+  const noRua = /\brua\s*=/i.test(record) ? "" : " (no rua= aggregate reports)";
+  if (p === "none")
+    return { status: "warn", reason: `p=none — monitoring only, not enforcing${noRua}` };
+  return { status: "ok", reason: `p=${p}${noRua}` };
+}
+
+// Verdict for an MX target host. Must be a hostname (not an IP literal) that resolves to an address.
+export function mxTargetVerdict(mxHost: string, hasAddress: boolean): { status: "ok" | "warn"; reason: string } {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(mxHost) || mxHost.includes(":"))
+    return { status: "warn", reason: `MX points to an IP literal (${mxHost}) — should be a hostname` };
+  if (!hasAddress) return { status: "warn", reason: `MX host ${mxHost} has no A/AAAA record` };
+  return { status: "ok", reason: "" };
+}
+
+// --- SMTP dialogue (banner + EHLO capabilities) ---
+
+// Parse the raw text of a `220 banner … EHLO … 250-CAP` SMTP exchange into the banner's advertised
+// hostname and the uppercased EHLO capability list. Tolerant of \r\n and multiline 250- responses.
+export function parseSmtpDialogue(raw: string): { bannerHost: string; caps: string[] } {
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const banner = lines.find((l) => l.startsWith("220")) ?? "";
+  // "220 mail.example.com ESMTP Postfix" → mail.example.com
+  const bannerHost = banner.replace(/^220[ -]+/, "").split(/\s+/)[0] ?? "";
+  const caps: string[] = [];
+  for (const l of lines) {
+    const m = l.match(/^250[ -]+(.+)$/);
+    if (m) caps.push(m[1].trim().toUpperCase().split(/\s+/)[0]);
+  }
+  return { bannerHost, caps };
+}
+
+// Verdict for the SMTP banner + STARTTLS support read from localhost:25. `bannerHost` should be a
+// FQDN (not localhost / a bare IP); STARTTLS should be offered.
+export function smtpBannerVerdict(bannerHost: string): { status: "ok" | "warn"; reason: string } {
+  if (!bannerHost) return { status: "warn", reason: "no SMTP banner" };
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(bannerHost) || /^localhost$/i.test(bannerHost) || !bannerHost.includes("."))
+    return { status: "warn", reason: `banner is "${bannerHost}" — should advertise a FQDN` };
+  return { status: "ok", reason: `banner advertises ${bannerHost}` };
 }
 
 // The dominant deferral reason, for the remediation hint.

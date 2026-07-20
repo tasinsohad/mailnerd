@@ -5,9 +5,32 @@
 // DoH is used instead of Node's dns.resolve*/reverse (c-ares direct UDP/53) because those fail in
 // many runtimes even when HTTPS works. DoH rides the same HTTPS transport that already works here.
 
-const DOH_TYPE: Record<string, number> = { A: 1, MX: 15, TXT: 16, PTR: 12 };
+const DOH_TYPE: Record<string, number> = { A: 1, NS: 2, MX: 15, TXT: 16, PTR: 12 };
 export const DOH_RESOLVERS = ["https://dns.google/resolve", "https://cloudflare-dns.com/dns-query"];
-export const DNSBLS = ["zen.spamhaus.org", "b.barracudacentral.org", "bl.spamcop.net"];
+
+// Curated, actively-maintained DNSBLs that follow the "127.0.0.x A-record = listed" convention.
+// Deliberately EXCLUDES defunct / pay-to-delist / over-aggressive lists (UCEPROTECT L2/L3, cbl) and
+// code-based reputation/whitelist-hybrid lists (hostkarma, mailspike z.) that false-positive — a
+// wrong blacklist verdict is worse than a missing one. MAJOR listings are deliverability-killing;
+// SECONDARY are worth flagging but rarely block delivery on their own.
+export const DNSBL_MAJOR = ["zen.spamhaus.org", "b.barracudacentral.org", "bl.spamcop.net"];
+export const DNSBL_SECONDARY = [
+  "dnsbl.sorbs.net",
+  "dnsbl-1.uceprotect.net",
+  "psbl.surriel.com",
+  "all.spamrats.com",
+  "bl.mailspike.net",
+  "bl.blocklist.de",
+  "dnsbl.dronebl.org",
+  "db.wpbl.info",
+  "ix.dnsbl.manitu.net",
+  "spam.dnsbl.anonmails.de",
+  "truncate.gbudb.net",
+  "rbl.interserver.net",
+  "ips.backscatterer.org",
+];
+// The full set checkBlacklist queries (major first, for stable ordering in output).
+export const DNSBLS = [...DNSBL_MAJOR, ...DNSBL_SECONDARY];
 
 export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
@@ -19,7 +42,7 @@ export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 export async function dohOne(
   base: string,
   name: string,
-  type: "A" | "MX" | "TXT" | "PTR",
+  type: "A" | "NS" | "MX" | "TXT" | "PTR",
   timeoutMs: number,
 ): Promise<string[]> {
   const url = `${base}?name=${encodeURIComponent(name)}&type=${type}`;
@@ -34,7 +57,7 @@ export async function dohOne(
 // "missing". Stops freshly pushed records from flapping as failed while they propagate.
 export async function doh(
   name: string,
-  type: "A" | "MX" | "TXT" | "PTR",
+  type: "A" | "NS" | "MX" | "TXT" | "PTR",
   timeoutMs = 6000,
 ): Promise<string[]> {
   const first = await dohOne(DOH_RESOLVERS[0], name, type, timeoutMs).catch(() => null);
