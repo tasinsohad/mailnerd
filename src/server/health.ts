@@ -113,6 +113,42 @@ export async function checkDomainHealth(input: HealthInput): Promise<DomainHealt
     "pushDns",
   );
 
+  // Apex-domain posture. When mail is sent from SUBDOMAINS, the parent/apex is deliberately left
+  // bare (cold-email isolation) — but a root with NO SPF/DMARC can be spoofed ("from" the brand
+  // domain), which is exactly what an mxtoolbox test of the apex flags. Surface it as a warn so it's
+  // visible and the subdomain-vs-apex scope is never confusing; we don't auto-change it (the apex
+  // may send legitimate mail elsewhere). Skipped when mail IS on the apex (already checked above).
+  const apexIsMailDomain = subs.length === 1 && subs[0] === name;
+  if (!apexIsMailDomain) {
+    try {
+      const [apexTxt, apexDmarc] = await Promise.all([
+        doh(name, "TXT").catch(() => [] as string[]),
+        doh(`_dmarc.${name}`, "TXT").catch(() => [] as string[]),
+      ]);
+      const hasSpf = apexTxt.some((t) => txtValue(t).toLowerCase().includes("v=spf1"));
+      const hasDmarc = apexDmarc.some((t) => txtValue(t).toLowerCase().includes("v=dmarc1"));
+      if (hasSpf && hasDmarc) {
+        add({
+          id: "apex",
+          label: "Apex domain",
+          status: "ok",
+          detail: `${name} (root) has SPF + DMARC — protected from spoofing.`,
+        });
+      } else {
+        const missing = [!hasSpf && "SPF", !hasDmarc && "DMARC"].filter(Boolean).join(" + ");
+        add({
+          id: "apex",
+          label: "Apex domain",
+          status: "warn",
+          detail: `${name} (root) has no ${missing} — spoofable. Your inboxes are on subdomains, so this is separate from their delivery.`,
+          fix: `If ${name} sends no mail, lock it down: TXT "v=spf1 -all" and _dmarc TXT "v=DMARC1; p=reject". If it does send mail, publish proper SPF/DMARC for it.`,
+        });
+      }
+    } catch {
+      add({ id: "apex", label: "Apex domain", status: "skip", detail: `Could not check ${name}.` });
+    }
+  }
+
   // Mailbox count (this domain's planned inboxes vs what Mailcow reports).
   if (mailcowHostname && mailcowApiKey) {
     try {

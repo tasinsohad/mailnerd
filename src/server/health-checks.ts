@@ -30,6 +30,7 @@ const PRIORITY: Record<string, number> = {
   mailcow: 70,
   maillog: 75,
   mailboxes: 80,
+  apex: 82, // apex-domain spoofing posture — informational, separate from the subdomains' delivery
   nameservers: 85, // DNS-hygiene, informational
   openrelay: 90,
 };
