@@ -27,6 +27,7 @@ import {
   type ConsoleLine,
 } from "@/components/LiveConsole";
 import { troubleshootServer, quickFixServer, getServerLog } from "@/server/troubleshoot";
+import { bulkSetupDns, type BulkDnsResult } from "@/server/bulk-dns";
 import { sortByPriority } from "@/server/health-checks";
 import type {
   DomainHealth,
@@ -322,6 +323,11 @@ function TroubleshootPage() {
   const [fixing, setFixing] = useState(false);
   const [consoleLines, setConsoleLines] = useState<ConsoleLine[]>([]);
   const [logBusy, setLogBusy] = useState(false);
+  // Bulk DNS setup (reuses the server connection above).
+  const [bulkNames, setBulkNames] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkConsole, setBulkConsole] = useState<ConsoleLine[]>([]);
+  const [bulkResults, setBulkResults] = useState<BulkDnsResult[] | null>(null);
   const [result, setResult] = useState<{
     health: DomainHealth;
     mailcowHostname: string | null;
@@ -512,6 +518,63 @@ function TroubleshootPage() {
       toast.error(e?.message ?? "Couldn't fetch the log", { id: "getlog" });
     } finally {
       setLogBusy(false);
+    }
+  };
+
+  // Parse the pasted domains/subdomains (newline / comma / space separated).
+  const parseBulkNames = (raw: string): string[] =>
+    [...new Set(raw.split(/[\s,]+/).map((s) => s.trim().replace(/\.$/, "").toLowerCase()))].filter(
+      Boolean,
+    );
+
+  // Bulk DNS setup: for each pasted name, create the missing MX/SPF/DKIM/DMARC on Cloudflare, using
+  // the server connected above (mail host + DKIM keys come from it).
+  const runBulk = async () => {
+    const names = parseBulkNames(bulkNames);
+    if (!form.ipAddress.trim() || !form.sshPassword) {
+      toast.error("Enter the server IP and SSH password in the form above first.");
+      return;
+    }
+    if (names.length === 0) {
+      toast.error("Paste at least one domain or subdomain.");
+      return;
+    }
+    setBulkBusy(true);
+    setBulkResults(null);
+    setBulkConsole([]);
+    const { runId, close } = openConsole(setBulkConsole);
+    try {
+      const res: any = await bulkSetupDns({
+        data: {
+          ipAddress: form.ipAddress.trim(),
+          sshUser: form.sshUser.trim() || "root",
+          sshPassword: form.sshPassword,
+          mailcowHostname: form.mailcowHostname.trim() || undefined,
+          mailcowApiKey: form.mailcowApiKey.trim() || undefined,
+          fetchApiKey,
+          names,
+          runId,
+        },
+      });
+      if (Array.isArray(res?.transcript) && res.transcript.length)
+        setBulkConsole((prev) => (prev.length ? prev : res.transcript));
+      if (res?.error) {
+        toast.error(res.error);
+        return;
+      }
+      setBulkResults(res.results ?? []);
+      const created = (res.results ?? []).reduce(
+        (n: number, r: BulkDnsResult) => n + r.created.length,
+        0,
+      );
+      toast.success(`Done — ${created} record${created === 1 ? "" : "s"} created.`, {
+        duration: 7000,
+      });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Bulk DNS setup failed");
+    } finally {
+      close();
+      setBulkBusy(false);
     }
   };
 
@@ -890,6 +953,108 @@ function TroubleshootPage() {
           filenameBase={form.ipAddress.trim() || "server"}
         />
       )}
+
+      {/* Bulk DNS setup — paste domains/subdomains; create the missing MX/SPF/DKIM/DMARC on
+          Cloudflare, using the server connected above as the mail host + DKIM source. */}
+      <div className="rounded-xl border border-border bg-card">
+        <div className="flex items-center gap-3 border-b border-border px-6 py-4">
+          <Server className="h-5 w-5 text-muted-foreground" />
+          <div className="flex-1">
+            <h2 className="font-display text-base font-semibold text-foreground">Bulk DNS setup</h2>
+            <p className="text-xs text-muted-foreground">
+              Paste domains or subdomains — I'll create any missing MX / SPF / DKIM / DMARC on
+              Cloudflare, using the server connected above. Existing records are kept, never
+              duplicated.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-col gap-3 p-6">
+          <textarea
+            value={bulkNames}
+            onChange={(e) => setBulkNames(e.target.value)}
+            rows={5}
+            spellCheck={false}
+            placeholder={"us1.example.com\neu1.example.com\nexample.com"}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <div className="flex items-center gap-3">
+            <Button onClick={runBulk} disabled={bulkBusy} className="gap-1.5">
+              {bulkBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              Check &amp; create records
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              {parseBulkNames(bulkNames).length} name
+              {parseBulkNames(bulkNames).length === 1 ? "" : "s"} · needs the Cloudflare token in
+              Settings
+            </span>
+          </div>
+
+          {bulkResults && bulkResults.length > 0 && (
+            <ul className="flex flex-col divide-y divide-border rounded-lg border border-border">
+              {bulkResults.map((r) => (
+                <li key={r.name} className="flex flex-col gap-1 px-4 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm font-medium text-foreground">{r.name}</span>
+                    {r.zoneMissing && (
+                      <span className="rounded-full border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[11px] font-medium text-warning">
+                        zone not in Cloudflare
+                      </span>
+                    )}
+                  </div>
+                  {!r.zoneMissing && (
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      {r.created.map((c) => (
+                        <span
+                          key={`c-${c}`}
+                          className="rounded-full bg-success/10 px-2 py-0.5 font-medium text-success"
+                        >
+                          + {c}
+                        </span>
+                      ))}
+                      {r.present.map((p) => (
+                        <span
+                          key={`p-${p}`}
+                          className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground"
+                        >
+                          {p} ✓
+                        </span>
+                      ))}
+                      {r.skipped.map((s) => (
+                        <span
+                          key={`s-${s}`}
+                          className="rounded-full bg-warning/10 px-2 py-0.5 text-warning"
+                        >
+                          {s}
+                        </span>
+                      ))}
+                      {r.failed.map((f) => (
+                        <span
+                          key={`f-${f.record}`}
+                          className="rounded-full bg-destructive/10 px-2 py-0.5 text-destructive"
+                          title={f.error}
+                        >
+                          {f.record} failed
+                        </span>
+                      ))}
+                      {r.created.length === 0 &&
+                        r.failed.length === 0 &&
+                        r.skipped.length === 0 && (
+                          <span className="text-muted-foreground">all records already present</span>
+                        )}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {(bulkBusy || bulkConsole.length > 0) && (
+          <div className="border-t border-border px-6 py-4">
+            <LiveConsole lines={bulkConsole} running={bulkBusy} filenameBase="bulk-dns" />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
