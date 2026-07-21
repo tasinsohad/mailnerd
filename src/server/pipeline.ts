@@ -51,7 +51,16 @@ async function diagnoseMailHostUnreachable(domain: any): Promise<string> {
       return `${prefix}: ${host} is up, but the API request was FORBIDDEN (403) — the Mailcow API key is IP-restricted and this app's IP isn't allowed. In Mailcow → Configuration → API, add this app's server IP to the allow-list (or clear the restriction), then retry.`;
     if (typeof json === "string")
       return `${prefix}: ${host} returned a web page, not the API (HTTP ${status}) — enable the API in Mailcow (Configuration → API → activate & allow the app's IP), or confirm Mailcow serves 443 on this host.`;
-    return `${prefix}: ${host} resolves to ${ips.join(", ")} and answered HTTP ${status}, but not a valid API response — check Mailcow is healthy and the API is enabled.`;
+    // Mailcow answers HTTP 200 with an error body ({type:"error", msg:"..."}) for auth / allow-list
+    // rejections — surface the msg so the cause is unambiguous.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const j: any = Array.isArray(json) ? json[0] : json;
+    const bodyMsg = String(j?.msg ?? j?.message ?? "").toLowerCase();
+    if (/allow|forbidden|denied|not allowed|ip/.test(bodyMsg))
+      return `${prefix}: ${host} is up and the key is present, but Mailcow REJECTED the call${bodyMsg ? ` ("${bodyMsg}")` : ""} — its API allow-list (API_ALLOW_FROM) doesn't include the IP this app calls from. Add the app's egress IP to Mailcow's API allow-list, or open it, then retry.`;
+    if (/auth/.test(bodyMsg))
+      return `${prefix}: ${host} is up, but the API key was rejected${bodyMsg ? ` ("${bodyMsg}")` : ""} — re-provision the server to re-read the key, then retry.`;
+    return `${prefix}: ${host} answered HTTP ${status} but not a valid API response${bodyMsg ? ` (Mailcow said "${bodyMsg}")` : ""} — likely the API allow-list (API_ALLOW_FROM) is blocking this app's IP, or the API is disabled.`;
   } catch {
     return `${prefix}: ${host} resolves to ${ips.join(", ")} but nothing answered HTTPS on port 443 — the server may be down or a firewall is blocking 443 from here. Check the box is up and Mailcow is running.`;
   }
