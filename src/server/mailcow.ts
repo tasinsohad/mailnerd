@@ -3,7 +3,7 @@ import { requireAuth } from "@/lib/auth";
 import { z } from "zod";
 import { domains } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
-import { ensureMailDomains, createMailboxes } from "./pipeline";
+import { ensureMailDomains, createMailboxes, unproxyDns } from "./pipeline";
 import { ensureWorkingApiKey } from "./mailcow-key";
 import { syncDkimForDomain } from "./domains-heal";
 
@@ -31,7 +31,25 @@ export const setupMailcowDomain = createServerFn({ method: "POST" })
     // before touching mailboxes — otherwise ensureMailDomains throws "API not reachable".
     const { domain } = await ensureWorkingApiKey(db, loaded);
 
-    const { existingDomains, results: domainResults } = await ensureMailDomains(db, domain);
+    // Probe + create the mail domains. The classic failure here is a Cloudflare-PROXIED mail host
+    // (orange cloud) intercepting the API — commonly a pre-existing `mail.<domain>` record that
+    // pushDns adopted as-is (it matches by name/content and never flips the proxy off). When that
+    // happens, self-heal: un-proxy the mail host (idempotent — deletes proxied/wrong-IP mail A
+    // records and ensures one DNS-only mail A → server IP) and retry once. Only on the failure path,
+    // so a healthy setup is untouched; if the box is genuinely down it still surfaces the error.
+    let ensured;
+    try {
+      ensured = await ensureMailDomains(db, domain);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/not reachable/i.test(msg) && domain.ipAddress) {
+        await unproxyDns(db, domain, userId).catch(() => {});
+        ensured = await ensureMailDomains(db, domain); // re-probes (retries cover re-propagation)
+      } else {
+        throw e;
+      }
+    }
+    const { existingDomains, results: domainResults } = ensured;
     const { results: mailboxResults, summary } = await createMailboxes(db, domain, existingDomains, {
       recreate: data.recreate,
     });
