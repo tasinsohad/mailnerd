@@ -18,6 +18,28 @@ import {
   QUOTA,
 } from "./mailcow-helpers";
 import { resolveAndSaveCfZoneId } from "./cloudflare";
+import { doh, isCloudflareIp } from "./health-net";
+
+// Turn a failed Mailcow API probe into a PRECISE reason by resolving the mail host — so the user
+// gets "it's proxied" / "wrong IP" / "no record yet" / "resolves fine but API is down" instead of a
+// guess. Keeps the literal "not reachable" so setupMailcowDomain's self-heal still recognises it.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function diagnoseMailHostUnreachable(domain: any): Promise<string> {
+  const host = String(domain.mailcowHostname);
+  const prefix = `Mailcow API not reachable at ${host}`;
+  try {
+    const ips = await doh(host, "A", 6000);
+    if (ips.length === 0)
+      return `${prefix}: it has no A record yet — the DNS wasn't created or hasn't propagated. Wait ~1 min and retry, or check the ${host} record in Cloudflare.`;
+    if (ips.some((ip) => isCloudflareIp(ip)))
+      return `${prefix}: it's Cloudflare-PROXIED (orange cloud, ${ips[0]}) — set ${host} to DNS-only (grey cloud), then retry.`;
+    if (domain.ipAddress && !ips.includes(domain.ipAddress))
+      return `${prefix}: it points to ${ips.join(", ")}, but the server is ${domain.ipAddress} — fix the ${host} A record to the server IP.`;
+    return `${prefix}: ${host} resolves correctly to ${ips.join(", ")}, but the Mailcow API isn't responding — check the server is up and the Mailcow API key is valid (and not IP-restricted).`;
+  } catch {
+    return `${prefix} after retries — couldn't resolve the mail host and the API didn't respond.`;
+  }
+}
 import { fetchAllCfDnsRecords, createCfDnsRecordResilient } from "./cloudflare.functions";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -136,10 +158,7 @@ export async function ensureMailDomains(
     timeoutMs: 12000,
   });
   if (probe === null) {
-    throw new Error(
-      `Mailcow API not reachable at ${domain.mailcowHostname} after retries. ` +
-        `Is the mail host Cloudflare-proxied? mail.<domain> must be DNS-only (grey cloud).`,
-    );
+    throw new Error(await diagnoseMailHostUnreachable(domain));
   }
   // Reassign any inboxes stuck on the mail host / reserved subdomains (planned before the
   // reserved-name fix) to a valid subdomain so they can actually be created.
