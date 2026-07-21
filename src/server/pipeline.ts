@@ -8,6 +8,7 @@ import { plannedInboxes, dnsRecords, userSecrets } from "@/lib/db/schema";
 import {
   mailcowRequest,
   mailcowRequestRetry,
+  mailcowRequestViaSsh,
   mailcowListAll,
   parseMailcowResult,
   generateMailboxPassword,
@@ -193,18 +194,31 @@ export async function ensureMailDomains(
     timeoutMs: 10000,
   });
   let ssh: MailcowSshTarget | undefined;
+  let tunnelNote = "";
   if (probe === null && sshTarget) {
-    // Direct is blocked (allow-list) or unreachable — retry over SSH and, if that works, tunnel the
-    // rest of this run through it.
-    probe = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all", {
-      attempts: 2,
-      timeoutMs: 20000,
-      ssh: sshTarget,
-    });
-    if (probe !== null) ssh = sshTarget;
+    // Direct is blocked (allow-list) or unreachable — try the SSH tunnel, KEEPING the raw response so
+    // a failure explains ITSELF (SSH/curl error, or Mailcow rejecting the tunnelled call) instead of
+    // falling through to the generic direct-probe error.
+    const viaSsh = await mailcowRequestViaSsh(
+      sshTarget,
+      domain.mailcowHostname,
+      domain.mailcowApiKey,
+      "get/domain/all",
+      undefined,
+      { timeoutMs: 20000 },
+    ).catch((e) => ({ ok: false, status: -1, json: e instanceof Error ? e.message : String(e) }));
+    if (Array.isArray(viaSsh.json)) {
+      ssh = sshTarget;
+      probe = viaSsh.json;
+    } else {
+      const body = typeof viaSsh.json === "string" ? viaSsh.json : JSON.stringify(viaSsh.json);
+      tunnelNote = ` SSH-tunnel attempt also failed (status ${viaSsh.status}: ${String(body).slice(0, 220)}).`;
+    }
+  } else if (probe === null && !sshTarget) {
+    tunnelNote = " No SSH credentials stored on the domain or its server, so the API couldn't be reached over SSH either.";
   }
   if (probe === null) {
-    throw new Error(await diagnoseMailHostUnreachable(domain));
+    throw new Error((await diagnoseMailHostUnreachable(domain)) + tunnelNote);
   }
 
   // Writes go through the retrying client (on the chosen transport) so a transient hiccup during
