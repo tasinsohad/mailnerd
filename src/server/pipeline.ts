@@ -9,6 +9,7 @@ import {
   mailcowRequest,
   mailcowRequestRetry,
   mailcowRequestViaSsh,
+  mailcowEnsureApiAllowList,
   mailcowListAll,
   parseMailcowResult,
   generateMailboxPassword,
@@ -211,8 +212,31 @@ export async function ensureMailDomains(
       ssh = sshTarget;
       probe = viaSsh.json;
     } else {
-      const body = typeof viaSsh.json === "string" ? viaSsh.json : JSON.stringify(viaSsh.json);
-      tunnelNote = ` SSH-tunnel attempt also failed (status ${viaSsh.status}: ${String(body).slice(0, 220)}).`;
+      // Tunnel reached Mailcow but was REJECTED (HTTP 200 {} = source IP not allow-listed). The
+      // tunnel enters from the docker bridge gateway, which fixCreateApiKey may have excluded when it
+      // narrowed API_ALLOW_FROM. Broaden it to the server's PRIVATE ranges (internal only, never the
+      // internet) + reload Mailcow, then retry the tunnel once.
+      const fix = await mailcowEnsureApiAllowList(sshTarget).catch((e) => ({
+        ok: false,
+        allow: "",
+        reloaded: false,
+        detail: e instanceof Error ? e.message : String(e),
+      }));
+      const retry = await mailcowRequestViaSsh(
+        sshTarget,
+        domain.mailcowHostname,
+        domain.mailcowApiKey,
+        "get/domain/all",
+        undefined,
+        { timeoutMs: 20000 },
+      ).catch((e) => ({ ok: false, status: -1, json: e instanceof Error ? e.message : String(e) }));
+      if (Array.isArray(retry.json)) {
+        ssh = sshTarget;
+        probe = retry.json;
+      } else {
+        const body = typeof retry.json === "string" ? retry.json : JSON.stringify(retry.json);
+        tunnelNote = ` SSH tunnel was rejected. ${fix.detail} Retry: status ${retry.status} (${String(body).slice(0, 160)}).`;
+      }
     }
   } else if (probe === null && !sshTarget) {
     tunnelNote = " No SSH credentials stored on the domain or its server, so the API couldn't be reached over SSH either.";

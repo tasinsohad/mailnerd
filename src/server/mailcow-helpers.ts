@@ -1,6 +1,7 @@
 import https from "node:https";
 import crypto from "node:crypto";
 import { retryTransient } from "@/lib/retry";
+import { MAILCOW_SHELL_PRELUDE } from "./health-checks";
 
 // Quota sizing for Mailcow domains/mailboxes. IMPORTANT: Mailcow's add/domain fields are
 // `mailboxes`, `quota` (domain TOTAL, MB), `maxquota` (max a single mailbox may have, MB),
@@ -170,6 +171,55 @@ export async function mailcowRequestViaSsh(
       /* non-JSON (HTML/empty) stays a string */
     }
     return { ok: status >= 200 && status < 300, status, json };
+  } finally {
+    await mgr.dispose().catch(() => {});
+  }
+}
+
+// Ensure Mailcow's API_ALLOW_FROM permits calls FROM the server itself. A tunnelled API call (curl
+// to localhost) reaches Mailcow's nginx from the docker bridge gateway, so if fixCreateApiKey
+// narrowed API_ALLOW_FROM to just 127.0.0.1,<ssh-ip> the call is rejected (HTTP 200 {}). We add
+// loopback + the PRIVATE/Docker ranges only — never the public internet — then reload Mailcow if it
+// changed. Idempotent. Returns what it found/did.
+export async function mailcowEnsureApiAllowList(
+  ssh: MailcowSshTarget,
+): Promise<{ ok: boolean; allow: string; reloaded: boolean; detail: string }> {
+  const { SSHManager } = await import("@/lib/ssh");
+  const script =
+    MAILCOW_SHELL_PRELUDE +
+    "\n" +
+    [
+      '[ -f mailcow.conf ] || { echo "NO_CONF"; exit 0; }',
+      'CUR=$(grep -m1 "^API_ALLOW_FROM=" mailcow.conf 2>/dev/null | cut -d= -f2 | tr -d "\\r")',
+      'NEW="$CUR"; CHANGED=0',
+      "for e in 127.0.0.1 ::1 172.16.0.0/12 10.0.0.0/8 192.168.0.0/16; do",
+      '  case ",$NEW," in *",$e,"*) ;; *) NEW="${NEW:+$NEW,}$e"; CHANGED=1 ;; esac',
+      "done",
+      'if [ -z "$CUR" ]; then echo "API_ALLOW_FROM=${NEW}" >> mailcow.conf; CHANGED=1;',
+      'elif [ "$CHANGED" = "1" ]; then sed -i "s|^API_ALLOW_FROM=.*|API_ALLOW_FROM=${NEW}|" mailcow.conf; fi',
+      'echo "ALLOW=${NEW}"',
+      'if [ "$CHANGED" = "1" ]; then $DC up -d 2>&1 | tail -2; echo "RELOADED=yes"; else echo "RELOADED=no"; fi',
+    ].join("\n");
+  const mgr = new SSHManager(ssh.ipAddress, 22, ssh.sshUser, {
+    type: "password",
+    password: ssh.sshPassword,
+  });
+  try {
+    await mgr.connect({ timeoutMs: 15000, maxRetries: 1 });
+    const res = await mgr.executeCommand(script, { timeoutMs: 240000 });
+    const out = `${res.stdout}\n${res.stderr}`;
+    if (out.includes("NO_CONF"))
+      return { ok: false, allow: "", reloaded: false, detail: "No mailcow.conf found on the server." };
+    const allow = (out.match(/ALLOW=(.*)/)?.[1] ?? "").trim();
+    const reloaded = /RELOADED=yes/.test(out);
+    return {
+      ok: true,
+      allow,
+      reloaded,
+      detail: reloaded
+        ? `Broadened API_ALLOW_FROM to include private ranges (${allow}) and reloaded Mailcow.`
+        : `API_ALLOW_FROM already permits internal calls (${allow}).`,
+    };
   } finally {
     await mgr.dispose().catch(() => {});
   }
