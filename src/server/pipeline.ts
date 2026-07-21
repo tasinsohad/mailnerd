@@ -27,17 +27,33 @@ import { doh, isCloudflareIp } from "./health-net";
 async function diagnoseMailHostUnreachable(domain: any): Promise<string> {
   const host = String(domain.mailcowHostname);
   const prefix = `Mailcow API not reachable at ${host}`;
+  let ips: string[] = [];
   try {
-    const ips = await doh(host, "A", 6000);
-    if (ips.length === 0)
-      return `${prefix}: it has no A record yet — the DNS wasn't created or hasn't propagated. Wait ~1 min and retry, or check the ${host} record in Cloudflare.`;
-    if (ips.some((ip) => isCloudflareIp(ip)))
-      return `${prefix}: it's Cloudflare-PROXIED (orange cloud, ${ips[0]}) — set ${host} to DNS-only (grey cloud), then retry.`;
-    if (domain.ipAddress && !ips.includes(domain.ipAddress))
-      return `${prefix}: it points to ${ips.join(", ")}, but the server is ${domain.ipAddress} — fix the ${host} A record to the server IP.`;
-    return `${prefix}: ${host} resolves correctly to ${ips.join(", ")}, but the Mailcow API isn't responding — check the server is up and the Mailcow API key is valid (and not IP-restricted).`;
+    ips = await doh(host, "A", 6000);
   } catch {
     return `${prefix} after retries — couldn't resolve the mail host and the API didn't respond.`;
+  }
+  if (ips.length === 0)
+    return `${prefix}: it has no A record yet — the DNS wasn't created or hasn't propagated. Wait ~1 min and retry, or check the ${host} record in Cloudflare.`;
+  if (ips.some((ip) => isCloudflareIp(ip)))
+    return `${prefix}: it's Cloudflare-PROXIED (orange cloud, ${ips[0]}) — set ${host} to DNS-only (grey cloud), then retry.`;
+  if (domain.ipAddress && !ips.includes(domain.ipAddress))
+    return `${prefix}: it points to ${ips.join(", ")}, but the server is ${domain.ipAddress} — fix the ${host} A record to the server IP.`;
+
+  // DNS is correct — probe the API once more to name the ACTUAL cause from the HTTP status.
+  try {
+    const { status, json } = await mailcowRequest(host, domain.mailcowApiKey, "get/domain/all", undefined, {
+      timeoutMs: 12000,
+    });
+    if (status === 401)
+      return `${prefix}: ${host} is up, but the API key was REJECTED (401) — it's wrong or was rotated. Re-provision the server (re-reads the key), then retry.`;
+    if (status === 403)
+      return `${prefix}: ${host} is up, but the API request was FORBIDDEN (403) — the Mailcow API key is IP-restricted and this app's IP isn't allowed. In Mailcow → Configuration → API, add this app's server IP to the allow-list (or clear the restriction), then retry.`;
+    if (typeof json === "string")
+      return `${prefix}: ${host} returned a web page, not the API (HTTP ${status}) — enable the API in Mailcow (Configuration → API → activate & allow the app's IP), or confirm Mailcow serves 443 on this host.`;
+    return `${prefix}: ${host} resolves to ${ips.join(", ")} and answered HTTP ${status}, but not a valid API response — check Mailcow is healthy and the API is enabled.`;
+  } catch {
+    return `${prefix}: ${host} resolves to ${ips.join(", ")} but nothing answered HTTPS on port 443 — the server may be down or a firewall is blocking 443 from here. Check the box is up and Mailcow is running.`;
   }
 }
 import { fetchAllCfDnsRecords, createCfDnsRecordResilient } from "./cloudflare.functions";
