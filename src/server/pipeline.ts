@@ -21,6 +21,17 @@ import {
 import { resolveAndSaveCfZoneId } from "./cloudflare";
 import { doh, isCloudflareIp } from "./health-net";
 
+// SSH target for a domain, for tunnelling Mailcow API calls FROM the server. Credentials live on
+// the domain OR its linked server relation (domains.sshPassword is nullable) — mirror the fallback
+// mailcow-key.ts uses, or the tunnel silently never engages.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function sshTargetForDomain(domain: any): MailcowSshTarget | undefined {
+  const ipAddress = domain.ipAddress || domain.server?.ipAddress;
+  const sshPassword = domain.sshPassword || domain.server?.sshPassword;
+  const sshUser = domain.sshUser || domain.server?.sshUser || "root";
+  return ipAddress && sshPassword ? { ipAddress, sshUser, sshPassword } : undefined;
+}
+
 // Turn a failed Mailcow API probe into a PRECISE reason by resolving the mail host — so the user
 // gets "it's proxied" / "wrong IP" / "no record yet" / "resolves fine but API is down" instead of a
 // guess. Keeps the literal "not reachable" so setupMailcowDomain's self-heal still recognises it.
@@ -175,10 +186,7 @@ export async function ensureMailDomains(
   // the server (curl to localhost) — source 127.0.0.1 is always in API_ALLOW_FROM, so a serverless
   // app whose HTTPS IP rotates / isn't allow-listed still gets through. The chosen transport is
   // returned so createMailboxes uses the SAME one (no second probe).
-  const sshTarget: MailcowSshTarget | undefined =
-    domain.ipAddress && domain.sshPassword
-      ? { ipAddress: domain.ipAddress, sshUser: domain.sshUser || "root", sshPassword: domain.sshPassword }
-      : undefined;
+  const sshTarget = sshTargetForDomain(domain);
 
   let probe = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all", {
     attempts: 3,
@@ -488,10 +496,7 @@ export async function syncDkim(
 
   // Choose the API transport: direct if the app's IP reaches Mailcow, else tunnel over SSH
   // (source 127.0.0.1 is always allow-listed) — same reachability fix as provisioning.
-  const sshTarget: MailcowSshTarget | undefined =
-    domain.ipAddress && domain.sshPassword
-      ? { ipAddress: domain.ipAddress, sshUser: domain.sshUser || "root", sshPassword: domain.sshPassword }
-      : undefined;
+  const sshTarget = sshTargetForDomain(domain);
   let ssh: MailcowSshTarget | undefined;
   if (sshTarget) {
     const direct = await mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all", undefined, {

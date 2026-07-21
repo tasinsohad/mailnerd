@@ -69,6 +69,7 @@ export const fetchDkimAndSync = createServerFn({ method: "POST" })
 
     const domain = await db.query.domains.findFirst({
       where: and(eq(domains.id, data.domainId), eq(domains.userId, userId)),
+      with: { server: true }, // so syncDkim can tunnel the API over SSH when the app IP is blocked
     });
     if (!domain) return { error: "Domain not found" };
     if (!domain.mailcowHostname || !domain.mailcowApiKey) {

@@ -143,9 +143,15 @@ export async function mailcowRequestViaSsh(
     // --resolve pins the mail host to 127.0.0.1: keeps the real Host header for nginx while making
     // the source localhost. -w appends the status on its own line so we can split body/status.
     const dataFlag = body !== undefined ? "--data-binary @- " : "";
+    // --resolve pins the host to loopback (source = the box itself). We also set X-Forwarded-For to
+    // 127.0.0.1: on a Dockerised Mailcow the request reaches nginx from the docker bridge gateway,
+    // so if API_ALLOW_FROM was narrowed to just 127.0.0.1 the raw source could be rejected — forcing
+    // XFF to loopback (which is always allow-listed) makes the tunnel reliable. We're on the trusted
+    // server, so asserting loopback here is legitimate.
     const curl =
       `curl -sk --max-time ${curlSecs} --resolve ${host}:443:127.0.0.1 ` +
-      `-X ${method} -H "X-API-Key: ${apiKey}" -H "Content-Type: application/json" ${dataFlag}` +
+      `-X ${method} -H "X-API-Key: ${apiKey}" -H "X-Forwarded-For: 127.0.0.1" ` +
+      `-H "Content-Type: application/json" ${dataFlag}` +
       `-w '\\n__MCHTTP__%{http_code}' "https://${host}/api/v1/${path}"`;
     // Feed the JSON body via a single-quoted heredoc so the shell doesn't touch it.
     const cmd =
