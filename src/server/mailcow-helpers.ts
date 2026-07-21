@@ -43,13 +43,25 @@ export function generateMailboxPassword(): string {
 // silently broke every API call. We connect to the user's OWN server, so we skip TLS
 // verification here only — Cloudflare calls elsewhere stay strict. Uses node:https to
 // avoid adding an undici dependency that might behave differently when bundled.
+// SSH creds for running an API call FROM the server (see mailcowRequestViaSsh).
+export interface MailcowSshTarget {
+  ipAddress: string;
+  sshUser: string;
+  sshPassword: string;
+}
+
 export function mailcowRequest(
   host: string,
   apiKey: string,
   path: string,
   body?: unknown,
-  opts?: { timeoutMs?: number },
+  opts?: { timeoutMs?: number; ssh?: MailcowSshTarget },
 ): Promise<{ ok: boolean; status: number; json: unknown }> {
+  // When an SSH target is supplied, run the call FROM the server (curl to localhost) instead of
+  // directly: the request's source is then 127.0.0.1, which is always in Mailcow's API_ALLOW_FROM,
+  // so a serverless app whose HTTPS egress IP rotates / isn't allow-listed still reaches the API.
+  if (opts?.ssh)
+    return mailcowRequestViaSsh(opts.ssh, host, apiKey, path, body, { timeoutMs: opts.timeoutMs });
   const timeoutMs = opts?.timeoutMs ?? 20000;
   return new Promise((resolve, reject) => {
     const payload = body !== undefined ? JSON.stringify(body) : undefined;
@@ -105,6 +117,58 @@ export function mailcowRequest(
   });
 }
 
+// Run a Mailcow API call FROM the server over SSH (curl to localhost). Source = 127.0.0.1, which is
+// always in API_ALLOW_FROM, so this works no matter what the app's own egress IP is — the fix for a
+// serverless host whose HTTPS IP rotates and isn't allow-listed. Same {ok,status,json} shape as the
+// direct client. Dynamic-imports @/lib/ssh so the native ssh2 binding never enters the client bundle
+// (this module is pulled into client graphs via pipeline → health-fixes; see sshRun in server-fixes).
+export async function mailcowRequestViaSsh(
+  ssh: MailcowSshTarget,
+  host: string,
+  apiKey: string,
+  path: string,
+  body?: unknown,
+  opts?: { timeoutMs?: number },
+): Promise<{ ok: boolean; status: number; json: unknown }> {
+  const timeoutMs = opts?.timeoutMs ?? 20000;
+  const { SSHManager } = await import("@/lib/ssh");
+  const mgr = new SSHManager(ssh.ipAddress, 22, ssh.sshUser, {
+    type: "password",
+    password: ssh.sshPassword,
+  });
+  try {
+    await mgr.connect({ timeoutMs: 15000, maxRetries: 1 });
+    const method = body !== undefined ? "POST" : "GET";
+    const curlSecs = Math.max(5, Math.round(timeoutMs / 1000));
+    // --resolve pins the mail host to 127.0.0.1: keeps the real Host header for nginx while making
+    // the source localhost. -w appends the status on its own line so we can split body/status.
+    const dataFlag = body !== undefined ? "--data-binary @- " : "";
+    const curl =
+      `curl -sk --max-time ${curlSecs} --resolve ${host}:443:127.0.0.1 ` +
+      `-X ${method} -H "X-API-Key: ${apiKey}" -H "Content-Type: application/json" ${dataFlag}` +
+      `-w '\\n__MCHTTP__%{http_code}' "https://${host}/api/v1/${path}"`;
+    // Feed the JSON body via a single-quoted heredoc so the shell doesn't touch it.
+    const cmd =
+      body !== undefined
+        ? `cat <<'__MCJSON__' | ${curl}\n${JSON.stringify(body)}\n__MCJSON__`
+        : curl;
+    const res = await mgr.executeCommand(cmd, { timeoutMs: timeoutMs + 8000 });
+    const out = String(res.stdout ?? "");
+    const m = out.match(/__MCHTTP__(\d{3})\s*$/);
+    const status = m ? Number(m[1]) : 0;
+    const bodyText = (m ? out.slice(0, m.index) : out).trim();
+    let json: unknown = bodyText;
+    try {
+      json = JSON.parse(bodyText);
+    } catch {
+      /* non-JSON (HTML/empty) stays a string */
+    }
+    return { ok: status >= 200 && status < 300, status, json };
+  } finally {
+    await mgr.dispose().catch(() => {});
+  }
+}
+
 // An HTTP status worth retrying: a transport failure (0, surfaced as a throw), rate limiting
 // (429), or a server-side error (5xx) from a warming-up / overloaded Mailcow. A 2xx or a
 // deterministic 4xx is NOT retried — those reflect the request, not a transient hiccup.
@@ -121,10 +185,10 @@ export function mailcowRequestRetry(
   apiKey: string,
   path: string,
   body?: unknown,
-  opts?: { attempts?: number; timeoutMs?: number },
+  opts?: { attempts?: number; timeoutMs?: number; ssh?: MailcowSshTarget },
 ): Promise<{ ok: boolean; status: number; json: unknown }> {
   return retryTransient(
-    () => mailcowRequest(host, apiKey, path, body, { timeoutMs: opts?.timeoutMs ?? 20000 }),
+    () => mailcowRequest(host, apiKey, path, body, { timeoutMs: opts?.timeoutMs ?? 20000, ssh: opts?.ssh }),
     (res) => isTransientHttp(res.status),
     { attempts: opts?.attempts ?? 3, base: 600 },
   );
@@ -144,13 +208,13 @@ export async function mailcowListAll(
   host: string,
   apiKey: string,
   path: string,
-  opts?: { attempts?: number; timeoutMs?: number },
+  opts?: { attempts?: number; timeoutMs?: number; ssh?: MailcowSshTarget },
 ): Promise<any[] | null> {
   const attempts = opts?.attempts ?? 4;
   const timeoutMs = opts?.timeoutMs ?? 20000;
   for (let i = 0; i < attempts; i++) {
     try {
-      const { json } = await mailcowRequest(host, apiKey, path, undefined, { timeoutMs });
+      const { json } = await mailcowRequest(host, apiKey, path, undefined, { timeoutMs, ssh: opts?.ssh });
       if (Array.isArray(json)) return json;
     } catch {
       // transient (timeout / connection reset) — fall through to backoff and retry

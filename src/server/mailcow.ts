@@ -49,9 +49,12 @@ export const setupMailcowDomain = createServerFn({ method: "POST" })
         throw e;
       }
     }
-    const { existingDomains, results: domainResults } = ensured;
+    const { existingDomains, results: domainResults, ssh } = ensured;
+    // Reuse the transport ensureMailDomains chose (direct, or SSH-tunnel when the app's IP is
+    // allow-list-blocked) so the mailbox creates go the same reachable way.
     const { results: mailboxResults, summary } = await createMailboxes(db, domain, existingDomains, {
       recreate: data.recreate,
+      ssh,
     });
     return { results: [...domainResults, ...mailboxResults], summary };
   });

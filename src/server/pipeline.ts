@@ -16,6 +16,7 @@ import {
   findMatchingCfRecord,
   isCfAlreadyExistsError,
   QUOTA,
+  type MailcowSshTarget,
 } from "./mailcow-helpers";
 import { resolveAndSaveCfZoneId } from "./cloudflare";
 import { doh, isCloudflareIp } from "./health-net";
@@ -168,23 +169,40 @@ export async function reassignReservedSubdomainInboxes(
 export async function ensureMailDomains(
   db: Db,
   domain: Domain,
-): Promise<{ existingDomains: Set<string>; results: MailcowResultRow[] }> {
-  // Writes go through the retrying client so a transient hiccup during bulk provisioning
-  // (429 / 5xx / timeout) doesn't silently drop a domain or mailbox.
-  const mc = (path: string, body?: unknown) =>
-    mailcowRequestRetry(domain.mailcowHostname, domain.mailcowApiKey, path, body);
+): Promise<{ existingDomains: Set<string>; results: MailcowResultRow[]; ssh?: MailcowSshTarget }> {
+  // Pick the API transport ONCE for the whole run. Try direct first (fast when the app's egress IP
+  // is allow-listed). If that fails but we have SSH creds, fall back to running the API calls FROM
+  // the server (curl to localhost) — source 127.0.0.1 is always in API_ALLOW_FROM, so a serverless
+  // app whose HTTPS IP rotates / isn't allow-listed still gets through. The chosen transport is
+  // returned so createMailboxes uses the SAME one (no second probe).
+  const sshTarget: MailcowSshTarget | undefined =
+    domain.ipAddress && domain.sshPassword
+      ? { ipAddress: domain.ipAddress, sshUser: domain.sshUser || "root", sshPassword: domain.sshPassword }
+      : undefined;
 
-  // Fail fast if the Mailcow API isn't reachable. A Cloudflare-PROXIED mail host (orange
-  // cloud) intercepts the API and returns HTML / hangs, which would otherwise make us hang
-  // on dozens of add/* calls. The mail host MUST be DNS-only. A valid empty Mailcow returns
-  // {} (object) or [] with HTTP 200; HTML (string) or non-200/timeout means unreachable.
-  const probe = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all", {
-    attempts: 5,
-    timeoutMs: 12000,
+  let probe = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all", {
+    attempts: 3,
+    timeoutMs: 10000,
   });
+  let ssh: MailcowSshTarget | undefined;
+  if (probe === null && sshTarget) {
+    // Direct is blocked (allow-list) or unreachable — retry over SSH and, if that works, tunnel the
+    // rest of this run through it.
+    probe = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all", {
+      attempts: 2,
+      timeoutMs: 20000,
+      ssh: sshTarget,
+    });
+    if (probe !== null) ssh = sshTarget;
+  }
   if (probe === null) {
     throw new Error(await diagnoseMailHostUnreachable(domain));
   }
+
+  // Writes go through the retrying client (on the chosen transport) so a transient hiccup during
+  // bulk provisioning (429 / 5xx / timeout) doesn't silently drop a domain or mailbox.
+  const mc = (path: string, body?: unknown) =>
+    mailcowRequestRetry(domain.mailcowHostname, domain.mailcowApiKey, path, body, { ssh });
   // Reassign any inboxes stuck on the mail host / reserved subdomains (planned before the
   // reserved-name fix) to a valid subdomain so they can actually be created.
   await reassignReservedSubdomainInboxes(db, domain);
@@ -222,7 +240,9 @@ export async function ensureMailDomains(
   }
 
   const existingDomains = new Set<string>();
-  const domList = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all");
+  const domList = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all", {
+    ssh,
+  });
   if (domList) {
     for (const d of domList) if (d?.domain_name) existingDomains.add(String(d.domain_name).toLowerCase());
   }
@@ -238,7 +258,7 @@ export async function ensureMailDomains(
         : `add/domain rejected${addDomainErrors[String(sub)] ? `: ${addDomainErrors[String(sub)]}` : ""}`,
     };
   });
-  return { existingDomains, results };
+  return { existingDomains, results, ssh };
 }
 
 // --- Step: create the planned mailboxes. Idempotent + verified: only stores a password
@@ -248,12 +268,12 @@ export async function createMailboxes(
   db: Db,
   domain: Domain,
   existingDomains: Set<string>,
-  opts?: { recreate?: boolean },
+  opts?: { recreate?: boolean; ssh?: MailcowSshTarget },
 ): Promise<{ results: MailcowResultRow[]; summary: { total: number; created: number; failed: number } }> {
-  // Writes go through the retrying client so a transient hiccup during bulk provisioning
-  // (429 / 5xx / timeout) doesn't silently drop a domain or mailbox.
+  // Writes go through the retrying client (on the transport ensureMailDomains chose) so a transient
+  // hiccup during bulk provisioning (429 / 5xx / timeout) doesn't silently drop a domain or mailbox.
   const mc = (path: string, body?: unknown) =>
-    mailcowRequestRetry(domain.mailcowHostname, domain.mailcowApiKey, path, body);
+    mailcowRequestRetry(domain.mailcowHostname, domain.mailcowApiKey, path, body, { ssh: opts?.ssh });
   const inboxes = await db.select().from(plannedInboxes).where(eq(plannedInboxes.domainId, domain.id));
   const { MAILBOX_QUOTA_MB } = QUOTA;
   const results: MailcowResultRow[] = [];
@@ -466,9 +486,23 @@ export async function syncDkim(
   const uniqueSubdomains = [domain.name, ...Array.from(new Set(inboxes.map((i: any) => i.subdomainFqdn)))];
   const results: { name: string; success: boolean; error?: string }[] = [];
 
+  // Choose the API transport: direct if the app's IP reaches Mailcow, else tunnel over SSH
+  // (source 127.0.0.1 is always allow-listed) — same reachability fix as provisioning.
+  const sshTarget: MailcowSshTarget | undefined =
+    domain.ipAddress && domain.sshPassword
+      ? { ipAddress: domain.ipAddress, sshUser: domain.sshUser || "root", sshPassword: domain.sshPassword }
+      : undefined;
+  let ssh: MailcowSshTarget | undefined;
+  if (sshTarget) {
+    const direct = await mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all", undefined, {
+      timeoutMs: 10000,
+    }).catch(() => null);
+    if (!direct || !Array.isArray(direct.json)) ssh = sshTarget;
+  }
+
   for (const sub of uniqueSubdomains) {
     try {
-      const { json } = await mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, `get/dkim/${sub}`);
+      const { json } = await mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, `get/dkim/${sub}`, undefined, { ssh });
       // Mailcow returns { pubkey, dkim_txt, dkim_selector, length } — NOT `dkim_public`.
       // Prefer the ready-made dkim_txt; otherwise build the record from the raw pubkey.
       const dkimTxt = (json as any)?.dkim_txt;
