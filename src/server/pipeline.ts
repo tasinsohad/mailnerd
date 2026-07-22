@@ -11,6 +11,7 @@ import {
   mailcowRequestViaSsh,
   mailcowEnsureApiAllowList,
   mailcowFetchDbApiKey,
+  mailcowCreateDbApiKey,
   mailcowListAll,
   parseMailcowResult,
   generateMailboxPassword,
@@ -239,30 +240,39 @@ export async function ensureMailDomains(
         // mailcow.conf's legacy API_KEY (possibly a synthetic one written by fixCreateApiKey)
         // shadows the REAL key in Mailcow's `api` table, and modern Mailcow ignores the conf key.
         // Fetch the real key, retry with it, and persist it when it works.
-        const dbKey = await mailcowFetchDbApiKey(sshTarget).catch(() => null);
+        let candidate = await mailcowFetchDbApiKey(sshTarget).catch(() => null);
+        let createdKey = false;
+        if (!candidate) {
+          // Mailcow has NO active API key at all — create a real one on the server (read-write,
+          // skip_ip_check) so provisioning can continue instead of dead-ending on manual setup.
+          candidate = await mailcowCreateDbApiKey(sshTarget).catch(() => null);
+          createdKey = !!candidate;
+        }
         const retry2 =
-          dbKey && dbKey !== domain.mailcowApiKey
+          candidate && candidate !== domain.mailcowApiKey
             ? await mailcowRequestViaSsh(
                 sshTarget,
                 domain.mailcowHostname,
-                dbKey,
+                candidate,
                 "get/domain/all",
                 undefined,
                 { timeoutMs: 20000 },
               ).catch(() => null)
             : null;
         if (retry2 && Array.isArray(retry2.json)) {
-          await db.update(domains).set({ mailcowApiKey: dbKey }).where(eq(domains.id, domain.id));
-          domain.mailcowApiKey = dbKey; // use the working key for the rest of this run
+          await db.update(domains).set({ mailcowApiKey: candidate }).where(eq(domains.id, domain.id));
+          domain.mailcowApiKey = candidate; // use the working key for the rest of this run
           ssh = sshTarget;
           probe = retry2.json;
         } else {
           const body = typeof retry.json === "string" ? retry.json : JSON.stringify(retry.json);
           tunnelNote =
             ` SSH tunnel was rejected. ${fix.detail} Retry: status ${retry.status} (${String(body).slice(0, 160)}).` +
-            (dbKey
-              ? " Mailcow's database API key was also rejected — check the API is enabled in Mailcow (Configuration → Access → API)."
-              : " No active API key found in Mailcow's database — enable the API in Mailcow (Configuration → Access → API) and create a read-write key.");
+            (createdKey
+              ? " Created a new API key in Mailcow's database, but it was still rejected — check the API is enabled (Mailcow → Configuration → Access → API)."
+              : candidate
+                ? " Mailcow's database API key was also rejected — check the API is enabled (Mailcow → Configuration → Access → API)."
+                : " No active API key in Mailcow's database and one couldn't be created (no mysql container or DB root password) — check Mailcow is running.");
         }
       }
     }

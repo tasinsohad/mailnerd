@@ -265,6 +265,57 @@ export async function mailcowFetchDbApiKey(ssh: MailcowSshTarget): Promise<strin
   }
 }
 
+// Create a REAL Mailcow API key in its `api` database table (the only place modern Mailcow looks)
+// when the server has none. Read-write, active, and skip_ip_check=1 so it works from any source —
+// which also removes the whole allow-list class of failure. Verifies by reading the row back.
+// Returns the new key, or null if we couldn't create one (no mysql container / no DB root).
+export async function mailcowCreateDbApiKey(ssh: MailcowSshTarget): Promise<string | null> {
+  // Mailcow-style key: 6 groups of 5 uppercase alphanumerics. Matches isValidMailcowApiKey.
+  const ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const group = () =>
+    Array.from({ length: 5 }, () => ALPHA[crypto.randomInt(ALPHA.length)]).join("");
+  const key = Array.from({ length: 6 }, group).join("-");
+
+  const { SSHManager } = await import("@/lib/ssh");
+  const sql = (q: string) =>
+    `docker exec -i "$MYC" mysql -u root -p"$DBROOT" "$DBNAME" -N -B -e "${q}" 2>/dev/null`;
+  const script =
+    MAILCOW_SHELL_PRELUDE +
+    "\n" +
+    [
+      '[ -f mailcow.conf ] || { echo "NO_CONF"; exit 0; }',
+      "DBROOT=$(grep -m1 '^DBROOT=' mailcow.conf 2>/dev/null | cut -d= -f2 | tr -d '\\r')",
+      "DBNAME=$(grep -m1 '^DBNAME=' mailcow.conf 2>/dev/null | cut -d= -f2 | tr -d '\\r')",
+      '[ -n "$DBNAME" ] || DBNAME=mailcow',
+      "MYC=$(docker ps -qf name=mysql-mailcow 2>/dev/null | head -1)",
+      '[ -n "$MYC" ] && [ -n "$DBROOT" ] || { echo "NO_DB"; exit 0; }',
+      // Some schema versions require `created`; try without it first, then with.
+      sql(
+        `INSERT INTO api (api_key, allow_from, skip_ip_check, api_access, active) VALUES ('${key}','0.0.0.0/0',1,'rw',1)`,
+      ) +
+        " || " +
+        sql(
+          `INSERT INTO api (api_key, allow_from, skip_ip_check, api_access, active, created) VALUES ('${key}','0.0.0.0/0',1,'rw',1,NOW())`,
+        ),
+      'echo "---VERIFY---"',
+      sql(`SELECT api_key FROM api WHERE api_key='${key}' AND active=1`),
+    ].join("\n");
+
+  const mgr = new SSHManager(ssh.ipAddress, 22, ssh.sshUser, {
+    type: "password",
+    password: ssh.sshPassword,
+  });
+  try {
+    await mgr.connect({ timeoutMs: 15000, maxRetries: 1 });
+    const res = await mgr.executeCommand(script, { timeoutMs: 60000 });
+    const out = String(res.stdout ?? "");
+    const verified = (out.split("---VERIFY---")[1] ?? "").includes(key);
+    return verified ? key : null;
+  } finally {
+    await mgr.dispose().catch(() => {});
+  }
+}
+
 // An HTTP status worth retrying: a transport failure (0, surfaced as a throw), rate limiting
 // (429), or a server-side error (5xx) from a warming-up / overloaded Mailcow. A 2xx or a
 // deterministic 4xx is NOT retried — those reflect the request, not a transient hiccup.
