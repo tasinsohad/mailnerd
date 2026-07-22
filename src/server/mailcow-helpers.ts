@@ -316,6 +316,52 @@ export async function mailcowCreateDbApiKey(ssh: MailcowSshTarget): Promise<stri
   }
 }
 
+// Bring the Mailcow stack up, and report what's actually running.
+//
+// THIS is the failure that masquerades as everything else: Mailcow validates every API key against
+// its MySQL container. If mysql-mailcow is down, the API answers HTTP 200 `{}` for EVERY key — which
+// is indistinguishable from "bad key" or "IP not allow-listed". nginx can still be up and serving
+// 443, so the host looks healthy from outside. Starting the stack is the real fix.
+export async function mailcowBringUpStack(
+  ssh: MailcowSshTarget,
+): Promise<{ ok: boolean; running: number; mysqlUp: boolean; detail: string }> {
+  const { SSHManager } = await import("@/lib/ssh");
+  const script =
+    MAILCOW_SHELL_PRELUDE +
+    "\n" +
+    [
+      '[ -f mailcow.conf ] || { echo "NO_CONF"; exit 0; }',
+      'BEFORE=$(docker ps -q --filter name=mailcow 2>/dev/null | wc -l | tr -d " ")',
+      '$DC up -d 2>&1 | tail -5',
+      "sleep 12",
+      'AFTER=$(docker ps -q --filter name=mailcow 2>/dev/null | wc -l | tr -d " ")',
+      'MYC=$(docker ps -qf name=mysql-mailcow 2>/dev/null | head -1)',
+      'echo "BEFORE=${BEFORE}"; echo "AFTER=${AFTER}"; echo "MYSQL=${MYC:-none}"',
+    ].join("\n");
+  const mgr = new SSHManager(ssh.ipAddress, 22, ssh.sshUser, {
+    type: "password",
+    password: ssh.sshPassword,
+  });
+  try {
+    await mgr.connect({ timeoutMs: 15000, maxRetries: 1 });
+    const res = await mgr.executeCommand(script, { timeoutMs: 300000 });
+    const out = `${res.stdout}\n${res.stderr}`;
+    if (out.includes("NO_CONF"))
+      return { ok: false, running: 0, mysqlUp: false, detail: "No mailcow.conf on the server." };
+    const before = Number(out.match(/BEFORE=(\d+)/)?.[1] ?? 0);
+    const running = Number(out.match(/AFTER=(\d+)/)?.[1] ?? 0);
+    const mysqlUp = !/MYSQL=none/.test(out) && /MYSQL=\w/.test(out);
+    return {
+      ok: true,
+      running,
+      mysqlUp,
+      detail: `Mailcow containers: ${before} running before, ${running} after 'compose up -d'; mysql ${mysqlUp ? "UP" : "still DOWN"}.`,
+    };
+  } finally {
+    await mgr.dispose().catch(() => {});
+  }
+}
+
 // An HTTP status worth retrying: a transport failure (0, surfaced as a throw), rate limiting
 // (429), or a server-side error (5xx) from a warming-up / overloaded Mailcow. A 2xx or a
 // deterministic 4xx is NOT retried — those reflect the request, not a transient hiccup.

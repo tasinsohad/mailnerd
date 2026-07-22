@@ -12,6 +12,7 @@ import {
   mailcowEnsureApiAllowList,
   mailcowFetchDbApiKey,
   mailcowCreateDbApiKey,
+  mailcowBringUpStack,
   mailcowListAll,
   parseMailcowResult,
   generateMailboxPassword,
@@ -199,83 +200,86 @@ export async function ensureMailDomains(
   let ssh: MailcowSshTarget | undefined;
   let tunnelNote = "";
   if (probe === null && sshTarget) {
-    // Direct is blocked (allow-list) or unreachable — try the SSH tunnel, KEEPING the raw response so
-    // a failure explains ITSELF (SSH/curl error, or Mailcow rejecting the tunnelled call) instead of
-    // falling through to the generic direct-probe error.
-    const viaSsh = await mailcowRequestViaSsh(
-      sshTarget,
-      domain.mailcowHostname,
-      domain.mailcowApiKey,
-      "get/domain/all",
-      undefined,
-      { timeoutMs: 20000 },
-    ).catch((e) => ({ ok: false, status: -1, json: e instanceof Error ? e.message : String(e) }));
-    if (Array.isArray(viaSsh.json)) {
-      ssh = sshTarget;
-      probe = viaSsh.json;
-    } else {
-      // Tunnel reached Mailcow but was REJECTED (HTTP 200 {} = source IP not allow-listed). The
-      // tunnel enters from the docker bridge gateway, which fixCreateApiKey may have excluded when it
-      // narrowed API_ALLOW_FROM. Broaden it to the server's PRIVATE ranges (internal only, never the
-      // internet) + reload Mailcow, then retry the tunnel once.
-      const fix = await mailcowEnsureApiAllowList(sshTarget).catch((e) => ({
+    // Escalate through the things that actually break Mailcow API access, cheapest first. Each step
+    // re-probes over the SSH tunnel; the first that returns a real array wins. Mailcow reports ALL of
+    // these failures identically (HTTP 200 `{}`), so we can't tell them apart without trying.
+    const target = sshTarget;
+    const tunnelProbe = async (key: string): Promise<any[] | null> => {
+      const r = await mailcowRequestViaSsh(
+        target,
+        domain.mailcowHostname,
+        key,
+        "get/domain/all",
+        undefined,
+        { timeoutMs: 20000 },
+      ).catch(() => null);
+      return r && Array.isArray(r.json) ? (r.json as any[]) : null;
+    };
+    const notes: string[] = [];
+
+    // 1. Plain tunnel (source = the box itself) — clears an app-IP allow-list block.
+    probe = await tunnelProbe(domain.mailcowApiKey);
+
+    // 2. Stack down. Mailcow validates every key against its MySQL container; with mysql down it
+    //    answers 200 `{}` for EVERY key while nginx still serves 443 — looking exactly like a bad key
+    //    or a blocked IP. Bringing the stack up is the real fix, so try it before touching keys.
+    if (probe === null) {
+      const up = await mailcowBringUpStack(target).catch((e) => ({
+        ok: false,
+        running: 0,
+        mysqlUp: false,
+        detail: e instanceof Error ? e.message : String(e),
+      }));
+      notes.push(up.detail);
+      if (up.mysqlUp) probe = await tunnelProbe(domain.mailcowApiKey);
+    }
+
+    // 3. Allow-list still rejecting the tunnel's docker-bridge source.
+    if (probe === null) {
+      const fix = await mailcowEnsureApiAllowList(target).catch((e) => ({
         ok: false,
         allow: "",
         reloaded: false,
         detail: e instanceof Error ? e.message : String(e),
       }));
-      const retry = await mailcowRequestViaSsh(
-        sshTarget,
-        domain.mailcowHostname,
-        domain.mailcowApiKey,
-        "get/domain/all",
-        undefined,
-        { timeoutMs: 20000 },
-      ).catch((e) => ({ ok: false, status: -1, json: e instanceof Error ? e.message : String(e) }));
-      if (Array.isArray(retry.json)) {
-        ssh = sshTarget;
-        probe = retry.json;
-      } else {
-        // The allow-list is fine but Mailcow still answers `{}` — so the KEY is what it rejects.
-        // mailcow.conf's legacy API_KEY (possibly a synthetic one written by fixCreateApiKey)
-        // shadows the REAL key in Mailcow's `api` table, and modern Mailcow ignores the conf key.
-        // Fetch the real key, retry with it, and persist it when it works.
-        let candidate = await mailcowFetchDbApiKey(sshTarget).catch(() => null);
-        let createdKey = false;
-        if (!candidate) {
-          // Mailcow has NO active API key at all — create a real one on the server (read-write,
-          // skip_ip_check) so provisioning can continue instead of dead-ending on manual setup.
-          candidate = await mailcowCreateDbApiKey(sshTarget).catch(() => null);
-          createdKey = !!candidate;
-        }
-        const retry2 =
-          candidate && candidate !== domain.mailcowApiKey
-            ? await mailcowRequestViaSsh(
-                sshTarget,
-                domain.mailcowHostname,
-                candidate,
-                "get/domain/all",
-                undefined,
-                { timeoutMs: 20000 },
-              ).catch(() => null)
-            : null;
-        if (retry2 && Array.isArray(retry2.json)) {
+      notes.push(fix.detail);
+      probe = await tunnelProbe(domain.mailcowApiKey);
+    }
+
+    // 4. Wrong key: mailcow.conf's legacy API_KEY shadows the real one in the `api` table. Use the
+    //    real key — creating one on the server if Mailcow has none — and persist whatever works.
+    if (probe === null) {
+      let candidate = await mailcowFetchDbApiKey(target).catch(() => null);
+      let created = false;
+      if (!candidate) {
+        candidate = await mailcowCreateDbApiKey(target).catch(() => null);
+        created = !!candidate;
+      }
+      if (candidate && candidate !== domain.mailcowApiKey) {
+        const got = await tunnelProbe(candidate);
+        if (got) {
           await db.update(domains).set({ mailcowApiKey: candidate }).where(eq(domains.id, domain.id));
           domain.mailcowApiKey = candidate; // use the working key for the rest of this run
-          ssh = sshTarget;
-          probe = retry2.json;
+          probe = got;
+          notes.push(
+            created
+              ? "Created a new Mailcow API key and applied it."
+              : "Switched to Mailcow's database API key.",
+          );
         } else {
-          const body = typeof retry.json === "string" ? retry.json : JSON.stringify(retry.json);
-          tunnelNote =
-            ` SSH tunnel was rejected. ${fix.detail} Retry: status ${retry.status} (${String(body).slice(0, 160)}).` +
-            (createdKey
-              ? " Created a new API key in Mailcow's database, but it was still rejected — check the API is enabled (Mailcow → Configuration → Access → API)."
-              : candidate
-                ? " Mailcow's database API key was also rejected — check the API is enabled (Mailcow → Configuration → Access → API)."
-                : " No active API key in Mailcow's database and one couldn't be created (no mysql container or DB root password) — check Mailcow is running.");
+          notes.push(
+            created
+              ? "Created an API key but it was still rejected."
+              : "Mailcow's database API key was also rejected.",
+          );
         }
+      } else if (!candidate) {
+        notes.push("No active API key in Mailcow's database and one couldn't be created.");
       }
     }
+
+    if (probe !== null) ssh = target;
+    else tunnelNote = ` Recovery over SSH failed. ${notes.join(" ")}`;
   } else if (probe === null && !sshTarget) {
     tunnelNote = " No SSH credentials stored on the domain or its server, so the API couldn't be reached over SSH either.";
   }
