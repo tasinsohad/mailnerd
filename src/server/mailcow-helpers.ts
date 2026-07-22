@@ -330,13 +330,18 @@ export async function mailcowBringUpStack(
     MAILCOW_SHELL_PRELUDE +
     "\n" +
     [
+      'echo "MCDIR=$(pwd)"',
+      'echo "DOCKER=$(command -v docker || echo MISSING)"',
       '[ -f mailcow.conf ] || { echo "NO_CONF"; exit 0; }',
+      'command -v docker >/dev/null 2>&1 || { echo "NO_DOCKER"; exit 0; }',
       'BEFORE=$(docker ps -q --filter name=mailcow 2>/dev/null | wc -l | tr -d " ")',
       '$DC up -d 2>&1 | tail -5',
       "sleep 12",
       'AFTER=$(docker ps -q --filter name=mailcow 2>/dev/null | wc -l | tr -d " ")',
       'MYC=$(docker ps -qf name=mysql-mailcow 2>/dev/null | head -1)',
       'echo "BEFORE=${BEFORE}"; echo "AFTER=${AFTER}"; echo "MYSQL=${MYC:-none}"',
+      // Names of what IS running, so a naming mismatch is visible rather than read as "down".
+      'echo "NAMES=$(docker ps --format \'{{.Names}}\' 2>/dev/null | head -12 | tr \'\\n\' \' \')"',
     ].join("\n");
   const mgr = new SSHManager(ssh.ipAddress, 22, ssh.sshUser, {
     type: "password",
@@ -346,16 +351,28 @@ export async function mailcowBringUpStack(
     await mgr.connect({ timeoutMs: 15000, maxRetries: 1 });
     const res = await mgr.executeCommand(script, { timeoutMs: 300000 });
     const out = `${res.stdout}\n${res.stderr}`;
+    const where = out.match(/MCDIR=(.*)/)?.[1]?.trim() ?? "?";
+    const dockerPath = out.match(/DOCKER=(.*)/)?.[1]?.trim() ?? "?";
     if (out.includes("NO_CONF"))
-      return { ok: false, running: 0, mysqlUp: false, detail: "No mailcow.conf on the server." };
+      return { ok: false, running: 0, mysqlUp: false, detail: `No mailcow.conf found (looked in ${where}).` };
+    if (out.includes("NO_DOCKER"))
+      return {
+        ok: false,
+        running: 0,
+        mysqlUp: false,
+        detail: `docker is NOT on PATH for the SSH session (${dockerPath}) — can't inspect or start Mailcow.`,
+      };
     const before = Number(out.match(/BEFORE=(\d+)/)?.[1] ?? 0);
     const running = Number(out.match(/AFTER=(\d+)/)?.[1] ?? 0);
     const mysqlUp = !/MYSQL=none/.test(out) && /MYSQL=\w/.test(out);
+    const names = out.match(/NAMES=(.*)/)?.[1]?.trim() ?? "";
     return {
       ok: true,
       running,
       mysqlUp,
-      detail: `Mailcow containers: ${before} running before, ${running} after 'compose up -d'; mysql ${mysqlUp ? "UP" : "still DOWN"}.`,
+      detail:
+        `Mailcow at ${where}: ${before} containers before, ${running} after 'compose up -d'; mysql ${mysqlUp ? "UP" : "still DOWN"}.` +
+        (names ? ` Running: ${names.slice(0, 200)}` : " No containers running."),
     };
   } finally {
     await mgr.dispose().catch(() => {});

@@ -84,6 +84,10 @@ export function fcrdnsVerdict(
 // Handles a non-standard install path and both `docker compose` (v2) and legacy `docker-compose`.
 // Pure string; lives here so SSH callers don't have to import the network-touching engine.
 export const MAILCOW_SHELL_PRELUDE =
+  // A non-interactive SSH shell often gets a minimal PATH, so `docker` can be missing entirely —
+  // which silently yields empty container lists and looks exactly like "Mailcow is down". Pin the
+  // standard sbin/bin dirs first so every SSH script below actually finds docker.
+  `export PATH="$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"; ` +
   `MCDIR=$(dirname "$(find /opt -maxdepth 3 -name mailcow.conf 2>/dev/null | head -1)" 2>/dev/null); ` +
   `[ -d "$MCDIR" ] || MCDIR=/opt/mailcow-dockerized; cd "$MCDIR" 2>/dev/null; ` +
   `DC="docker compose"; $DC version >/dev/null 2>&1 || DC="docker-compose"; `;
