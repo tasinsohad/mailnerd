@@ -225,6 +225,46 @@ export async function mailcowEnsureApiAllowList(
   }
 }
 
+// Read the ACTIVE API key straight out of Mailcow's `api` database table — the key Mailcow actually
+// honours. mailcow.conf's legacy `API_KEY=` can shadow it (fixCreateApiKey writes a synthetic one),
+// and modern Mailcow ignores that conf key, answering every call with HTTP 200 `{}`. When the API
+// rejects us, this gets the real key so we can recover instead of failing the whole provision.
+export async function mailcowFetchDbApiKey(ssh: MailcowSshTarget): Promise<string | null> {
+  const { SSHManager } = await import("@/lib/ssh");
+  const script =
+    MAILCOW_SHELL_PRELUDE +
+    "\n" +
+    [
+      '[ -f mailcow.conf ] || { echo "NO_CONF"; exit 0; }',
+      "DBROOT=$(grep -m1 '^DBROOT=' mailcow.conf 2>/dev/null | cut -d= -f2 | tr -d '\\r')",
+      "DBNAME=$(grep -m1 '^DBNAME=' mailcow.conf 2>/dev/null | cut -d= -f2 | tr -d '\\r')",
+      '[ -n "$DBNAME" ] || DBNAME=mailcow',
+      "MYC=$(docker ps -qf name=mysql-mailcow 2>/dev/null | head -1)",
+      'if [ -n "$MYC" ] && [ -n "$DBROOT" ]; then',
+      '  echo "---KEY---"',
+      '  docker exec -i "$MYC" mysql -u root -p"$DBROOT" "$DBNAME" -N -B -e ' +
+        '"SELECT api_key FROM api WHERE active=1 ORDER BY (api_access=\'rw\') DESC LIMIT 1" 2>/dev/null',
+      "fi",
+    ].join("\n");
+  const mgr = new SSHManager(ssh.ipAddress, 22, ssh.sshUser, {
+    type: "password",
+    password: ssh.sshPassword,
+  });
+  try {
+    await mgr.connect({ timeoutMs: 15000, maxRetries: 1 });
+    const res = await mgr.executeCommand(script, { timeoutMs: 60000 });
+    const out = String(res.stdout ?? "");
+    const after = out.split("---KEY---")[1] ?? "";
+    const key = after
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => /^[a-fA-F0-9-]{20,}$/.test(l));
+    return key ?? null;
+  } finally {
+    await mgr.dispose().catch(() => {});
+  }
+}
+
 // An HTTP status worth retrying: a transport failure (0, surfaced as a throw), rate limiting
 // (429), or a server-side error (5xx) from a warming-up / overloaded Mailcow. A 2xx or a
 // deterministic 4xx is NOT retried — those reflect the request, not a transient hiccup.

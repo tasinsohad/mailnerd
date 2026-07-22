@@ -4,12 +4,13 @@
 // call these same functions, so there is exactly one code path.
 
 import { eq, and } from "drizzle-orm";
-import { plannedInboxes, dnsRecords, userSecrets } from "@/lib/db/schema";
+import { plannedInboxes, dnsRecords, userSecrets, domains } from "@/lib/db/schema";
 import {
   mailcowRequest,
   mailcowRequestRetry,
   mailcowRequestViaSsh,
   mailcowEnsureApiAllowList,
+  mailcowFetchDbApiKey,
   mailcowListAll,
   parseMailcowResult,
   generateMailboxPassword,
@@ -234,8 +235,35 @@ export async function ensureMailDomains(
         ssh = sshTarget;
         probe = retry.json;
       } else {
-        const body = typeof retry.json === "string" ? retry.json : JSON.stringify(retry.json);
-        tunnelNote = ` SSH tunnel was rejected. ${fix.detail} Retry: status ${retry.status} (${String(body).slice(0, 160)}).`;
+        // The allow-list is fine but Mailcow still answers `{}` — so the KEY is what it rejects.
+        // mailcow.conf's legacy API_KEY (possibly a synthetic one written by fixCreateApiKey)
+        // shadows the REAL key in Mailcow's `api` table, and modern Mailcow ignores the conf key.
+        // Fetch the real key, retry with it, and persist it when it works.
+        const dbKey = await mailcowFetchDbApiKey(sshTarget).catch(() => null);
+        const retry2 =
+          dbKey && dbKey !== domain.mailcowApiKey
+            ? await mailcowRequestViaSsh(
+                sshTarget,
+                domain.mailcowHostname,
+                dbKey,
+                "get/domain/all",
+                undefined,
+                { timeoutMs: 20000 },
+              ).catch(() => null)
+            : null;
+        if (retry2 && Array.isArray(retry2.json)) {
+          await db.update(domains).set({ mailcowApiKey: dbKey }).where(eq(domains.id, domain.id));
+          domain.mailcowApiKey = dbKey; // use the working key for the rest of this run
+          ssh = sshTarget;
+          probe = retry2.json;
+        } else {
+          const body = typeof retry.json === "string" ? retry.json : JSON.stringify(retry.json);
+          tunnelNote =
+            ` SSH tunnel was rejected. ${fix.detail} Retry: status ${retry.status} (${String(body).slice(0, 160)}).` +
+            (dbKey
+              ? " Mailcow's database API key was also rejected — check the API is enabled in Mailcow (Configuration → Access → API)."
+              : " No active API key found in Mailcow's database — enable the API in Mailcow (Configuration → Access → API) and create a read-write key.");
+        }
       }
     }
   } else if (probe === null && !sshTarget) {
