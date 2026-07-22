@@ -404,6 +404,25 @@ export async function mailcowBringUpStack(
   }
 }
 
+// Interpret a Mailcow "get all" response. Returns the rows, [] for a valid EMPTY collection, or
+// null when the call genuinely failed.
+//
+// CRITICAL: Mailcow serialises an empty collection as the literal object `{}` with HTTP 200
+// (json_api.php: `if (!empty($x)) {...} else { echo '{}'; }`). That branch is only reachable AFTER
+// the api-table key lookup AND the IP allow-list both pass — auth/ACL rejections are HTTP 401 with
+// {"type":"error",...}, and a dead MySQL is 500 + HTML. So `200 {}` is positive proof the API works
+// and the server simply has no mail domains yet — which is ALWAYS true on a freshly provisioned box.
+//
+// Treating `{}` as a failure deadlocked provisioning: no domains -> `{}` -> abort before add/domain
+// -> still no domains, forever. An error body like {"type":"error"} is a NON-empty object, so the
+// Object.keys check keeps rejecting real failures.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function mailcowListResult(status: number, json: unknown): any[] | null {
+  if (Array.isArray(json)) return json;
+  if (status === 200 && json && typeof json === "object" && Object.keys(json).length === 0) return [];
+  return null;
+}
+
 // An HTTP status worth retrying: a transport failure (0, surfaced as a throw), rate limiting
 // (429), or a server-side error (5xx) from a warming-up / overloaded Mailcow. A 2xx or a
 // deterministic 4xx is NOT retried — those reflect the request, not a transient hiccup.
@@ -449,8 +468,12 @@ export async function mailcowListAll(
   const timeoutMs = opts?.timeoutMs ?? 20000;
   for (let i = 0; i < attempts; i++) {
     try {
-      const { json } = await mailcowRequest(host, apiKey, path, undefined, { timeoutMs, ssh: opts?.ssh });
-      if (Array.isArray(json)) return json;
+      const { status, json } = await mailcowRequest(host, apiKey, path, undefined, {
+        timeoutMs,
+        ssh: opts?.ssh,
+      });
+      const rows = mailcowListResult(status, json);
+      if (rows) return rows;
     } catch {
       // transient (timeout / connection reset) — fall through to backoff and retry
     }

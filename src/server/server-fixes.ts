@@ -427,7 +427,9 @@ export const createApiKeyForDomain = createServerFn({ method: "POST" })
     const { target, error } = await targetForDomain(db, userId, data.domainId);
     if (error || !target) return { error };
 
-    const { mailcowCreateDbApiKey, mailcowRequestViaSsh } = await import("./mailcow-helpers");
+    const { mailcowCreateDbApiKey, mailcowRequestViaSsh, mailcowListResult } = await import(
+      "./mailcow-helpers"
+    );
     const made = await mailcowCreateDbApiKey(target).catch((e) => ({
       key: null as string | null,
       diag: e instanceof Error ? e.message : String(e),
@@ -442,7 +444,9 @@ export const createApiKeyForDomain = createServerFn({ method: "POST" })
       const check = await mailcowRequestViaSsh(target, host, made.key, "get/domain/all", undefined, {
         timeoutMs: 20000,
       }).catch(() => null);
-      if (check && Array.isArray(check.json)) {
+      // `{}` = a valid EMPTY domain list on a fresh server, so the key IS working. Gating on
+      // Array.isArray here was discarding every good key we created.
+      if (check && mailcowListResult(check.status, check.json)) {
         await db
           .update(domains)
           .set({ mailcowApiKey: made.key })

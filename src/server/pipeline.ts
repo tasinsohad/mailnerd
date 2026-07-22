@@ -14,6 +14,7 @@ import {
   mailcowCreateDbApiKey,
   mailcowBringUpStack,
   mailcowListAll,
+  mailcowListResult,
   parseMailcowResult,
   generateMailboxPassword,
   cfTxtContent,
@@ -213,7 +214,8 @@ export async function ensureMailDomains(
         undefined,
         { timeoutMs: 20000 },
       ).catch(() => null);
-      return r && Array.isArray(r.json) ? (r.json as any[]) : null;
+      // `{}` from Mailcow is a VALID EMPTY list (fresh server, no domains yet) — not a failure.
+      return r ? mailcowListResult(r.status, r.json) : null;
     };
     const notes: string[] = [];
 
@@ -615,7 +617,8 @@ export async function syncDkim(
     const direct = await mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all", undefined, {
       timeoutMs: 10000,
     }).catch(() => null);
-    if (!direct || !Array.isArray(direct.json)) ssh = sshTarget;
+    // `{}` is a valid empty list, so it must NOT push us onto the SSH transport.
+    if (!direct || !mailcowListResult(direct.status, direct.json)) ssh = sshTarget;
   }
 
   for (const sub of uniqueSubdomains) {
