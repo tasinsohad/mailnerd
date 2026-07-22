@@ -125,14 +125,20 @@ export async function readMailcowConfigOverSsh(
     await mgr.connect({ timeoutMs: 15000, maxRetries: 1 });
 
     // Query the `api` table only when we actually need a key and mailcow.conf didn't have one.
+    // NOTE: the access-level column is `api_access` on some Mailcow versions and `access` on
+    // others. Hardcoding `api_access` made this SELECT fail with "Unknown column" on those builds,
+    // so no DB key was ever found and we silently fell back to mailcow.conf's legacy API_KEY —
+    // which modern Mailcow ignores, making every API call return HTTP 200 `{}`. Detect the column.
     const dbLookup = opts.wantApiKey
-      ? `DBROOT=$(grep -m1 '^DBROOT=' mailcow.conf 2>/dev/null | cut -d= -f2); ` +
-        `DBNAME=$(grep -m1 '^DBNAME=' mailcow.conf 2>/dev/null | cut -d= -f2); ` +
+      ? `DBROOT=$(grep -m1 '^DBROOT=' mailcow.conf 2>/dev/null | cut -d= -f2-); ` +
+        `DBNAME=$(grep -m1 '^DBNAME=' mailcow.conf 2>/dev/null | cut -d= -f2-); ` +
         `[ -n "$DBNAME" ] || DBNAME=mailcow; ` +
         `MYC=$(docker ps -qf name=mysql-mailcow 2>/dev/null | head -1); ` +
         `if [ -n "$MYC" ] && [ -n "$DBROOT" ]; then ` +
+        `ACOL=$(docker exec -i "$MYC" mysql -u root -p"$DBROOT" "$DBNAME" -N -B -e "SHOW COLUMNS FROM api LIKE 'api_access'" 2>/dev/null | awk 'NR==1{print $1}'); ` +
+        `[ -n "$ACOL" ] || ACOL=access; ` +
         `docker exec -i "$MYC" mysql -u root -p"$DBROOT" "$DBNAME" -N -B -e ` +
-        `"SELECT api_key, allow_from, skip_ip_check FROM api WHERE active=1 ORDER BY (api_access='rw') DESC LIMIT 1" 2>/dev/null; ` +
+        `"SELECT api_key, allow_from, skip_ip_check FROM api WHERE active=1 ORDER BY (\${ACOL}='rw') DESC LIMIT 1" 2>/dev/null; ` +
         `fi; `
       : "";
 
@@ -159,20 +165,13 @@ export async function readMailcowConfigOverSsh(
     };
     if (!opts.wantApiKey) return result;
 
-    // 1. mailcow.conf API_KEY (gated by API_ALLOW_FROM).
     const confKey = section(out, "CONFKEY").split("\n")[0]?.trim() || "";
     const allowFrom = section(out, "ALLOWFROM").split("\n")[0]?.trim() || "";
-    if (isValidMailcowApiKey(confKey)) {
-      return {
-        ...result,
-        apiKey: confKey,
-        apiKeySource: "mailcow.conf",
-        apiAllowFrom: allowFrom || null,
-        apiKeyRestricted: !!allowFrom && !isApiAllowListPermissive(allowFrom),
-      };
-    }
 
-    // 2. The `api` table: "<key>\t<allow_from>\t<skip_ip_check>".
+    // 1. The `api` DATABASE table FIRST: "<key>\t<allow_from>\t<skip_ip_check>".
+    //    This is the only place modern Mailcow looks. mailcow.conf's legacy API_KEY is ignored by
+    //    current builds, so preferring it (as we used to) handed out a key that Mailcow rejected on
+    //    every call — the HTTP 200 `{}` that blocked mailbox setup.
     const dbRow = section(out, "DBKEY")
       .split("\n")
       .map((l) => l.trim())
@@ -187,6 +186,17 @@ export async function readMailcowConfigOverSsh(
         apiAllowFrom: rowAllowFrom.trim() || null,
         apiKeyRestricted:
           !skips && !!rowAllowFrom.trim() && !isApiAllowListPermissive(rowAllowFrom),
+      };
+    }
+
+    // 2. Fall back to mailcow.conf's API_KEY (older builds / legacy setups), gated by API_ALLOW_FROM.
+    if (isValidMailcowApiKey(confKey)) {
+      return {
+        ...result,
+        apiKey: confKey,
+        apiKeySource: "mailcow.conf",
+        apiAllowFrom: allowFrom || null,
+        apiKeyRestricted: !!allowFrom && !isApiAllowListPermissive(allowFrom),
       };
     }
     return result;

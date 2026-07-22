@@ -236,14 +236,18 @@ export async function mailcowFetchDbApiKey(ssh: MailcowSshTarget): Promise<strin
     "\n" +
     [
       '[ -f mailcow.conf ] || { echo "NO_CONF"; exit 0; }',
-      "DBROOT=$(grep -m1 '^DBROOT=' mailcow.conf 2>/dev/null | cut -d= -f2 | tr -d '\\r')",
-      "DBNAME=$(grep -m1 '^DBNAME=' mailcow.conf 2>/dev/null | cut -d= -f2 | tr -d '\\r')",
+      "DBROOT=$(grep -m1 '^DBROOT=' mailcow.conf 2>/dev/null | cut -d= -f2- | tr -d '\\r')",
+      "DBNAME=$(grep -m1 '^DBNAME=' mailcow.conf 2>/dev/null | cut -d= -f2- | tr -d '\\r')",
       '[ -n "$DBNAME" ] || DBNAME=mailcow',
       "MYC=$(docker ps -qf name=mysql-mailcow 2>/dev/null | head -1)",
       'if [ -n "$MYC" ] && [ -n "$DBROOT" ]; then',
+      // The access-level column is `api_access` on some Mailcow versions and `access` on others;
+      // referencing the wrong one makes the SELECT fail outright and look like "no key exists".
+      `  ACOL=$(docker exec -i "$MYC" mysql -u root -p"$DBROOT" "$DBNAME" -N -B -e "SHOW COLUMNS FROM api LIKE 'api_access'" 2>/dev/null | awk 'NR==1{print $1}')`,
+      '  [ -n "$ACOL" ] || ACOL=access',
       '  echo "---KEY---"',
       '  docker exec -i "$MYC" mysql -u root -p"$DBROOT" "$DBNAME" -N -B -e ' +
-        '"SELECT api_key FROM api WHERE active=1 ORDER BY (api_access=\'rw\') DESC LIMIT 1" 2>/dev/null',
+        '"SELECT api_key FROM api WHERE active=1 ORDER BY (${ACOL}=\'rw\') DESC LIMIT 1" 2>/dev/null',
       "fi",
     ].join("\n");
   const mgr = new SSHManager(ssh.ipAddress, 22, ssh.sshUser, {
@@ -296,13 +300,18 @@ export async function mailcowCreateDbApiKey(
       // Report inputs (password LENGTH only, never the value) so a bad read is visible.
       'echo "DBROOT_LEN=${#DBROOT}"; echo "DBNAME=${DBNAME}"; echo "MYC=${MYC:-none}"',
       '[ -n "$MYC" ] && [ -n "$DBROOT" ] || { echo "NO_DB"; exit 0; }',
+      // Mailcow versions differ: the access-level column is `api_access` on some, `access` on
+      // others. Detect it — hardcoding the wrong one fails the whole INSERT with "Unknown column".
+      `ACOL=$(docker exec -i "$MYC" mysql -u root -p"$DBROOT" "$DBNAME" -N -B -e "SHOW COLUMNS FROM api LIKE 'api_access'" 2>/dev/null | awk 'NR==1{print $1}')`,
+      '[ -n "$ACOL" ] || ACOL=access',
+      'echo "ACOL=${ACOL}"',
       // The real `api` table schema, so a column mismatch is visible instead of inferred.
       'echo "---COLS---"',
       sql("SHOW COLUMNS FROM api"),
       'echo "---SQL---"',
       // Plain INSERT (never IGNORE — that hides the very error we need).
       sql(
-        `INSERT INTO api (api_key, allow_from, skip_ip_check, api_access, active) VALUES ('${key}','0.0.0.0/0',1,'rw',1)`,
+        `INSERT INTO api (api_key, allow_from, skip_ip_check, \${ACOL}, active) VALUES ('${key}','0.0.0.0/0',1,'rw',1)`,
       ),
       'echo "---VERIFY---"',
       sql(`SELECT api_key FROM api WHERE api_key='${key}'`),
