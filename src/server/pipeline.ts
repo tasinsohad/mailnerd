@@ -252,8 +252,13 @@ export async function ensureMailDomains(
       let candidate = await mailcowFetchDbApiKey(target).catch(() => null);
       let created = false;
       if (!candidate) {
-        candidate = await mailcowCreateDbApiKey(target).catch(() => null);
-        created = !!candidate;
+        const made = await mailcowCreateDbApiKey(target).catch((e) => ({
+          key: null,
+          diag: e instanceof Error ? e.message : String(e),
+        }));
+        candidate = made.key;
+        created = !!made.key;
+        if (!made.key) notes.push(`Couldn't create an API key — ${made.diag}.`);
       }
       if (candidate && candidate !== domain.mailcowApiKey) {
         const got = await tunnelProbe(candidate);

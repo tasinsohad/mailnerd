@@ -269,7 +269,9 @@ export async function mailcowFetchDbApiKey(ssh: MailcowSshTarget): Promise<strin
 // when the server has none. Read-write, active, and skip_ip_check=1 so it works from any source —
 // which also removes the whole allow-list class of failure. Verifies by reading the row back.
 // Returns the new key, or null if we couldn't create one (no mysql container / no DB root).
-export async function mailcowCreateDbApiKey(ssh: MailcowSshTarget): Promise<string | null> {
+export async function mailcowCreateDbApiKey(
+  ssh: MailcowSshTarget,
+): Promise<{ key: string | null; diag: string }> {
   // Mailcow-style key: 6 groups of 5 uppercase alphanumerics. Matches isValidMailcowApiKey.
   const ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   const group = () =>
@@ -277,26 +279,31 @@ export async function mailcowCreateDbApiKey(ssh: MailcowSshTarget): Promise<stri
   const key = Array.from({ length: 6 }, group).join("-");
 
   const { SSHManager } = await import("@/lib/ssh");
+  // stderr is NOT suppressed: a silent mysql failure (bad DBROOT, missing table) is precisely what
+  // left us guessing. Report it so the cause names itself.
   const sql = (q: string) =>
-    `docker exec -i "$MYC" mysql -u root -p"$DBROOT" "$DBNAME" -N -B -e "${q}" 2>/dev/null`;
+    `docker exec -i "$MYC" mysql -u root -p"$DBROOT" "$DBNAME" -N -B -e "${q}" 2>&1 | head -3`;
   const script =
     MAILCOW_SHELL_PRELUDE +
     "\n" +
     [
       '[ -f mailcow.conf ] || { echo "NO_CONF"; exit 0; }',
-      "DBROOT=$(grep -m1 '^DBROOT=' mailcow.conf 2>/dev/null | cut -d= -f2 | tr -d '\\r')",
-      "DBNAME=$(grep -m1 '^DBNAME=' mailcow.conf 2>/dev/null | cut -d= -f2 | tr -d '\\r')",
+      // -f2- (not -f2) so a value containing '=' isn't truncated.
+      "DBROOT=$(grep -m1 '^DBROOT=' mailcow.conf 2>/dev/null | cut -d= -f2- | tr -d '\\r')",
+      "DBNAME=$(grep -m1 '^DBNAME=' mailcow.conf 2>/dev/null | cut -d= -f2- | tr -d '\\r')",
       '[ -n "$DBNAME" ] || DBNAME=mailcow',
       "MYC=$(docker ps -qf name=mysql-mailcow 2>/dev/null | head -1)",
+      // Report inputs (password LENGTH only, never the value) so a bad read is visible.
+      'echo "DBROOT_LEN=${#DBROOT}"; echo "DBNAME=${DBNAME}"; echo "MYC=${MYC:-none}"',
       '[ -n "$MYC" ] && [ -n "$DBROOT" ] || { echo "NO_DB"; exit 0; }',
+      'echo "---SQL---"',
       // Some schema versions require `created`; try without it first, then with.
       sql(
         `INSERT INTO api (api_key, allow_from, skip_ip_check, api_access, active) VALUES ('${key}','0.0.0.0/0',1,'rw',1)`,
-      ) +
-        " || " +
-        sql(
-          `INSERT INTO api (api_key, allow_from, skip_ip_check, api_access, active, created) VALUES ('${key}','0.0.0.0/0',1,'rw',1,NOW())`,
-        ),
+      ),
+      sql(
+        `INSERT IGNORE INTO api (api_key, allow_from, skip_ip_check, api_access, active, created) VALUES ('${key}','0.0.0.0/0',1,'rw',1,NOW())`,
+      ),
       'echo "---VERIFY---"',
       sql(`SELECT api_key FROM api WHERE api_key='${key}' AND active=1`),
     ].join("\n");
@@ -308,9 +315,16 @@ export async function mailcowCreateDbApiKey(ssh: MailcowSshTarget): Promise<stri
   try {
     await mgr.connect({ timeoutMs: 15000, maxRetries: 1 });
     const res = await mgr.executeCommand(script, { timeoutMs: 60000 });
-    const out = String(res.stdout ?? "");
+    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
     const verified = (out.split("---VERIFY---")[1] ?? "").includes(key);
-    return verified ? key : null;
+    // Compact, secret-free diagnostic: input presence + whatever mysql actually said.
+    const dbrootLen = out.match(/DBROOT_LEN=(\d+)/)?.[1] ?? "?";
+    const myc = out.match(/MYC=(.*)/)?.[1]?.trim() ?? "?";
+    const sqlOut = (out.split("---SQL---")[1] ?? "").split("---VERIFY---")[0] ?? "";
+    const diag = out.includes("NO_DB")
+      ? `couldn't reach the DB (DBROOT length ${dbrootLen}, mysql container ${myc})`
+      : `DBROOT length ${dbrootLen}, mysql ${myc}; mysql said: ${sqlOut.replace(/\s+/g, " ").trim().slice(0, 200) || "(no output)"}`;
+    return { key: verified ? key : null, diag };
   } finally {
     await mgr.dispose().catch(() => {});
   }
