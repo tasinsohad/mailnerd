@@ -23,11 +23,13 @@ import {
   Loader2,
   Download,
   Globe,
+  KeyRound,
 } from "lucide-react";
 import { toast } from "sonner";
 import { pushDnsToCloudflare, repairDomainDns, deleteDomain } from "@/server/domains";
 import { provisionServer } from "@/server/provisioning";
 import { setupMailcowDomain, fetchDkimAndSync } from "@/server/mailcow";
+import { createApiKeyForDomain } from "@/server/server-fixes";
 import { getInboxExport, getSubdomainExport } from "@/server/plans";
 import { downloadCsv } from "@/lib/csv";
 import { EXPORT_FORMATS, buildExportCsv } from "@/lib/export-formats";
@@ -163,6 +165,19 @@ export function DomainActionsMenu({
         <DropdownMenuLabel>Repair</DropdownMenuLabel>
         <DropdownMenuItem onClick={() => run("Fixing DNS", () => repairDomainDns({ data: { domainId } }), "DNS fixed (un-proxied)")}>
           <Network className="h-4 w-4" /> Fix DNS (un-proxy)
+        </DropdownMenuItem>
+        {/* Creates a real key in Mailcow's `api` DB table, verifies it, and saves it — the fix when
+            the API answers 200 {} because there's no usable key. */}
+        <DropdownMenuItem
+          onClick={() =>
+            run(
+              "Creating Mailcow API key",
+              () => createApiKeyForDomain({ data: { domainId } }),
+              "Mailcow API key created & saved",
+            )
+          }
+        >
+          <KeyRound className="h-4 w-4" /> Create Mailcow API key
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => run("Recreating mailboxes", () => setupMailcowDomain({ data: { domainId, recreate: true } }), "Mailboxes recreated")}>
           <RefreshCw className="h-4 w-4" /> Recreate mailboxes

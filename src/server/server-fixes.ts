@@ -410,14 +410,56 @@ export const forcePostfixIPv4ForDomain = createServerFn({ method: "POST" })
     return r.status === "failed" ? { error: r.detail } : { success: true, detail: r.detail };
   });
 
+// Create a WORKING Mailcow API key for this domain and store it.
+//
+// Modern Mailcow keeps API keys in its `api` DATABASE table and ignores mailcow.conf's legacy
+// API_KEY — so the old conf-writing path produced a key Mailcow rejected on every call (HTTP 200
+// `{}`). We insert a real read-write key with skip_ip_check=1 (works from any source, which also
+// removes the API_ALLOW_FROM class of failure), verify it against the API over SSH, then persist it
+// to the domain. Falls back to the conf method only if the DB insert isn't possible.
 export const createApiKeyForDomain = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator(domainInput)
   .handler(async ({ data, context }) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { db, userId } = context as any;
+    if (!db) return { error: "Database not connected" };
     const { target, error } = await targetForDomain(db, userId, data.domainId);
     if (error || !target) return { error };
-    const r = await fixCreateApiKey(target);
-    return r.status === "failed" ? { error: r.detail } : { success: true, detail: r.detail };
+
+    const { mailcowCreateDbApiKey, mailcowRequestViaSsh } = await import("./mailcow-helpers");
+    const made = await mailcowCreateDbApiKey(target).catch((e) => ({
+      key: null as string | null,
+      diag: e instanceof Error ? e.message : String(e),
+    }));
+
+    if (made.key) {
+      const domain = await db.query.domains.findFirst({
+        where: and(eq(domains.id, data.domainId), eq(domains.userId, userId)),
+      });
+      const host = domain?.mailcowHostname || `mail.${domain?.name}`;
+      // Confirm the key actually works before storing it.
+      const check = await mailcowRequestViaSsh(target, host, made.key, "get/domain/all", undefined, {
+        timeoutMs: 20000,
+      }).catch(() => null);
+      if (check && Array.isArray(check.json)) {
+        await db
+          .update(domains)
+          .set({ mailcowApiKey: made.key })
+          .where(and(eq(domains.id, data.domainId), eq(domains.userId, userId)));
+        return {
+          success: true,
+          detail: "Created a Mailcow API key in the database, verified it against the API, and saved it. Mailbox setup should work now.",
+        };
+      }
+      return {
+        error: `Created a key but Mailcow still rejected it — check the API is enabled (Mailcow → Configuration → Access → API). ${made.diag}`,
+      };
+    }
+
+    // DB insert failed — report exactly why, then try the legacy conf method as a last resort.
+    const legacy = await fixCreateApiKey(target);
+    if (legacy.status !== "failed")
+      return { success: true, detail: `${legacy.detail} (via mailcow.conf — ${made.diag})` };
+    return { error: `Couldn't create an API key — ${made.diag}` };
   });
