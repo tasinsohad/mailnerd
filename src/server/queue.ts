@@ -240,7 +240,30 @@ async function executeProvisionJob(
       log(`DNS un-proxy step skipped: ${dnsErr.message}\n`, "Updating System");
     }
 
-    const mailcowHostname = `mail.${domainName}`;
+    // Mailcow serves its UI/API on exactly ONE hostname per server (MAILCOW_HOSTNAME). If this box
+    // ALREADY runs Mailcow (a shared server hosting several domains), we must REUSE that hostname —
+    // overwriting it with mail.<this domain> silently breaks every domain already provisioned here
+    // (their API calls hit a vhost Mailcow no longer serves and get HTTP 200 `{}`).
+    let mailcowHostname = `mail.${domainName}`;
+    try {
+      const existingHost = (
+        await ssh.executeCommand(
+          `grep -m1 '^MAILCOW_HOSTNAME=' /opt/mailcow-dockerized/mailcow.conf 2>/dev/null | cut -d= -f2- | tr -d '\\r'`,
+          { timeoutMs: 20000 },
+        )
+      ).stdout.trim();
+      if (existingHost && /\./.test(existingHost)) {
+        if (existingHost.toLowerCase() !== mailcowHostname.toLowerCase()) {
+          log(
+            `This server already runs Mailcow as ${existingHost} — reusing it (not overwriting) so existing domains keep working.\n`,
+            "Updating System",
+          );
+        }
+        mailcowHostname = existingHost;
+      }
+    } catch {
+      /* fresh box — keep mail.<domain> */
+    }
 
     // Non-interactive Docker & Mailcow automated provisioning script
     const deployScript = [

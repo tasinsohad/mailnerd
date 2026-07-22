@@ -204,10 +204,10 @@ export async function ensureMailDomains(
     // re-probes over the SSH tunnel; the first that returns a real array wins. Mailcow reports ALL of
     // these failures identically (HTTP 200 `{}`), so we can't tell them apart without trying.
     const target = sshTarget;
-    const tunnelProbe = async (key: string): Promise<any[] | null> => {
+    const tunnelProbe = async (key: string, host?: string): Promise<any[] | null> => {
       const r = await mailcowRequestViaSsh(
         target,
-        domain.mailcowHostname,
+        host ?? domain.mailcowHostname,
         key,
         "get/domain/all",
         undefined,
@@ -219,6 +219,34 @@ export async function ensureMailDomains(
 
     // 1. Plain tunnel (source = the box itself) — clears an app-IP allow-list block.
     probe = await tunnelProbe(domain.mailcowApiKey);
+
+    // 2. WRONG MAIL HOST — by far the most common cause on a SHARED server. Mailcow serves its API
+    //    on exactly ONE hostname (MAILCOW_HOSTNAME). We store mail.<domain> per domain, but
+    //    provisioning a second domain onto the same box overwrites the server's MAILCOW_HOSTNAME —
+    //    so the first domain's mail.<domain> is a vhost this Mailcow doesn't serve, and the API
+    //    answers 200 `{}` no matter how valid the key is. Read the server's REAL hostname and use it.
+    if (probe === null) {
+      const { readMailcowConfigOverSsh } = await import("./mailcow-key");
+      const cfg = await readMailcowConfigOverSsh(target, { wantApiKey: false }).catch(() => null);
+      const realHost = cfg?.hostname;
+      const oldHost = String(domain.mailcowHostname);
+      if (realHost && realHost.toLowerCase() !== oldHost.toLowerCase()) {
+        const got = await tunnelProbe(domain.mailcowApiKey, realHost);
+        if (got) {
+          await db
+            .update(domains)
+            .set({ mailcowHostname: realHost })
+            .where(eq(domains.id, domain.id));
+          domain.mailcowHostname = realHost; // rest of the run talks to the right host
+          probe = got;
+          notes.push(
+            `Mail host corrected: this server's Mailcow serves ${realHost}, not ${oldHost}.`,
+          );
+        } else {
+          notes.push(`Server's MAILCOW_HOSTNAME is ${realHost}, not ${oldHost} — but it still rejected us.`);
+        }
+      }
+    }
 
     // 2. Stack down. Mailcow validates every key against its MySQL container; with mysql down it
     //    answers 200 `{}` for EVERY key while nginx still serves 443 — looking exactly like a bad key
