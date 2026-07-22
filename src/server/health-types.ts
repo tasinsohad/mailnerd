@@ -9,6 +9,7 @@ export type HealthAction =
   | "fixDns"
   | "openFirewall" // ufw allow the mail ports over SSH
   | "restartMailcow" // bring up / restart the Mailcow stack over SSH
+  | "reloadCerts" // restart dovecot/postfix/nginx so they pick up the ACME cert on disk
   | "forcePostfixIPv4"
   | "flushQueue"
   | "createApiKey"

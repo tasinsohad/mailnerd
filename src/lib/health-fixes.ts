@@ -4,6 +4,7 @@ import { fetchDkimAndSync, setupMailcowDomain } from "@/server/mailcow";
 import { provisionServer } from "@/server/provisioning";
 import {
   restartMailcowForDomain,
+  reloadCertsForDomain,
   openFirewallForDomain,
   flushQueueForDomain,
   forcePostfixIPv4ForDomain,
@@ -20,6 +21,7 @@ export const ACTION_LABEL: Record<HealthAction, string> = {
   syncDkim: "Sync DKIM",
   openFirewall: "Open mail ports",
   restartMailcow: "Restart Mailcow",
+  reloadCerts: "Reload mail certs",
   forcePostfixIPv4: "Force IPv4",
   flushQueue: "Flush queue",
   createApiKey: "Create API key",
@@ -34,6 +36,7 @@ export const ACTION_ORDER: HealthAction[] = [
   "syncDkim",
   "openFirewall",
   "restartMailcow",
+  "reloadCerts",
   "createApiKey",
   "forcePostfixIPv4",
   "flushQueue",
@@ -64,6 +67,8 @@ export function runHealthFix(action: HealthAction, domainId: string): Promise<an
       return openFirewallForDomain({ data: { domainId } });
     case "restartMailcow":
       return restartMailcowForDomain({ data: { domainId } });
+    case "reloadCerts":
+      return reloadCertsForDomain({ data: { domainId } });
     case "flushQueue":
       return flushQueueForDomain({ data: { domainId } });
     case "forcePostfixIPv4":

@@ -24,6 +24,7 @@ const PRIORITY: Record<string, number> = {
   submission: 55,
   containers: 56,
   mailhost: 58,
+  mailtls: 12, // a bad cert on 993/465 blocks EVERY mail client — rank it just under a port-25 block
   tls: 60,
   smtpbanner: 62, // mail-server identity checks sit near TLS/submission
   starttls25: 63,
@@ -449,6 +450,66 @@ export function queueVerdict(
   if (deferring && stats.oldestAgeMinutes !== null && stats.oldestAgeMinutes >= deferAge)
     return "warn";
   return "ok";
+}
+
+/* ---------- Mail-port TLS (what IMAP/SMTP clients actually see) ---------- */
+
+// One TLS probe result. `authorized` is Node's own chain+hostname verification — i.e. exactly the
+// verdict a mail client reaches, which is what matters here.
+export interface MailTlsProbe {
+  port: number;
+  reachable: boolean;
+  authorized: boolean;
+  authError?: string; // DEPTH_ZERO_SELF_SIGNED_CERT / CERT_HAS_EXPIRED / ALTNAME_INVALID / …
+  issuerO?: string;
+  validToMs?: number | null;
+}
+
+// Verdict for the certificate mail CLIENTS see on IMAPS/SMTPS. This is deliberately separate from
+// the port-443 check: Dovecot and Postfix load their certificate at container start, so after ACME
+// issues the real one they can keep serving Mailcow's self-signed snakeoil. The web UI then looks
+// perfectly healthy on 443 while every mail client reports "connection failed" — a real outage that
+// the 443-only check cannot see. `needsReload` marks the case a service restart actually fixes.
+export function mailTlsVerdict(
+  probes: MailTlsProbe[],
+  nowMs: number,
+): { status: "ok" | "warn" | "fail" | "skip"; reason: string; needsReload: boolean } {
+  const reached = probes.filter((p) => p.reachable);
+  if (reached.length === 0)
+    return { status: "skip", reason: "No mail port answered TLS.", needsReload: false };
+
+  const bad = reached.filter((p) => !p.authorized);
+  if (bad.length > 0) {
+    const ports = bad.map((p) => p.port).join(", ");
+    const err = bad.map((p) => p.authError ?? "").join(" ");
+    const selfSigned = /SELF_SIGNED/i.test(err) || bad.some((p) => /mailcow/i.test(p.issuerO ?? ""));
+    const expired = /CERT_HAS_EXPIRED/i.test(err);
+    const nameBad = /ALTNAME|HOSTNAME/i.test(err);
+    const reason = selfSigned
+      ? `Self-signed certificate on port ${ports} — IMAP/SMTP clients will refuse to connect (the web UI on 443 can still look fine).`
+      : expired
+        ? `Expired certificate on port ${ports}.`
+        : nameBad
+          ? `Certificate name doesn't match the mail host on port ${ports}.`
+          : `Untrusted certificate on port ${ports} (${bad[0].authError ?? "chain not valid"}).`;
+    // A self-signed or mismatched cert on a mail port is almost always a STALE one still held in
+    // memory — reloading dovecot/postfix picks up the cert ACME already wrote to disk.
+    return { status: "fail", reason, needsReload: selfSigned || nameBad };
+  }
+
+  const FOURTEEN_DAYS = 14 * 24 * 60 * 60 * 1000;
+  const soon = reached.filter((p) => p.validToMs && p.validToMs - nowMs < FOURTEEN_DAYS);
+  if (soon.length > 0)
+    return {
+      status: "warn",
+      reason: `Certificate expires in under 14 days on port ${soon.map((p) => p.port).join(", ")}.`,
+      needsReload: false,
+    };
+  return {
+    status: "ok",
+    reason: `Valid, trusted certificate on port ${reached.map((p) => p.port).join(", ")}.`,
+    needsReload: false,
+  };
 }
 
 // Blacklist verdict from the lists an IP was found on. Any MAJOR listing (Spamhaus/Barracuda/

@@ -37,6 +37,7 @@ const OVERALL: Record<string, { color: string; label: string }> = {
 // Manual-only indicators (port25, blacklist) are absent by design — their guidance shows via the
 // "How to fix" expander, not a Fix button.
 const INDICATOR_PLAN_IDS: Record<string, string[]> = {
+  mailtls: ["reloadCerts"],
   containers: ["restartMailcow"],
   listeners: ["restartMailcow"],
   // fail → restart the stack; warn → create an API key. The planner emits whichever fits the

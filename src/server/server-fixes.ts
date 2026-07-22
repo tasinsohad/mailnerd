@@ -132,6 +132,32 @@ export async function fixOpenFirewall(target: SshTarget, log?: ConsoleLog): Prom
 // via $SSH_CLIENT) rather than 0.0.0.0/0 — opening a stranger's Mailcow API to the whole internet
 // would be an unacceptable security downgrade. If a key already exists we reuse it and change
 // nothing. NOTE: applying mailcow.conf changes recreates the affected containers.
+// Reload the services that terminate mail TLS so they pick up the certificate ACME already wrote to
+// disk. Dovecot/Postfix read their cert ONCE at start: if the container came up before ACME issued
+// the Let's Encrypt cert, they keep serving Mailcow's self-signed snakeoil forever. Port 443 can
+// look perfectly healthy while every IMAP/SMTP client fails with "connection failed". A restart of
+// just these three fixes it without touching the rest of the stack.
+export async function fixReloadCerts(target: SshTarget, log?: ConsoleLog): Promise<SshFixResult> {
+  const script = [
+    MAILCOW_SHELL_PRELUDE,
+    '[ -f mailcow.conf ] || { echo "NO_CONF"; exit 0; }',
+    "$DC restart dovecot-mailcow postfix-mailcow nginx-mailcow 2>&1 | tail -6",
+    "sleep 5",
+    'echo "RELOADED=yes"',
+  ].join("\n");
+  const r = await sshRun(target, script, 180000, log);
+  if (!r.ok) return { status: "failed", detail: "SSH failed: " + r.error };
+  if (r.out.includes("NO_CONF"))
+    return { status: "failed", detail: "No mailcow.conf found — is Mailcow installed here?" };
+  if (!r.out.includes("RELOADED=yes"))
+    return { status: "failed", detail: "Could not restart the mail services." };
+  return {
+    status: "fixed",
+    detail:
+      "Restarted Dovecot, Postfix and Nginx so they load the current certificate. Re-check the mail TLS row — IMAP/SMTP clients should connect now.",
+  };
+}
+
 export async function fixCreateApiKey(target: SshTarget, log?: ConsoleLog): Promise<SshFixResult> {
   // Plain (non-template) strings so ${VAR} reaches the shell instead of being interpolated by TS.
   const script = [
@@ -417,6 +443,18 @@ export const forcePostfixIPv4ForDomain = createServerFn({ method: "POST" })
 // `{}`). We insert a real read-write key with skip_ip_check=1 (works from any source, which also
 // removes the API_ALLOW_FROM class of failure), verify it against the API over SSH, then persist it
 // to the domain. Falls back to the conf method only if the DB insert isn't possible.
+export const reloadCertsForDomain = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .inputValidator(domainInput)
+  .handler(async ({ data, context }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { db, userId } = context as any;
+    const { target, error } = await targetForDomain(db, userId, data.domainId);
+    if (error || !target) return { error };
+    const r = await fixReloadCerts(target);
+    return r.status === "failed" ? { error: r.detail } : { success: true, detail: r.detail };
+  });
+
 export const createApiKeyForDomain = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator(domainInput)

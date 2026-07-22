@@ -110,6 +110,19 @@ export function buildRemediationPlan(
         });
       }
     }
+    // Mail-port TLS: Dovecot/Postfix can still be serving Mailcow's self-signed cert after ACME
+    // issued the real one, which breaks EVERY IMAP/SMTP client while port 443 looks healthy.
+    // Reloading those services picks up the cert already on disk — cheap and non-destructive.
+    if (sv("mailtls") === "fail") {
+      steps.push({
+        id: "reloadCerts",
+        action: "reloadCerts",
+        target: "server",
+        label: "Reload mail certs",
+        why: "IMAP/SMTP are serving an untrusted (self-signed) certificate, so mail clients can't connect. Restart Dovecot/Postfix to load the real certificate already on disk.",
+        disruptive: true,
+      });
+    }
     if (sv("firewall") === "fail") {
       steps.push({
         id: "openFirewall",

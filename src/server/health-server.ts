@@ -23,6 +23,8 @@ import {
   queueVerdict,
   dominantDeferral,
   blacklistVerdict,
+  mailTlsVerdict,
+  type MailTlsProbe,
   spfVerdict,
   dmarcPolicyVerdict,
   mxTargetVerdict,
@@ -256,8 +258,11 @@ export async function checkServerHealth(input: ServerHealthInput): Promise<Domai
       detail: "No server IP configured.",
     });
 
-  // 6. TLS certificate on the mail host (443).
+  // 6. TLS certificate on the mail host (443) AND on the mail ports clients use (993/465).
+  // The 443 cert can be perfectly valid while dovecot/postfix still serve a stale snakeoil,
+  // which breaks every IMAP/SMTP client — so both are checked.
   if (mailHost) add(await checkTls(mailHost, ctx));
+  if (mailHost) add(await checkMailTls(mailHost));
 
   // 8. Mailcow container health.
   if (mailcowHostname && mailcowApiKey)
@@ -1066,6 +1071,61 @@ async function checkBlacklist(ip: string, ctx: GuidanceContext): Promise<Indicat
 }
 
 // --- TLS cert on the mail host ---
+// --- Mail-port TLS: the certificate IMAP/SMTP clients actually negotiate ---
+// Probes with rejectUnauthorized:false so we always get the cert, then reads Node's own
+// `authorized` flag — the same chain + hostname verdict a mail client reaches.
+function probeMailTls(host: string, port: number, timeoutMs = 7000): Promise<MailTlsProbe> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (p: MailTlsProbe) => {
+      if (done) return;
+      done = true;
+      try {
+        socket.destroy();
+      } catch {
+        /* already closed */
+      }
+      resolve(p);
+    };
+    const socket = tls.connect(
+      { host, port, servername: host, rejectUnauthorized: false, timeout: timeoutMs },
+      () => {
+        const cert = socket.getPeerCertificate();
+        finish({
+          port,
+          reachable: true,
+          authorized: socket.authorized,
+          authError: socket.authorizationError ? String(socket.authorizationError) : undefined,
+          issuerO: (cert?.issuer?.O ?? "").toString(),
+          validToMs: cert?.valid_to ? new Date(cert.valid_to).getTime() : null,
+        });
+      },
+    );
+    socket.on("error", () => finish({ port, reachable: false, authorized: false }));
+    socket.on("timeout", () => finish({ port, reachable: false, authorized: false }));
+  });
+}
+
+// IMAPS (993) and SMTPS (465) — both implicit TLS, so one handshake each tells the whole story.
+async function checkMailTls(mailHost: string): Promise<Indicator> {
+  const probes = await Promise.all([probeMailTls(mailHost, 993), probeMailTls(mailHost, 465)]);
+  const v = mailTlsVerdict(probes, Date.now());
+  return {
+    id: "mailtls",
+    label: "Mail TLS (IMAP/SMTP)",
+    status: v.status,
+    detail: v.reason,
+    ...(v.status === "fail"
+      ? {
+          fix: v.needsReload
+            ? "Reload the mail services so they pick up the Let's Encrypt cert already on disk."
+            : "Check ACME on the server — the mail ports are serving an untrusted certificate.",
+          ...(v.needsReload ? { action: "reloadCerts" as const } : {}),
+        }
+      : {}),
+  };
+}
+
 function checkTls(mailHost: string, ctx: GuidanceContext): Promise<Indicator> {
   return new Promise((resolve) => {
     let done = false;

@@ -25,6 +25,7 @@ import { and, eq } from "drizzle-orm";
 import { domains, userSecrets } from "@/lib/db/schema";
 import {
   fixRestartMailcow,
+  fixReloadCerts,
   fixOpenFirewall,
   fixFlushQueue,
   fixPostfixIpv4Only,
@@ -75,6 +76,8 @@ export async function executeStep(
       switch (step.action) {
         case "restartMailcow":
           return asResult(await fixRestartMailcow(ctx.target, log));
+        case "reloadCerts":
+          return asResult(await fixReloadCerts(ctx.target, log));
         case "openFirewall":
           return asResult(await fixOpenFirewall(ctx.target, log));
         case "forcePostfixIPv4":

@@ -14,6 +14,7 @@ import {
   mxTargetVerdict,
   parseSmtpDialogue,
   smtpBannerVerdict,
+  mailTlsVerdict,
 } from "../health-checks";
 import type { Indicator } from "../health-types";
 
@@ -262,6 +263,63 @@ describe("parseSmtpDialogue / smtpBannerVerdict", () => {
     expect(smtpBannerVerdict("localhost").status).toBe("warn");
     expect(smtpBannerVerdict("127.0.0.1").status).toBe("warn");
     expect(smtpBannerVerdict("").status).toBe("warn");
+  });
+});
+
+describe("mailTlsVerdict", () => {
+  const NOW = Date.UTC(2026, 6, 22);
+  const ok = (port: number, days = 90) => ({
+    port,
+    reachable: true,
+    authorized: true,
+    issuerO: "Let's Encrypt",
+    validToMs: NOW + days * 864e5,
+  });
+
+  it("all ports trusted -> ok", () => {
+    expect(mailTlsVerdict([ok(993), ok(465)], NOW).status).toBe("ok");
+  });
+
+  it("self-signed on IMAPS -> fail AND needsReload (the EmailBison 'connection failed' case)", () => {
+    const v = mailTlsVerdict(
+      [
+        { port: 993, reachable: true, authorized: false, authError: "DEPTH_ZERO_SELF_SIGNED_CERT", issuerO: "mailcow" },
+        ok(465),
+      ],
+      NOW,
+    );
+    expect(v.status).toBe("fail");
+    expect(v.needsReload).toBe(true);
+    expect(v.reason).toMatch(/self-signed/i);
+    expect(v.reason).toMatch(/993/);
+  });
+
+  it("hostname mismatch -> fail AND needsReload", () => {
+    const v = mailTlsVerdict(
+      [{ port: 993, reachable: true, authorized: false, authError: "ERR_TLS_CERT_ALTNAME_INVALID" }, ok(465)],
+      NOW,
+    );
+    expect(v.status).toBe("fail");
+    expect(v.needsReload).toBe(true);
+  });
+
+  it("expired -> fail but NOT a reload fix (ACME must re-issue)", () => {
+    const v = mailTlsVerdict(
+      [{ port: 993, reachable: true, authorized: false, authError: "CERT_HAS_EXPIRED", issuerO: "Let's Encrypt" }],
+      NOW,
+    );
+    expect(v.status).toBe("fail");
+    expect(v.needsReload).toBe(false);
+  });
+
+  it("expiring within 14 days -> warn", () => {
+    expect(mailTlsVerdict([ok(993, 5), ok(465, 5)], NOW).status).toBe("warn");
+  });
+
+  it("nothing reachable -> skip (never a false alarm)", () => {
+    expect(
+      mailTlsVerdict([{ port: 993, reachable: false, authorized: false }], NOW).status,
+    ).toBe("skip");
   });
 });
 

@@ -21,6 +21,7 @@ describe("health-fixes registry covers the new actions", () => {
       "syncDkim",
       "openFirewall",
       "restartMailcow",
+      "reloadCerts",
       "createApiKey",
       "forcePostfixIPv4",
       "flushQueue",
