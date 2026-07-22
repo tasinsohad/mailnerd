@@ -282,7 +282,7 @@ export async function mailcowCreateDbApiKey(
   // stderr is NOT suppressed: a silent mysql failure (bad DBROOT, missing table) is precisely what
   // left us guessing. Report it so the cause names itself.
   const sql = (q: string) =>
-    `docker exec -i "$MYC" mysql -u root -p"$DBROOT" "$DBNAME" -N -B -e "${q}" 2>&1 | head -3`;
+    `docker exec -i "$MYC" mysql -u root -p"$DBROOT" "$DBNAME" -N -B -e "${q}" 2>&1 | head -25`;
   const script =
     MAILCOW_SHELL_PRELUDE +
     "\n" +
@@ -296,16 +296,16 @@ export async function mailcowCreateDbApiKey(
       // Report inputs (password LENGTH only, never the value) so a bad read is visible.
       'echo "DBROOT_LEN=${#DBROOT}"; echo "DBNAME=${DBNAME}"; echo "MYC=${MYC:-none}"',
       '[ -n "$MYC" ] && [ -n "$DBROOT" ] || { echo "NO_DB"; exit 0; }',
+      // The real `api` table schema, so a column mismatch is visible instead of inferred.
+      'echo "---COLS---"',
+      sql("SHOW COLUMNS FROM api"),
       'echo "---SQL---"',
-      // Some schema versions require `created`; try without it first, then with.
+      // Plain INSERT (never IGNORE — that hides the very error we need).
       sql(
         `INSERT INTO api (api_key, allow_from, skip_ip_check, api_access, active) VALUES ('${key}','0.0.0.0/0',1,'rw',1)`,
       ),
-      sql(
-        `INSERT IGNORE INTO api (api_key, allow_from, skip_ip_check, api_access, active, created) VALUES ('${key}','0.0.0.0/0',1,'rw',1,NOW())`,
-      ),
       'echo "---VERIFY---"',
-      sql(`SELECT api_key FROM api WHERE api_key='${key}' AND active=1`),
+      sql(`SELECT api_key FROM api WHERE api_key='${key}'`),
     ].join("\n");
 
   const mgr = new SSHManager(ssh.ipAddress, 22, ssh.sshUser, {
@@ -320,10 +320,12 @@ export async function mailcowCreateDbApiKey(
     // Compact, secret-free diagnostic: input presence + whatever mysql actually said.
     const dbrootLen = out.match(/DBROOT_LEN=(\d+)/)?.[1] ?? "?";
     const myc = out.match(/MYC=(.*)/)?.[1]?.trim() ?? "?";
+    const cols = (out.split("---COLS---")[1] ?? "").split("---SQL---")[0] ?? "";
     const sqlOut = (out.split("---SQL---")[1] ?? "").split("---VERIFY---")[0] ?? "";
+    const clean = (s: string) => s.replace(/-{5,}/g, " ").replace(/\s+/g, " ").trim();
     const diag = out.includes("NO_DB")
       ? `couldn't reach the DB (DBROOT length ${dbrootLen}, mysql container ${myc})`
-      : `DBROOT length ${dbrootLen}, mysql ${myc}; mysql said: ${sqlOut.replace(/\s+/g, " ").trim().slice(0, 200) || "(no output)"}`;
+      : `DBROOT len ${dbrootLen}, mysql ${myc}. api table columns: [${clean(cols).slice(0, 300) || "none — table missing?"}]. INSERT said: ${clean(sqlOut).slice(0, 300) || "(no output)"}`;
     return { key: verified ? key : null, diag };
   } finally {
     await mgr.dispose().catch(() => {});
