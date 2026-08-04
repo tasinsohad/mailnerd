@@ -24,10 +24,12 @@ import { toast } from "sonner";
 import {
   LiveConsole,
   openConsole,
+  downloadText,
   type ConsoleLine,
 } from "@/components/LiveConsole";
 import { troubleshootServer, quickFixServer, getServerLog } from "@/server/troubleshoot";
 import { bulkSetupDns, type BulkDnsResult } from "@/server/bulk-dns";
+import { resetExternalMailboxPasswords } from "@/server/mailbox-passwords";
 import { sortByPriority } from "@/server/health-checks";
 import type {
   DomainHealth,
@@ -328,6 +330,15 @@ function TroubleshootPage() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkConsole, setBulkConsole] = useState<ConsoleLine[]>([]);
   const [bulkResults, setBulkResults] = useState<BulkDnsResult[] | null>(null);
+  // Reset all mailbox passwords on an external server.
+  const [resetPw, setResetPw] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetConsole, setResetConsole] = useState<ConsoleLine[]>([]);
+  const [resetResult, setResetResult] = useState<{
+    password: string;
+    host?: string;
+    results: { email: string; ok: boolean; error?: string }[];
+  } | null>(null);
   const [result, setResult] = useState<{
     health: DomainHealth;
     mailcowHostname: string | null;
@@ -576,6 +587,55 @@ function TroubleshootPage() {
       close();
       setBulkBusy(false);
     }
+  };
+
+  // Reset EVERY mailbox password on this external server to one shared password (blank = auto).
+  const runReset = async () => {
+    if (!form.ipAddress.trim() || !form.sshPassword) {
+      toast.error("Enter the server IP and SSH password in the form above first.");
+      return;
+    }
+    if (!confirm("Reset the password for EVERY mailbox on this server? Existing logins will stop working until updated.")) return;
+    setResetBusy(true);
+    setResetResult(null);
+    setResetConsole([]);
+    const { runId, close } = openConsole(setResetConsole);
+    try {
+      const res: any = await resetExternalMailboxPasswords({
+        data: {
+          ipAddress: form.ipAddress.trim(),
+          sshUser: form.sshUser.trim() || "root",
+          sshPassword: form.sshPassword,
+          mailcowHostname: form.mailcowHostname.trim() || undefined,
+          mailcowApiKey: form.mailcowApiKey.trim() || undefined,
+          fetchApiKey,
+          password: resetPw || undefined,
+          runId,
+        },
+      });
+      if (Array.isArray(res?.transcript) && res.transcript.length)
+        setResetConsole((prev) => (prev.length ? prev : res.transcript));
+      if (res?.error) {
+        toast.error(res.error);
+        return;
+      }
+      setResetResult({ password: res.password, host: res.host, results: res.results ?? [] });
+      const ok = (res.results ?? []).filter((r: any) => r.ok).length;
+      toast.success(`Reset ${ok} mailbox password${ok === 1 ? "" : "s"}.`, { duration: 8000 });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Password reset failed");
+    } finally {
+      close();
+      setResetBusy(false);
+    }
+  };
+
+  const downloadResetCsv = () => {
+    if (!resetResult) return;
+    const ok = resetResult.results.filter((r) => r.ok);
+    const rows = [["email", "password"], ...ok.map((r) => [r.email, resetResult.password])];
+    const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+    downloadText(`mailbox-passwords.csv`, csv);
   };
 
   // Which of the targeted ids are STILL unhealthy in a fresh result.
@@ -1052,6 +1112,82 @@ function TroubleshootPage() {
         {(bulkBusy || bulkConsole.length > 0) && (
           <div className="border-t border-border px-6 py-4">
             <LiveConsole lines={bulkConsole} running={bulkBusy} filenameBase="bulk-dns" />
+          </div>
+        )}
+      </div>
+
+      {/* Reset mailbox passwords — logs into the server above, reads the Mailcow API key, and resets
+          EVERY mailbox to one shared password (blank = auto-generate). */}
+      <div className="rounded-xl border border-border bg-card">
+        <div className="flex items-center gap-3 border-b border-border px-6 py-4">
+          <ShieldCheck className="h-5 w-5 text-muted-foreground" />
+          <div className="flex-1">
+            <h2 className="font-display text-base font-semibold text-foreground">
+              Reset mailbox passwords
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Logs into the server above, reads the Mailcow API key, and resets{" "}
+              <strong>every</strong> mailbox to one shared password. Save the result — those
+              credentials are what you re-connect the inboxes with.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-col gap-3 p-6">
+          <label className="text-sm font-medium text-foreground">
+            New password
+            <input
+              type="text"
+              value={resetPw}
+              onChange={(e) => setResetPw(e.target.value)}
+              placeholder="Leave blank to auto-generate a strong password"
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+          <div>
+            <Button onClick={runReset} disabled={resetBusy} className="gap-1.5">
+              {resetBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ShieldCheck className="h-4 w-4" />
+              )}
+              Reset all mailbox passwords
+            </Button>
+          </div>
+
+          {resetResult && (
+            <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/30 p-3">
+              <div className="text-sm text-muted-foreground">
+                Reset{" "}
+                <span className="font-medium text-success">
+                  {resetResult.results.filter((r) => r.ok).length}
+                </span>
+                {resetResult.results.some((r) => !r.ok) && (
+                  <>
+                    {" "}
+                    ·{" "}
+                    <span className="font-medium text-destructive">
+                      {resetResult.results.filter((r) => !r.ok).length} failed
+                    </span>
+                  </>
+                )}
+                {resetResult.host ? ` on ${resetResult.host}` : ""}.
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Password</span>
+                <code className="flex-1 truncate font-mono text-sm text-foreground">
+                  {resetResult.password}
+                </code>
+                <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={downloadResetCsv}>
+                  <Download className="h-3.5 w-3.5" /> CSV
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {(resetBusy || resetConsole.length > 0) && (
+          <div className="border-t border-border px-6 py-4">
+            <LiveConsole lines={resetConsole} running={resetBusy} filenameBase="password-reset" />
           </div>
         )}
       </div>

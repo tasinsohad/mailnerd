@@ -225,6 +225,7 @@ function JobPipelinePage() {
             />
             <JobActionsMenu
               domainIds={domains.map((d: any) => d.id)}
+              batchId={id}
               onChanged={() => qc.invalidateQueries({ queryKey: ["batch", id] })}
             />
             <Button

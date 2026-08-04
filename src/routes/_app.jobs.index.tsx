@@ -105,7 +105,7 @@ function JobRow({ batch }: { batch: any }) {
         </div>
       </Link>
 
-      <JobActionsMenu domainIds={domainIds} onChanged={refresh} />
+      <JobActionsMenu domainIds={domainIds} batchId={batch.id} jobName={batch.name} onChanged={refresh} />
       <Link to="/jobs/$id" params={{ id: batch.id }}>
         <Button variant="outline" size="sm" className="h-10 gap-1.5" title="Open provisioning pipeline">
           Pipeline <ArrowUpRight className="h-3.5 w-3.5" />

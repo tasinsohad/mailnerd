@@ -34,6 +34,7 @@ import { getInboxExport, getSubdomainExport } from "@/server/plans";
 import { downloadCsv } from "@/lib/csv";
 import { EXPORT_FORMATS, buildExportCsv } from "@/lib/export-formats";
 import { ExportSubdomainsDialog } from "@/components/ExportSubdomainsDialog";
+import { ResetPasswordsDialog } from "@/components/ResetPasswordsDialog";
 import type { SubdomainRow } from "@/lib/subdomains";
 
 // Every per-domain control in one 3-dot menu. Used in the Domains list and anywhere a
@@ -53,6 +54,7 @@ export function DomainActionsMenu({
   const [busy, setBusy] = useState(false);
   const [subOpen, setSubOpen] = useState(false);
   const [subRows, setSubRows] = useState<SubdomainRow[]>([]);
+  const [resetOpen, setResetOpen] = useState(false);
 
   const openSubdomains = async () => {
     setBusy(true);
@@ -179,6 +181,9 @@ export function DomainActionsMenu({
         >
           <KeyRound className="h-4 w-4" /> Create Mailcow API key
         </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => setResetOpen(true)}>
+          <KeyRound className="h-4 w-4" /> Reset mailbox passwords
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => run("Recreating mailboxes", () => setupMailcowDomain({ data: { domainId, recreate: true } }), "Mailboxes recreated")}>
           <RefreshCw className="h-4 w-4" /> Recreate mailboxes
         </DropdownMenuItem>
@@ -199,6 +204,14 @@ export function DomainActionsMenu({
       onOpenChange={setSubOpen}
       rows={subRows}
       filenameBase={domainName ?? "domain"}
+    />
+    <ResetPasswordsDialog
+      open={resetOpen}
+      onOpenChange={setResetOpen}
+      scope="domain"
+      id={domainId}
+      label={domainName ?? "domain"}
+      onDone={onChanged}
     />
     </>
   );

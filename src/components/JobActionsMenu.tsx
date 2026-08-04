@@ -8,16 +8,28 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, Send, Zap, Mail, ShieldCheck, Network, RefreshCw, Trash2, Loader2 } from "lucide-react";
+import { ChevronDown, Send, Zap, Mail, ShieldCheck, Network, RefreshCw, Trash2, Loader2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { pushDnsToCloudflare, repairDomainDns } from "@/server/domains";
 import { provisionServer } from "@/server/provisioning";
 import { setupMailcowDomain, fetchDkimAndSync } from "@/server/mailcow";
+import { ResetPasswordsDialog } from "@/components/ResetPasswordsDialog";
 
 // Run any per-domain action across EVERY domain in a job. Same control set as a single
 // domain, applied to the whole batch sequentially with a running progress toast.
-export function JobActionsMenu({ domainIds, onChanged }: { domainIds: string[]; onChanged?: () => void }) {
+export function JobActionsMenu({
+  domainIds,
+  batchId,
+  jobName,
+  onChanged,
+}: {
+  domainIds: string[];
+  batchId?: string;
+  jobName?: string;
+  onChanged?: () => void;
+}) {
   const [busy, setBusy] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
   const n = domainIds.length;
 
   const runAll = async (
@@ -49,6 +61,7 @@ export function JobActionsMenu({ domainIds, onChanged }: { domainIds: string[]; 
   };
 
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" disabled={busy || !n} className="h-10 gap-2">
@@ -87,6 +100,11 @@ export function JobActionsMenu({ domainIds, onChanged }: { domainIds: string[]; 
         >
           <RefreshCw className="h-4 w-4" /> Recreate mailboxes
         </DropdownMenuItem>
+        {batchId && (
+          <DropdownMenuItem onClick={() => setResetOpen(true)}>
+            <KeyRound className="h-4 w-4" /> Reset mailbox passwords
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="text-destructive focus:text-destructive"
@@ -102,5 +120,16 @@ export function JobActionsMenu({ domainIds, onChanged }: { domainIds: string[]; 
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    {batchId && (
+      <ResetPasswordsDialog
+        open={resetOpen}
+        onOpenChange={setResetOpen}
+        scope="job"
+        id={batchId}
+        label={jobName ?? "job"}
+        onDone={onChanged}
+      />
+    )}
+    </>
   );
 }
