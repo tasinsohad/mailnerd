@@ -8,6 +8,7 @@ import { readMailcowConfigOverSsh } from "./mailcow-key";
 import {
   mailcowListAll,
   mailcowRequestRetry,
+  mailcowCreateDbApiKey,
   parseMailcowResult,
   generateMailboxPassword,
   type MailcowSshTarget,
@@ -271,6 +272,24 @@ export const resetExternalMailboxPasswords = createServerFn({ method: "POST" })
       host = host || cfg?.hostname || null;
       key = key || cfg?.apiKey || null;
     }
+
+    // It's Mailcow (host read) but has NO API key — create one on the server (real DB-table key,
+    // skip_ip_check) so the user doesn't need to have one. Mirrors the "Create Mailcow API key"
+    // button, but automatic for the external flow.
+    if (host && !key) {
+      log.info("No Mailcow API key on the server — creating one…");
+      const made = await mailcowCreateDbApiKey(target).catch((e) => ({
+        key: null as string | null,
+        diag: e instanceof Error ? e.message : String(e),
+      }));
+      if (made.key) {
+        key = made.key;
+        log.info("Created a Mailcow API key.");
+      } else {
+        log.error(`Couldn't create an API key — ${made.diag}`);
+      }
+    }
+
     if (!host || !key) {
       const why = await diagnoseExternalServer(target).catch(
         () => "Couldn't get the Mailcow host + API key from the server. Enter them under Advanced and retry.",
