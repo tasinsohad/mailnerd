@@ -30,6 +30,12 @@ import {
 import { troubleshootServer, quickFixServer, getServerLog } from "@/server/troubleshoot";
 import { bulkSetupDns, type BulkDnsResult } from "@/server/bulk-dns";
 import { resetExternalMailboxPasswords } from "@/server/mailbox-passwords";
+import {
+  EXPORT_FORMATS,
+  buildExportCsv,
+  getExportFormat,
+  type ExportInbox,
+} from "@/lib/export-formats";
 import { sortByPriority } from "@/server/health-checks";
 import type {
   DomainHealth,
@@ -337,8 +343,9 @@ function TroubleshootPage() {
   const [resetResult, setResetResult] = useState<{
     password: string;
     host?: string;
-    results: { email: string; ok: boolean; error?: string }[];
+    results: { email: string; ok: boolean; error?: string; host?: string }[];
   } | null>(null);
+  const [resetFormat, setResetFormat] = useState("generic"); // platform CSV format
   const [result, setResult] = useState<{
     health: DomainHealth;
     mailcowHostname: string | null;
@@ -632,10 +639,14 @@ function TroubleshootPage() {
 
   const downloadResetCsv = () => {
     if (!resetResult) return;
-    const ok = resetResult.results.filter((r) => r.ok);
-    const rows = [["email", "password"], ...ok.map((r) => [r.email, resetResult.password])];
-    const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
-    downloadText(`mailbox-passwords.csv`, csv);
+    const rows: ExportInbox[] = resetResult.results
+      .filter((r) => r.ok)
+      .map((r) => ({
+        email: r.email,
+        password: resetResult.password,
+        mailServer: r.host || resetResult.host || `mail.${r.email.split("@")[1] ?? ""}`,
+      }));
+    downloadText(`mailbox-passwords-${resetFormat}.csv`, buildExportCsv(resetFormat, rows));
   };
 
   // Which of the targeted ids are STILL unhealthy in a fresh result.
@@ -1177,10 +1188,25 @@ function TroubleshootPage() {
                 <code className="flex-1 truncate font-mono text-sm text-foreground">
                   {resetResult.password}
                 </code>
+                <select
+                  value={resetFormat}
+                  onChange={(e) => setResetFormat(e.target.value)}
+                  className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  title="Export format"
+                >
+                  {EXPORT_FORMATS.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
                 <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={downloadResetCsv}>
                   <Download className="h-3.5 w-3.5" /> CSV
                 </Button>
               </div>
+              <p className="text-[11px] text-muted-foreground">
+                {getExportFormat(resetFormat).label} format · IMAP 993 / SMTP 587.
+              </p>
             </div>
           )}
         </div>

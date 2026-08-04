@@ -21,7 +21,9 @@ import {
 // SERVER-ONLY, exports only createServerFns (+ types), so it's stubbed out of the client bundle even
 // though it imports the SSH-touching mailcow-key. Never add a plain runtime export here.
 
-export type ResetRow = { email: string; ok: boolean; error?: string };
+// `host` is the mail server each mailbox connects to (IMAP/SMTP) — carried per-row so a job export
+// spanning several servers maps each mailbox to its own host.
+export type ResetRow = { email: string; ok: boolean; error?: string; host: string };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function sshTargetFor(d: any): MailcowSshTarget | undefined {
@@ -76,7 +78,12 @@ async function resetEach(
       { ssh },
     ).catch((e) => ({ ok: false, status: 0, json: e instanceof Error ? e.message : String(e) }));
     const outcome = parseMailcowResult(r.ok, r.json);
-    rows.push({ email, ok: outcome.success, error: outcome.success ? undefined : outcome.error ?? "failed" });
+    rows.push({
+      email,
+      ok: outcome.success,
+      error: outcome.success ? undefined : outcome.error ?? "failed",
+      host,
+    });
     log.out(`${email}: ${outcome.success ? "password reset" : outcome.error ?? "failed"}`);
   }
   return rows;

@@ -11,11 +11,17 @@ import { Loader2, KeyRound, Copy, Check, Download, TriangleAlert } from "lucide-
 import { toast } from "sonner";
 import { downloadCsv } from "@/lib/csv";
 import {
+  EXPORT_FORMATS,
+  buildExportCsv,
+  getExportFormat,
+  type ExportInbox,
+} from "@/lib/export-formats";
+import {
   resetDomainMailboxPasswords,
   resetJobMailboxPasswords,
 } from "@/server/mailbox-passwords";
 
-type ResetRow = { email: string; ok: boolean; error?: string };
+type ResetRow = { email: string; ok: boolean; error?: string; host?: string };
 type ResetResult = { password: string; results: ResetRow[] } | null;
 
 // Reset every mailbox password for a domain or a whole job to ONE shared password (blank = auto).
@@ -40,6 +46,7 @@ export function ResetPasswordsDialog({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ResetResult>(null);
   const [copied, setCopied] = useState(false);
+  const [format, setFormat] = useState("generic"); // platform CSV format (EmailBison, PulseVibe, …)
 
   const reset = () => {
     setPassword("");
@@ -86,9 +93,12 @@ export function ResetPasswordsDialog({
 
   const downloadList = () => {
     if (!result) return;
-    const rows = [["email", "password"], ...okRows.map((r) => [r.email, result.password])];
-    const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
-    downloadCsv(`${label}_passwords.csv`, csv);
+    const rows: ExportInbox[] = okRows.map((r) => ({
+      email: r.email,
+      password: result.password,
+      mailServer: r.host || `mail.${r.email.split("@")[1] ?? ""}`,
+    }));
+    downloadCsv(`${label}_${format}.csv`, buildExportCsv(format, rows));
   };
 
   return (
@@ -170,8 +180,20 @@ export function ResetPasswordsDialog({
             </Button>
           ) : (
             <>
+              <select
+                value={format}
+                onChange={(e) => setFormat(e.target.value)}
+                className="rounded-lg border border-border bg-background px-2 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                title="Export format"
+              >
+                {EXPORT_FORMATS.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
               <Button variant="outline" onClick={downloadList} className="gap-1.5">
-                <Download className="h-4 w-4" /> Download CSV
+                <Download className="h-4 w-4" /> Download {getExportFormat(format).label} CSV
               </Button>
               <Button onClick={() => onOpenChange(false)}>Done</Button>
             </>
