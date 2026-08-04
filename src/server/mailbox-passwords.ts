@@ -25,6 +25,38 @@ import {
 // spanning several servers maps each mailbox to its own host.
 export type ResetRow = { email: string; ok: boolean; error?: string; host: string };
 
+// When we can't read the Mailcow host + key, figure out WHY: SSH couldn't connect, the box isn't
+// Mailcow at all (a plain SMTP server this feature can't reset), or Mailcow's there but the key
+// wasn't readable. readMailcowConfigOverSsh swallows all of these into nulls, so probe directly.
+async function diagnoseExternalServer(target: MailcowSshTarget): Promise<string> {
+  const { SSHManager } = await import("@/lib/ssh");
+  const mgr = new SSHManager(target.ipAddress, 22, target.sshUser, {
+    type: "password",
+    password: target.sshPassword,
+  });
+  try {
+    try {
+      await mgr.connect({ timeoutMs: 15000, maxRetries: 1 });
+    } catch (e) {
+      return `Couldn't SSH into ${target.ipAddress} as ${target.sshUser} — check the IP, SSH user and password (port 22 must be reachable).${e instanceof Error ? ` (${e.message})` : ""}`;
+    }
+    const res = await mgr.executeCommand(
+      'export PATH="$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"; ' +
+        "CONF=$(find /opt -maxdepth 4 -name mailcow.conf 2>/dev/null | head -1); " +
+        'echo "CONF=${CONF:-none}"',
+      { timeoutMs: 30000 },
+    );
+    if (/CONF=none/.test(res.stdout ?? "")) {
+      return "SSH works, but this server doesn't appear to run Mailcow (no mailcow.conf found). This reset uses the Mailcow API — a different mail stack (plain Postfix/Dovecot, cPanel/Plesk, etc.) isn't supported here. If it IS a Mailcow server, enter its mail host + Mailcow API key under Advanced and retry.";
+    }
+    return "Mailcow is installed, but no usable API key was found. Run 'Create Mailcow API key' for this server first, or enter the mail host + API key under Advanced, then retry.";
+  } catch {
+    return "Connected over SSH but couldn't inspect the server. Enter the mail host + Mailcow API key under Advanced and retry.";
+  } finally {
+    await mgr.dispose().catch(() => {});
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function sshTargetFor(d: any): MailcowSshTarget | undefined {
   const ipAddress = d.ipAddress || d.server?.ipAddress;
@@ -239,11 +271,13 @@ export const resetExternalMailboxPasswords = createServerFn({ method: "POST" })
       host = host || cfg?.hostname || null;
       key = key || cfg?.apiKey || null;
     }
-    if (!host || !key)
-      return {
-        error: "Couldn't get the Mailcow host + API key from the server. Enter them under Advanced and retry.",
-        transcript: log.transcript(),
-      };
+    if (!host || !key) {
+      const why = await diagnoseExternalServer(target).catch(
+        () => "Couldn't get the Mailcow host + API key from the server. Enter them under Advanced and retry.",
+      );
+      log.error(why);
+      return { error: why, transcript: log.transcript() };
+    }
 
     const resolved = await resolveMailboxes(host, key, target);
     if ("error" in resolved) return { error: resolved.error, transcript: log.transcript() };
