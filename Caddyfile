@@ -1,0 +1,6 @@
+# HTTPS in front of the app. Caddy obtains and renews the certificate for $DOMAIN by itself; the
+# domain's DNS A record must point at this server, and ports 80 and 443 must be open.
+# Live logs (/api/sse) are event streams, which Caddy passes through without buffering.
+{$DOMAIN} {
+	reverse_proxy app:3000
+}

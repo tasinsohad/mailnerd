@@ -1,0 +1,17 @@
+# Keep secrets and local build state out of the image. The server reads .env at runtime
+# through docker-compose (env_file), never from inside the image.
+.env
+.env.*
+!.env.example
+
+node_modules
+.output
+.vercel
+.tanstack
+.nitro
+dist
+
+.git
+.claude
+scratch
+*.log

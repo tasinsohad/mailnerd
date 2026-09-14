@@ -25,7 +25,12 @@ export default defineConfig({
     // Route tree is manually maintained in src/routeTree.gen.ts
     tanstackStart(),
     nitro({
-      preset: "vercel",
+      // A long-running Node server (VPS / Docker). Server setup runs for 20–40 minutes and streams its
+      // logs, which serverless platforms cut off. NITRO_PRESET overrides it.
+      preset: process.env.NITRO_PRESET || "node-server",
+      // Live logs. In dev, sse-dev-plugin above serves /api/sse inside Vite's own process, where server
+      // functions publish; the production server mounts the same Node handler here.
+      handlers: [{ route: "/api/sse", handler: "./src/server/sse-node.ts", format: "node", env: "prod" }],
       minify: false, // Drizzle ORM crashes if the server build is minified
       externals: {
         external: nativeExternals,
