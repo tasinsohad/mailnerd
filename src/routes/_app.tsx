@@ -1,8 +1,18 @@
-import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { Globe, Server, Settings, Mail, FolderGit2, Stethoscope } from "lucide-react";
+import { createFileRoute, Link, Outlet, redirect, useRouterState } from "@tanstack/react-router";
+import { Globe, Server, Settings, Mail, FolderGit2, Stethoscope, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getSession, logout } from "@/server/session";
 
 export const Route = createFileRoute("/_app")({
+  // Every page's data comes from server functions, which refuse without a session anyway; checking
+  // here sends you to sign-in up front instead of rendering a page that can't load anything.
+  beforeLoad: async ({ location }) => {
+    const session = await getSession();
+    if (!session.authenticated) {
+      throw redirect({ to: "/auth", search: { redirect: location.href } });
+    }
+    return { userEmail: session.email ?? "" };
+  },
   component: AppLayout,
 });
 
@@ -17,6 +27,12 @@ const nav: ReadonlyArray<{ to: string; label: string; icon: any; exact?: boolean
 
 function AppLayout() {
   const path = useRouterState({ select: (s) => s.location.pathname });
+  const { userEmail } = Route.useRouteContext();
+
+  const signOut = async () => {
+    await logout();
+    window.location.assign("/auth");
+  };
 
   return (
     <div className="flex min-h-screen bg-background font-sans text-foreground">
@@ -64,13 +80,22 @@ function AppLayout() {
 
         <div className="border-t border-border p-3">
           <div className="flex items-center gap-3 rounded-lg px-3 py-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground">
-              A
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted text-sm font-semibold uppercase text-foreground">
+              {userEmail.charAt(0) || "A"}
             </div>
             <div className="flex-1 overflow-hidden">
               <div className="truncate text-sm font-medium text-foreground">Admin</div>
-              <div className="ident truncate text-xs text-muted-foreground">team@nextus.ai</div>
+              <div className="ident truncate text-xs text-muted-foreground">{userEmail}</div>
             </div>
+            <button
+              type="button"
+              onClick={signOut}
+              title="Sign out"
+              aria-label="Sign out"
+              className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
           </div>
         </div>
       </aside>

@@ -1,10 +1,10 @@
-import Redis from "ioredis";
-import { createClient } from "@supabase/supabase-js";
 import { users, domains } from "../lib/db/schema";
 import { eq } from "drizzle-orm";
 import { getDb } from "../lib/db";
-import { jobEvents } from "./events";
+import { jobEvents, inProcessProvisions } from "./events";
+import { createRedis, waitForRedis } from "./redis";
 import { consoleChannel } from "./console-bus";
+import { readCookie, sessionEmail, SESSION_COOKIE } from "./auth-core";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 // Live console for an ad-hoc troubleshoot run. Not tied to a domain — the runId is an
@@ -43,16 +43,21 @@ function streamConsole(runId: string, req: IncomingMessage, res: ServerResponse)
   });
 }
 
+// All app data belongs to this internal user (see src/lib/auth.ts); signing in grants access to it.
 const DEFAULT_USER_EMAIL = "admin@smtpforge.local";
 
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
-const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
-
-const redis = process.env.REDIS_URL ? new Redis(process.env.REDIS_URL) : null;
+const redis = process.env.REDIS_URL ? createRedis(process.env.REDIS_URL) : null;
 
 export default async function sseHandler(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url || "", "http://localhost");
+
+  // The same session check every server function makes (requireAuth): these streams carry server
+  // output and setup logs. EventSource sends the session cookie by itself on same-site requests.
+  if (!sessionEmail(readCookie(req.headers.cookie, SESSION_COOKIE))) {
+    res.statusCode = 401;
+    res.end("Sign in required");
+    return;
+  }
 
   // Troubleshoot console stream — no domain involved, so handle it before the domain lookup.
   const runId = url.searchParams.get("runId");
@@ -69,25 +74,7 @@ export default async function sseHandler(req: IncomingMessage, res: ServerRespon
     return;
   }
 
-  const authHeader = req.headers.authorization;
-  const token = url.searchParams.get("token") || authHeader?.replace("Bearer ", "");
-
-  let email = DEFAULT_USER_EMAIL;
-
-  if (token && token !== "mock-token" && supabase) {
-    try {
-      const {
-        data: { user: supabaseUser },
-        error,
-      } = await supabase.auth.getUser(token);
-
-      if (!error && supabaseUser?.email) {
-        email = supabaseUser.email;
-      }
-    } catch (err) {
-      console.warn("Supabase token verification failed, falling back to local credentials:", err);
-    }
-  }
+  const email = DEFAULT_USER_EMAIL;
 
   let user;
   let domain;
@@ -114,12 +101,13 @@ export default async function sseHandler(req: IncomingMessage, res: ServerRespon
     }
   } catch (dbErr) {
     console.error("Database check failed in SSE handler:", dbErr);
-    if (email !== DEFAULT_USER_EMAIL) {
-      res.statusCode = 401;
-      res.end("Unauthorized Database Check");
-      return;
-    }
   }
+
+  // This domain's live logs arrive over Redis pub/sub only when its setup runs on the BullMQ queue,
+  // which needs Redis to be answering. A setup running in-process (Redis was down when it started)
+  // emits on jobEvents instead, so subscribing to Redis then would leave the terminal silent.
+  const useRedis =
+    !!redis && !inProcessProvisions.has(domainId) && (await waitForRedis(redis.client, 1000));
 
   // Set up SSE headers
   res.writeHead(200, {
@@ -151,8 +139,10 @@ export default async function sseHandler(req: IncomingMessage, res: ServerRespon
     send({ chunk: domain.terminalLogs });
   }
 
-  if (redis) {
-    const subscriber = redis.duplicate();
+  if (redis && useRedis) {
+    const subscriber = redis.client.duplicate();
+    // duplicate() copies options, not listeners: without this a Redis blip mid-stream prints raw errors.
+    subscriber.on("error", redis.report);
 
     subscriber.subscribe(channel, (err) => {
       if (err) {
