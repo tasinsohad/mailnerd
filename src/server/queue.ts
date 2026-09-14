@@ -1,11 +1,13 @@
 import { Queue, Worker, Job } from "bullmq";
-import Redis from "ioredis";
+import type Redis from "ioredis";
 import { getDb } from "../lib/db";
 import { domains } from "../lib/db/schema";
 import { eq } from "drizzle-orm";
 import { SSHManager } from "../lib/ssh";
 import { decrypt } from "../lib/encryption";
-import { jobEvents } from "./events";
+import { jobEvents, inProcessProvisions } from "./events";
+import { createRedis, waitForRedis } from "./redis";
+import { createSlotLimiter } from "./slot-limiter";
 import { ensureMailDomains, createMailboxes, syncDkim, unproxyDns } from "./pipeline";
 import { ensureWorkingApiKey } from "./mailcow-key";
 import crypto from "crypto";
@@ -42,10 +44,18 @@ function isValidHost(input: string): boolean {
 // Global references for queue & worker
 export let serverSetupQueue: any = null;
 let worker: any = null;
+// The queue's Redis client, so addServerSetupJob can check Redis is answering before using BullMQ.
+let redisConnection: Redis | null = null;
+
+const PROVISION_CONCURRENCY = Number(process.env.PROVISION_CONCURRENCY ?? 3);
+// In-process setups get the same cap the BullMQ worker enforces.
+const inProcessSlots = createSlotLimiter(PROVISION_CONCURRENCY);
 
 if (process.env.REDIS_URL) {
   try {
-    const connection = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null });
+    const redis = createRedis(process.env.REDIS_URL, { maxRetriesPerRequest: null });
+    const connection = redis.client;
+    redisConnection = connection;
     serverSetupQueue = new Queue("server-setup", {
       connection: connection as any,
       defaultJobOptions: {
@@ -57,6 +67,7 @@ if (process.env.REDIS_URL) {
         removeOnFail: false,
       },
     });
+    serverSetupQueue.on("error", redis.report);
 
     const globalForWorker = global as unknown as { worker: Worker | undefined };
     if (!globalForWorker.worker) {
@@ -80,8 +91,9 @@ if (process.env.REDIS_URL) {
           }
         },
         // Process 3 domains at a time; the rest stay queued and start as slots free.
-        { connection: connection as any, concurrency: Number(process.env.PROVISION_CONCURRENCY ?? 3) }
+        { connection: connection as any, concurrency: PROVISION_CONCURRENCY }
       );
+      globalForWorker.worker.on("error", redis.report);
       worker = globalForWorker.worker;
     } else {
       worker = globalForWorker.worker;
@@ -112,7 +124,10 @@ export async function addServerSetupJob(
   const sanitizedUser = sanitizeShellInput(sshUser);
   const sanitizedDomain = sanitizeShellInput(domainName);
 
-  if (serverSetupQueue) {
+  // Use the durable BullMQ queue only when Redis is actually answering. Queue.add() against an
+  // unreachable Redis never settles (BullMQ waits for a "ready" a dead host never sends), which is
+  // how a deleted Upstash database made server setup hang with no error.
+  if (serverSetupQueue && redisConnection && (await waitForRedis(redisConnection))) {
     console.log(`[addServerSetupJob] Using BullMQ`);
     const job = await serverSetupQueue.add("setup", {
       domainId,
@@ -123,7 +138,12 @@ export async function addServerSetupJob(
     });
     return { jobId: job.id };
   } else {
-    console.log(`[addServerSetupJob] Using in-memory fallback`);
+    // REDIS_URL is set but Redis isn't answering: say so in the domain's own terminal log, not just
+    // the server console, since this run won't survive an app restart.
+    const notice = serverSetupQueue
+      ? "[Queue] Redis (REDIS_URL) is unreachable, so this setup is running inside the app process and will not survive an app restart. The server console says why Redis failed.\n"
+      : undefined;
+    console.log(`[addServerSetupJob] Using in-memory fallback${notice ? " (Redis unreachable)" : ""}`);
     // In-memory queue fallback
     const jobId = crypto.randomUUID();
     const db = getDb();
@@ -133,6 +153,10 @@ export async function addServerSetupJob(
       .update(domains)
       .set({ status: "configuring" })
       .where(eq(domains.id, domainId));
+
+    // Mark before returning: the browser opens the log stream as soon as this resolves, and the SSE
+    // handler checks this to listen on jobEvents instead of Redis.
+    inProcessProvisions.add(domainId);
 
     console.log(`[addServerSetupJob] Setting 2000ms timeout`);
     // Delay by 2s so the browser has time to open the SSE connection before logs start firing
@@ -144,10 +168,17 @@ export async function addServerSetupJob(
       };
 
       try {
-        await executeProvisionJob(domainId, sanitizedIp, sanitizedUser, sshPassword, sanitizedDomain, logFn);
+        if (inProcessSlots.isFull()) {
+          logFn(`Waiting for a free setup slot (${PROVISION_CONCURRENCY} setups already running)...\n`);
+        }
+        await inProcessSlots.run(() =>
+          executeProvisionJob(domainId, sanitizedIp, sanitizedUser, sshPassword, sanitizedDomain, logFn, notice),
+        );
         console.log(`[addServerSetupJob] executeProvisionJob completed successfully`);
       } catch (err) {
         console.error(`In-memory setup error for domain ${domainId}:`, err);
+      } finally {
+        inProcessProvisions.delete(domainId);
       }
     }, 2000);
 
@@ -162,7 +193,8 @@ async function executeProvisionJob(
   sshUser: string,
   sshPassword?: string | null,
   domainName?: string,
-  logFn?: (msg: string, status?: string) => void
+  logFn?: (msg: string, status?: string) => void,
+  notice?: string,
 ) {
   const db = getDb();
   let accumulatedLogs = "";
@@ -213,6 +245,7 @@ async function executeProvisionJob(
     accumulatedLogs = separator;
   }
 
+  if (notice) log(notice, "Connecting");
   log(`Connecting to ${ipAddress} via SSH...`, "Connecting");
 
   const decryptedPassword = tryDecrypt(sshPassword);
