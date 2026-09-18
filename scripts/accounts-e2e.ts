@@ -356,6 +356,21 @@ async function flow(created: string[]) {
   await sseLocked.body?.cancel();
   await call("applyPlan", "POST", { userId: row.id, choice: { days: 3 } }, cookieAdmin);
   check((await call("getSession", "GET", {}, cookieC)).text.includes('"ok"'), "extending the plan brings the account back");
+
+  // Lifetime: no end date, never expires; switching back to a timed plan starts from today.
+  await call("applyPlan", "POST", { userId: row.id, choice: { lifetime: true } }, cookieAdmin);
+  const [lifetimeRow] = await db.select().from(schema.users).where(eq(schema.users.id, row.id));
+  check(lifetimeRow?.planLifetime === true && lifetimeRow?.planEndsAt === null, "a lifetime plan is stored with no end date");
+  check((await call("getSession", "GET", {}, cookieC)).text.includes('"ok"'), "a lifetime account can use the app");
+  await call("setSuspended", "POST", { userId: row.id, suspended: true }, cookieAdmin);
+  cookieC = sessionCookie((await call("login", "POST", { email, password })).setCookie);
+  check((await call("getSession", "GET", {}, cookieC)).text.includes('"suspended"'), "a lifetime account can still be suspended");
+  await call("setSuspended", "POST", { userId: row.id, suspended: false }, cookieAdmin);
+  cookieC = sessionCookie((await call("login", "POST", { email, password })).setCookie);
+  await call("applyPlan", "POST", { userId: row.id, choice: { preset: "1m" } }, cookieAdmin);
+  const [timedRow] = await db.select().from(schema.users).where(eq(schema.users.id, row.id));
+  check(timedRow?.planLifetime === false && timedRow?.planEndsAt instanceof Date, "switching back to a timed plan sets an end date again");
+  check((await call("getSession", "GET", {}, cookieC)).text.includes('"ok"'), "the account keeps working on the timed plan");
 }
 
 // ---------- run ----------

@@ -79,10 +79,13 @@ describe("account tokens", () => {
 describe("accountState and accessDecision", () => {
   const future = new Date(NOW + DAY);
   const past = new Date(NOW - DAY);
-  const row = (over: Partial<{ role: string; status: string; planEndsAt: Date | null; sessionVersion: number }>) => ({
+  const row = (
+    over: Partial<{ role: string; status: string; planEndsAt: Date | null; planLifetime: boolean; sessionVersion: number }>,
+  ) => ({
     role: "user",
     status: "active",
     planEndsAt: future as Date | null,
+    planLifetime: false,
     sessionVersion: 1,
     ...over,
   });
@@ -96,6 +99,14 @@ describe("accountState and accessDecision", () => {
     expect(accountState(row({ planEndsAt: past }), NOW)).toBe("expired");
     expect(accountState(row({ planEndsAt: null }), NOW)).toBe("expired");
     expect(accountState(row({}), NOW)).toBe("active");
+  });
+
+  it("never expires a lifetime account, but still honours pending and suspended", () => {
+    expect(accountState(row({ planLifetime: true, planEndsAt: null }), NOW)).toBe("active");
+    expect(accountState(row({ planLifetime: true, planEndsAt: past }), NOW)).toBe("active");
+    expect(accountState(row({ planLifetime: true, status: "suspended" }), NOW)).toBe("suspended");
+    expect(accountState(row({ planLifetime: true, status: "pending" }), NOW)).toBe("pending");
+    expect(accessDecision(row({ planLifetime: true, planEndsAt: null }), userClaims, NOW)).toEqual({ ok: true });
   });
 
   it("lets active users and the admin in", () => {

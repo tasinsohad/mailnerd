@@ -12,11 +12,11 @@ import { applyPlan } from "@/server/admin-users";
 
 export type PlanTarget = { id: string; name: string; email: string; state: string; planEndsAt: string | null };
 
-// Activate a sign-up or change a plan: a preset, a custom number of days or months, or an exact end date.
-// The preview uses the same planFor the server stores with.
+// Activate a sign-up or change a plan: a preset (or lifetime), a custom number of days or months, or an exact
+// end date. The preview uses the same planFor the server stores with.
 export function PlanDialog({ user, onClose, onDone }: { user: PlanTarget; onClose: () => void; onDone: () => void }) {
   const [kind, setKind] = useState<"preset" | "custom" | "until">("preset");
-  const [preset, setPreset] = useState<PlanPresetId>(user.state === "pending" ? "trial-7d" : "1m");
+  const [preset, setPreset] = useState<PlanPresetId | "lifetime">(user.state === "pending" ? "trial-7d" : "1m");
   const [amount, setAmount] = useState("30");
   const [unit, setUnit] = useState<"days" | "months">("days");
   const [until, setUntil] = useState("");
@@ -25,7 +25,9 @@ export function PlanDialog({ user, onClose, onDone }: { user: PlanTarget; onClos
   const untilDate = until ? new Date(`${until}T23:59:59`) : null; // the end of that day, in your timezone
   const choice: PlanChoice | null =
     kind === "preset"
-      ? { preset }
+      ? preset === "lifetime"
+        ? { lifetime: true }
+        : { preset }
       : kind === "custom"
         ? unit === "days"
           ? { days: Number(amount) }
@@ -38,7 +40,8 @@ export function PlanDialog({ user, onClose, onDone }: { user: PlanTarget; onClos
   let valid = false;
   if (choice) {
     try {
-      preview = `Access until ${planFor(choice, user.planEndsAt).endsAt.toLocaleString()}`;
+      const { endsAt } = planFor(choice, user.planEndsAt);
+      preview = endsAt ? `Access until ${endsAt.toLocaleString()}` : "Access never expires (lifetime).";
       valid = true;
     } catch (err) {
       preview = err instanceof Error ? err.message : "That plan isn't valid.";
@@ -109,6 +112,16 @@ export function PlanDialog({ user, onClose, onDone }: { user: PlanTarget; onClos
                 {p.label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => setPreset("lifetime")}
+              className={cn(
+                "rounded-lg border px-3 py-3 text-sm font-medium transition-colors",
+                preset === "lifetime" ? "border-primary bg-primary/10 text-foreground" : "border-border hover:bg-muted",
+              )}
+            >
+              Lifetime
+            </button>
           </div>
         )}
 

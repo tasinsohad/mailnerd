@@ -42,6 +42,8 @@ export type PublicAccount = {
   state: AccountState;
   planName: string | null;
   planEndsAt: string | null;
+  /** A lifetime plan: no end date, never expires. */
+  lifetime: boolean;
   createdAt: string;
   lastSignInAt: string | null;
 };
@@ -58,6 +60,7 @@ export function publicAccount(a: Account, nowMs = Date.now()): PublicAccount {
     state: accountState(a, nowMs),
     planName: a.planName,
     planEndsAt: iso(a.planEndsAt),
+    lifetime: Boolean(a.planLifetime),
     createdAt: iso(a.createdAt) ?? "",
     lastSignInAt: iso(a.lastSignInAt),
   };

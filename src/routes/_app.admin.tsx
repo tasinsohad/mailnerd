@@ -44,6 +44,7 @@ const STATE_STYLE: Record<string, string> = {
 const date = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : "—");
 
 function planText(u: UserRow): string {
+  if (u.lifetime) return "Lifetime · never expires";
   if (!u.planEndsAt) return "No plan yet";
   const days = daysLeft(u.planEndsAt);
   return days > 0

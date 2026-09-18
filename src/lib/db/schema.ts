@@ -15,6 +15,8 @@ export const users = pgTable("users", {
   status: text("status").notNull().default("pending"), // 'pending' | 'active' | 'suspended'
   planName: text("plan_name"),
   planEndsAt: timestamp("plan_ends_at", { withTimezone: true }),
+  // A lifetime plan never expires (plan_ends_at stays null). supabase/migrations/20260918200000_lifetime_plans.sql
+  planLifetime: boolean("plan_lifetime").notNull().default(false),
   activatedAt: timestamp("activated_at", { withTimezone: true }),
   lastSignInAt: timestamp("last_sign_in_at", { withTimezone: true }),
   // Bumped on password reset/change and suspension: every session issued before it stops working.

@@ -136,7 +136,8 @@ Check the **Jobs** page first, as when updating: this restarts the app. Change `
   created before accounts existed (the Nextus data). Changing `ADMIN_PASSWORD` signs the admin out; changing
   `SESSION_SECRET` signs everyone out.
 - **Everyone else** signs up at `/signup`. A new account waits until the admin activates it on the **Users** page
-  with a plan (7-day trial, 1/3/6 months, 1 year, a custom length, or an end date). When the plan ends the account
+  with a plan (7-day trial, 1/3/6 months, 1 year, lifetime, a custom length, or an end date). A lifetime plan never
+  expires; the admin can still suspend the account. When the plan ends the account
   is locked; its data stays and comes back when the plan is extended.
 - **Forgotten password:** the admin uses **Reset password** on the Users page and passes on the temporary password.
 - **Workspaces are private.** The admin can open any account's workspace from the switcher in the sidebar.

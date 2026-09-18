@@ -14,7 +14,14 @@ export const PLAN_PRESETS = [
 ] as const;
 
 export type PlanPresetId = (typeof PLAN_PRESETS)[number]["id"];
-export type PlanChoice = { preset: PlanPresetId } | { days: number } | { months: number } | { until: string };
+export type PlanChoice =
+  | { preset: PlanPresetId }
+  | { days: number }
+  | { months: number }
+  | { until: string }
+  | { lifetime: true };
+
+export const LIFETIME_LABEL = "Lifetime";
 
 /** `months` calendar months after `date` (UTC): the same day, or the month's last day when it's shorter. */
 export function addMonths(date: Date, months: number): Date {
@@ -32,18 +39,21 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 /**
  * When a plan choice ends, and the name to show for it. A length is added to the current end while that plan
  * is still running (extending never loses paid-for time), otherwise it starts now. An exact date is used as
- * given. Throws an Error with a message fit to show the admin.
+ * given. A lifetime plan has no end (endsAt null) and never expires. Throws an Error with a message fit to
+ * show the admin.
  */
 export function planFor(
   choice: PlanChoice,
   currentEnd: Date | string | null | undefined,
   nowMs: number = Date.now(),
-): { endsAt: Date; label: string } {
+): { endsAt: Date | null; label: string; lifetime: boolean } {
+  if ("lifetime" in choice) return { endsAt: null, label: LIFETIME_LABEL, lifetime: true };
+
   if ("until" in choice) {
     const endsAt = new Date(choice.until);
     if (!Number.isFinite(endsAt.getTime())) throw new Error("Pick a valid end date.");
     if (endsAt.getTime() <= nowMs) throw new Error("The end date must be in the future.");
-    return { endsAt, label: `Until ${endsAt.toISOString().slice(0, 10)}` };
+    return { endsAt, label: `Until ${endsAt.toISOString().slice(0, 10)}`, lifetime: false };
   }
 
   const current = currentEnd ? new Date(currentEnd).getTime() : NaN;
@@ -53,20 +63,20 @@ export function planFor(
     const preset = PLAN_PRESETS.find((p) => p.id === choice.preset);
     if (!preset) throw new Error("Unknown plan.");
     const endsAt = "days" in preset ? new Date(base.getTime() + preset.days * DAY_MS) : addMonths(base, preset.months);
-    return { endsAt, label: preset.label };
+    return { endsAt, label: preset.label, lifetime: false };
   }
   if ("days" in choice) {
     const { days } = choice;
     if (!Number.isInteger(days) || days < 1 || days > MAX_PLAN_DAYS) {
       throw new Error(`Days must be a whole number from 1 to ${MAX_PLAN_DAYS}.`);
     }
-    return { endsAt: new Date(base.getTime() + days * DAY_MS), label: `Custom: ${plural(days, "day")}` };
+    return { endsAt: new Date(base.getTime() + days * DAY_MS), label: `Custom: ${plural(days, "day")}`, lifetime: false };
   }
   const { months } = choice;
   if (!Number.isInteger(months) || months < 1 || months > MAX_PLAN_MONTHS) {
     throw new Error(`Months must be a whole number from 1 to ${MAX_PLAN_MONTHS}.`);
   }
-  return { endsAt: addMonths(base, months), label: `Custom: ${plural(months, "month")}` };
+  return { endsAt: addMonths(base, months), label: `Custom: ${plural(months, "month")}`, lifetime: false };
 }
 
 /** Whole days left on a plan, rounded up; 0 once it has ended (or if there is none). */

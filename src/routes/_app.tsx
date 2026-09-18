@@ -113,7 +113,7 @@ function UserBlock({ account, onSignOut }: { account: PublicAccount; onSignOut: 
             {account.role === "admin" ? (
               <span className="text-[11px] font-medium text-muted-foreground">Admin</span>
             ) : (
-              <PlanBadge planEndsAt={account.planEndsAt} />
+              <PlanBadge planEndsAt={account.planEndsAt} lifetime={account.lifetime} />
             )}
           </div>
         </div>
@@ -167,7 +167,7 @@ function AppLayout() {
           <Menu className="h-5 w-5" />
         </button>
         <Brand />
-        {!isAdmin && <PlanBadge planEndsAt={account.planEndsAt} className="ml-auto mr-1" />}
+        {!isAdmin && <PlanBadge planEndsAt={account.planEndsAt} lifetime={account.lifetime} className="ml-auto mr-1" />}
       </header>
 
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>

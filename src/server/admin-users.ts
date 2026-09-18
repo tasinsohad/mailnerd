@@ -23,6 +23,7 @@ const planChoiceSchema = z.union([
   z.object({ days: z.number().int() }),
   z.object({ months: z.number().int() }),
   z.object({ until: z.string().max(64) }),
+  z.object({ lifetime: z.literal(true) }),
 ]);
 const userIdSchema = z.string().min(1).max(64);
 
@@ -63,7 +64,7 @@ export const applyPlan = createServerFn({ method: "POST" })
     const { db } = context as unknown as Ctx;
     const target = await managedAccount(db, data.userId);
     if ("error" in target) return { ok: false, error: target.error as string | null };
-    let plan: { endsAt: Date; label: string };
+    let plan: { endsAt: Date | null; label: string; lifetime: boolean };
     try {
       plan = planFor(data.choice as PlanChoice, target.account.planEndsAt);
     } catch (err) {
@@ -75,7 +76,8 @@ export const applyPlan = createServerFn({ method: "POST" })
       .update(users)
       .set({
         planName: plan.label,
-        planEndsAt: plan.endsAt,
+        planEndsAt: plan.endsAt, // null for a lifetime plan
+        planLifetime: plan.lifetime,
         ...(activating ? { status: "active", activatedAt: new Date() } : {}),
       })
       .where(eq(users.id, target.account.id));

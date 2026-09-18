@@ -114,12 +114,14 @@ export type AccountState = "admin" | "pending" | "active" | "expired" | "suspend
 export type AccessDenial = "pending" | "suspended" | "expired" | "missing";
 export type AccessResult = { ok: true } | { ok: false; reason: AccessDenial };
 
-type StateFields = { role: string; status: string; planEndsAt: Date | string | null };
+type StateFields = { role: string; status: string; planEndsAt: Date | string | null; planLifetime?: boolean | null };
 
 export function accountState(account: StateFields, nowMs = Date.now()): AccountState {
   if (account.role === "admin") return "admin";
   if (account.status === "pending") return "pending";
   if (account.status !== "active") return "suspended";
+  // A lifetime plan never runs out; the admin can still suspend the account (checked above).
+  if (account.planLifetime) return "active";
   const ends = account.planEndsAt ? new Date(account.planEndsAt).getTime() : NaN;
   return Number.isFinite(ends) && ends > nowMs ? "active" : "expired";
 }
