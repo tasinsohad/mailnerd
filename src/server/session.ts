@@ -220,11 +220,11 @@ export const signup = createServerFn({ method: "POST" })
     const waitMs = signupThrottle.retryAfterMs(client);
     if (waitMs > 0) return { ok: false, error: `Too many new accounts from here. ${tryAgainIn(waitMs)}` };
 
+    signupThrottle.recordFailure(client); // counts every attempt, taken emails included, so the limit also slows probing for which emails have accounts
     const db = await database();
     const existing = await db.query.users.findFirst({ where: eq(users.email, checked.value.email), columns: { id: true } });
     if (existing) return { ok: false, error: EMAIL_TAKEN };
 
-    signupThrottle.recordFailure(client); // counts this sign-up
     const passwordHash = await hashPassword(checked.value.password);
     let created: Account;
     try {
