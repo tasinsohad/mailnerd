@@ -19,6 +19,7 @@ import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as AppServersRouteImport } from './routes/_app.servers'
 import { Route as AppJobsRouteImport } from './routes/_app.jobs'
 import { Route as AppDomainsRouteImport } from './routes/_app.domains'
+import { Route as AppAdminRouteImport } from './routes/_app.admin'
 import { Route as AppJobsIndexRouteImport } from './routes/_app.jobs.index'
 import { Route as AppDomainsIndexRouteImport } from './routes/_app.domains.index'
 import { Route as AppJobsIdRouteImport } from './routes/_app.jobs.$id'
@@ -73,6 +74,11 @@ const AppDomainsRoute = AppDomainsRouteImport.update({
   path: '/domains',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAdminRoute = AppAdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppJobsIndexRoute = AppJobsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -99,6 +105,7 @@ export interface FileRoutesByFullPath {
   '/account': typeof AccountRoute
   '/auth': typeof AuthRoute
   '/signup': typeof SignupRoute
+  '/admin': typeof AppAdminRoute
   '/domains': typeof AppDomainsRouteWithChildren
   '/jobs': typeof AppJobsRouteWithChildren
   '/servers': typeof AppServersRoute
@@ -113,6 +120,7 @@ export interface FileRoutesByTo {
   '/account': typeof AccountRoute
   '/auth': typeof AuthRoute
   '/signup': typeof SignupRoute
+  '/admin': typeof AppAdminRoute
   '/servers': typeof AppServersRoute
   '/settings': typeof AppSettingsRoute
   '/troubleshoot': typeof AppTroubleshootRoute
@@ -128,6 +136,7 @@ export interface FileRoutesById {
   '/account': typeof AccountRoute
   '/auth': typeof AuthRoute
   '/signup': typeof SignupRoute
+  '/_app/admin': typeof AppAdminRoute
   '/_app/domains': typeof AppDomainsRouteWithChildren
   '/_app/jobs': typeof AppJobsRouteWithChildren
   '/_app/servers': typeof AppServersRoute
@@ -146,6 +155,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/auth'
     | '/signup'
+    | '/admin'
     | '/domains'
     | '/jobs'
     | '/servers'
@@ -160,6 +170,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/auth'
     | '/signup'
+    | '/admin'
     | '/servers'
     | '/settings'
     | '/troubleshoot'
@@ -174,6 +185,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/auth'
     | '/signup'
+    | '/_app/admin'
     | '/_app/domains'
     | '/_app/jobs'
     | '/_app/servers'
@@ -265,6 +277,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDomainsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/admin': {
+      id: '/_app/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AppAdminRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/jobs/': {
       id: '/_app/jobs/'
       path: '/'
@@ -324,6 +343,7 @@ const AppJobsRouteWithChildren =
   AppJobsRoute._addFileChildren(AppJobsRouteChildren)
 
 interface AppRouteChildren {
+  AppAdminRoute: typeof AppAdminRoute
   AppDomainsRoute: typeof AppDomainsRouteWithChildren
   AppJobsRoute: typeof AppJobsRouteWithChildren
   AppServersRoute: typeof AppServersRoute
@@ -333,6 +353,7 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppAdminRoute: AppAdminRoute,
   AppDomainsRoute: AppDomainsRouteWithChildren,
   AppJobsRoute: AppJobsRouteWithChildren,
   AppServersRoute: AppServersRoute,
