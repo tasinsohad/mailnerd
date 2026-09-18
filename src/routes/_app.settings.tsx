@@ -5,6 +5,7 @@ import { getSecrets, saveSecrets, verifyCfToken, syncCfZones } from "@/server/se
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ChangePasswordCard } from "@/components/ChangePasswordCard";
 import { KeyRound, Cloud, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -15,6 +16,7 @@ export const Route = createFileRoute("/_app/settings")({
 type SecretsForm = { cfApiToken?: string; clearCfApiToken?: boolean; cfAccountId?: string };
 
 function SettingsPage() {
+  const { account } = Route.useRouteContext();
   const qc = useQueryClient();
   // cfApiToken holds only a NEW token being typed: the saved one never reaches the browser.
   const [form, setForm] = useState({ cfApiToken: "", cfAccountId: "" });
@@ -101,6 +103,8 @@ function SettingsPage() {
         <h1 className="text-2xl font-bold text-foreground">Settings</h1>
         <p className="text-sm text-muted-foreground mt-1">Configure your API integrations</p>
       </div>
+
+      {account.role !== "admin" && <ChangePasswordCard />}
 
       {isLoading ? (
         <div className="flex justify-center py-20">
