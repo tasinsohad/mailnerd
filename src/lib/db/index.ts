@@ -50,8 +50,9 @@ export function getDb(): any {
       connect_timeout: 10,
       // Connection timeout for queries
       idle_timeout: 20,
-      // Maximum connections in pool (keep it low for serverless)
-      max: 1,
+      // Several people use the app at once now. It's one long-running server behind Supabase's
+      // transaction pooler, so a small pool is safe (DB_POOL_MAX overrides it).
+      max: Math.min(20, Math.max(1, Number(process.env.DB_POOL_MAX) || 5)),
     });
 
     dbInstances.set(dbUrl, drizzle({ client: sql, schema }));

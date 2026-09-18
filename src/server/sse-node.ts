@@ -1,10 +1,11 @@
-import { users, domains } from "../lib/db/schema";
+import { domains } from "../lib/db/schema";
 import { eq } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { jobEvents, inProcessProvisions } from "./events";
 import { createRedis, waitForRedis } from "./redis";
 import { consoleChannel } from "./console-bus";
-import { readCookie, sessionEmail, SESSION_COOKIE } from "./auth-core";
+import { readAuthConfig, readCookie, SESSION_COOKIE } from "./auth-core";
+import { resolveSession, WORKSPACE_COOKIE } from "./accounts-db";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 // Live console for an ad-hoc troubleshoot run. Not tied to a domain — the runId is an
@@ -43,23 +44,43 @@ function streamConsole(runId: string, req: IncomingMessage, res: ServerResponse)
   });
 }
 
-// All app data belongs to this internal user (see src/lib/auth.ts); signing in grants access to it.
-const DEFAULT_USER_EMAIL = "admin@smtpforge.local";
-
 const redis = process.env.REDIS_URL ? createRedis(process.env.REDIS_URL) : null;
 
 export default async function sseHandler(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url || "", "http://localhost");
 
-  // The same session check every server function makes (requireAuth): these streams carry server
-  // output and setup logs. EventSource sends the session cookie by itself on same-site requests.
-  if (!sessionEmail(readCookie(req.headers.cookie, SESSION_COOKIE))) {
-    res.statusCode = 401;
-    res.end("Sign in required");
+  // The same session check every server function makes (requireAuth): these streams carry server output and
+  // setup logs. EventSource sends the session cookie by itself on same-site requests.
+  const auth = readAuthConfig(process.env);
+  let workspaceId: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let db: any;
+  try {
+    db = getDb();
+    const session = auth.ok
+      ? await resolveSession(
+          db,
+          readCookie(req.headers.cookie, SESSION_COOKIE),
+          readCookie(req.headers.cookie, WORKSPACE_COOKIE),
+          auth.config,
+        )
+      : ({ state: "signed-out" } as const);
+    if (session.state !== "ok") {
+      res.statusCode = session.state === "locked" ? 403 : 401;
+      res.end(session.state === "locked" ? "Account locked" : "Sign in required");
+      return;
+    }
+    workspaceId = session.workspaceId;
+  } catch (dbErr) {
+    console.error("Session check failed in SSE handler:", dbErr);
+    if (!res.headersSent && !res.destroyed) {
+      res.statusCode = 503;
+      res.end("Database unavailable");
+    }
     return;
   }
 
-  // Troubleshoot console stream — no domain involved, so handle it before the domain lookup.
+  // Troubleshoot console stream — no domain involved (the runId is an unguessable UUID the client made).
   const runId = url.searchParams.get("runId");
   if (runId) {
     streamConsole(runId, req, res);
@@ -67,46 +88,27 @@ export default async function sseHandler(req: IncomingMessage, res: ServerRespon
   }
 
   const domainId = url.searchParams.get("domainId");
-
   if (!domainId) {
     res.statusCode = 400;
     res.end("Missing domainId or runId");
     return;
   }
 
-  const email = DEFAULT_USER_EMAIL;
-
-  let user;
   let domain;
-
   try {
-    const db = getDb();
-    user = await db.query.users.findFirst({
-      where: eq(users.email, email),
-    });
-
-    if (!user) {
-      const [newUser] = await db.insert(users).values({ email }).returning();
-      user = newUser;
-    }
-
-    domain = await db.query.domains.findFirst({
-      where: eq(domains.id, domainId),
-    });
-
-    if (!domain || domain.userId !== user.id) {
-      res.statusCode = 403;
-      res.end("Forbidden");
-      return;
-    }
+    domain = await db.query.domains.findFirst({ where: eq(domains.id, domainId) });
   } catch (dbErr) {
-    console.error("Database check failed in SSE handler:", dbErr);
-    // Without the lookup there's no telling whether this domain belongs to the app's account, so
-    // don't stream its logs.
+    console.error("Domain lookup failed in SSE handler:", dbErr);
     if (!res.headersSent && !res.destroyed) {
       res.statusCode = 503;
       res.end("Database unavailable");
     }
+    return;
+  }
+  // Only the workspace this session is in: a user's own domains, or the workspace the admin opened.
+  if (!domain || domain.userId !== workspaceId) {
+    res.statusCode = 403;
+    res.end("Forbidden");
     return;
   }
 
