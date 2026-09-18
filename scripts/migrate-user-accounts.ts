@@ -32,7 +32,8 @@ if (adminEmail) {
   const clash = await sql`select id from public.users where lower(email) = ${email} and role <> 'admin'`;
   if (clash.length) throw new Error(`Another account already uses ${email}; not renaming the admin.`);
   const updated = await sql`update public.users set email = ${email} where role = 'admin' returning id`;
-  console.log(updated.length === 1 ? `Admin account now uses ${email}.` : "No admin row found: run the migration first.");
+  if (updated.length === 0) throw new Error("No admin row found: run the migration first.");
+  console.log(`Admin account now uses ${email}.`);
 } else {
   const migration = readFileSync(join(repo, "supabase/migrations/20260918100000_user_accounts.sql"), "utf8");
   await sql.begin(async (tx) => {
@@ -42,7 +43,11 @@ if (adminEmail) {
 }
 
 const [admin] = await sql`select id, email, name, role, status from public.users where role = 'admin'`;
-console.log(`Admin row: ${admin ? `${admin.id} (${admin.name}, ${admin.status})` : "MISSING"}`);
+if (!admin) {
+  await sql.end();
+  throw new Error("Admin row missing after the migration.");
+}
+console.log(`Admin row: ${admin.id} (${admin.name}, ${admin.status})`);
 
 const comparePath = flag("--compare");
 if (comparePath) {
