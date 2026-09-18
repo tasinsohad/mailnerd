@@ -35,7 +35,7 @@ if (adminEmail) {
   if (updated.length === 0) throw new Error("No admin row found: run the migration first.");
   console.log(`Admin account now uses ${email}.`);
 } else {
-  const MIGRATIONS = ["20260918100000_user_accounts.sql", "20260918200000_lifetime_plans.sql"];
+  const MIGRATIONS = ["20260918100000_user_accounts.sql", "20260918200000_lifetime_plans.sql", "20260918300000_setup_runs.sql"];
   await sql.begin(async (tx) => {
     for (const file of MIGRATIONS) await tx.unsafe(readFileSync(join(repo, "supabase/migrations", file), "utf8"));
   });

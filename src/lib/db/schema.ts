@@ -101,6 +101,10 @@ export const domains = pgTable("domains", {
   serverId: text("server_id").references(() => servers.id),
   name: text("name").notNull().unique(),
   status: text("status").notNull().default("pending"),
+  // Server-side setup run (src/lib/setup-state.ts SetupState) and the latest mailbox run's progress
+  // (src/lib/mailbox-progress.ts MailboxProgress).
+  setupState: jsonb("setup_state"),
+  mailboxProgress: jsonb("mailbox_progress"),
   ipAddress: text("ip_address"),
   sshUser: text("ssh_user"),
   sshPassword: text("ssh_password"),
