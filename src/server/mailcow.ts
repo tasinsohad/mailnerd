@@ -1,12 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireAuth } from "@/lib/auth";
 import { z } from "zod";
-import { domains } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { domains, plannedInboxes } from "@/lib/db/schema";
+import { eq, and, sql } from "drizzle-orm";
 import { ensureMailDomains, createMailboxes, unproxyDns } from "./pipeline";
 import { ensureWorkingApiKey } from "./mailcow-key";
 import { syncDkimForDomain } from "./domains-heal";
 import { claimDomain, releaseDomain, busyMessage } from "./domain-locks";
+import { createMailboxProgressWriter } from "./mailbox-progress-store";
 
 export const setupMailcowDomain = createServerFn({ method: "POST" })
   .middleware([requireAuth])
@@ -56,11 +57,20 @@ export const setupMailcowDomain = createServerFn({ method: "POST" })
         }
       }
       const { existingDomains, results: domainResults, ssh } = ensured;
+      // Live progress for the job board / domain page (src/lib/mailbox-progress.ts): total is the
+      // domain's full planned inbox count, not just what's pending this run.
+      const [{ n: plannedTotal }] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(plannedInboxes)
+        .where(eq(plannedInboxes.domainId, domain.id));
+      const progressWriter = createMailboxProgressWriter(db, domain.id, plannedTotal);
       // Reuse the transport ensureMailDomains chose (direct, or SSH-tunnel when the app's IP is
       // allow-list-blocked) so the mailbox creates go the same reachable way.
       const { results: mailboxResults, summary, failed } = await createMailboxes(db, domain, existingDomains, {
         recreate: data.recreate,
         ssh,
+        onProgress: (done, failedCount, total, finished) =>
+          finished ? void progressWriter.finish(done, failedCount) : progressWriter.update(done),
       });
       return { results: [...domainResults, ...mailboxResults], summary, failed };
     } finally {

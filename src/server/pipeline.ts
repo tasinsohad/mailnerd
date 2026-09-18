@@ -442,7 +442,12 @@ export async function createMailboxes(
   db: Db,
   domain: Domain,
   existingDomains: Set<string>,
-  opts?: { recreate?: boolean; ssh?: MailcowSshTarget },
+  opts?: {
+    recreate?: boolean;
+    ssh?: MailcowSshTarget;
+    /** `finished` is false for every in-run update and true exactly once, at the end, with the final counts. */
+    onProgress?: (done: number, failed: number, total: number, finished: boolean) => void;
+  },
 ): Promise<{
   results: MailcowResultRow[];
   summary: { total: number; created: number; failed: number };
@@ -551,8 +556,10 @@ export async function createMailboxes(
       markFailed: (ids) => updateRows(ids, { status: "failed" }),
       newPassword: generateMailboxPassword,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      onProgress: (done, total) => opts?.onProgress?.(done, 0, total, false),
     },
   );
+  opts?.onProgress?.(run.created, run.failed.length, run.total, true);
 
   return {
     results: run.results.map((r) => ({ type: "mailbox", name: r.email, success: r.success, error: r.error })),

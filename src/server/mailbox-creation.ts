@@ -37,6 +37,9 @@ export interface MailboxCreationDeps {
   markFailed(ids: string[]): Promise<void>;
   newPassword(): string;
   sleep(ms: number): Promise<void>;
+  /** Called once after the already-finished mailboxes are marked, after every mailbox Mailcow accepts
+   *  in any round, and once at the end. `done` = mailboxes finished (already done + accepted this run). */
+  onProgress?(done: number, total: number): void;
 }
 
 export interface MailboxCreationResult {
@@ -71,6 +74,7 @@ export async function runMailboxCreation(
 
   const alreadyDone = inboxes.filter((ib) => ib.hasPassword && existing.has(address(ib)));
   if (alreadyDone.length) await deps.markActive(ids(alreadyDone));
+  deps.onProgress?.(alreadyDone.length, inboxes.length);
   const doneIds = new Set(ids(alreadyDone));
 
   let pending = inboxes.filter((ib) => !doneIds.has(ib.id));
@@ -100,6 +104,7 @@ export async function runMailboxCreation(
         await deps.savePassword(ib.id, password);
         accepted.add(ib.id);
         lastError.delete(ib.id);
+        deps.onProgress?.(alreadyDone.length + accepted.size, inboxes.length);
       } else {
         lastError.set(ib.id, outcome.error || "Mailcow rejected it");
       }
@@ -130,6 +135,7 @@ export async function runMailboxCreation(
 
   const failedIds = new Set(ids(pending));
   const reason = (ib: InboxToCreate) => lastError.get(ib.id) ?? "Not created";
+  deps.onProgress?.(inboxes.length - pending.length, inboxes.length);
   return {
     total: inboxes.length,
     created: inboxes.length - pending.length,

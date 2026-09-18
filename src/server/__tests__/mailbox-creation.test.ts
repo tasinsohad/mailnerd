@@ -234,4 +234,26 @@ describe("runMailboxCreation", () => {
     expect(world.status.get("id1")).toBe("failed");
     expect(result.failed[0].error).toBe("quota exceeded");
   });
+
+  it("reports progress at the start, after each accepted mailbox, and at the end", async () => {
+    const world = fakeWorld();
+    const progress: string[] = [];
+    await runMailboxCreation([inbox(1), inbox(2)], {
+      ...world.deps,
+      onProgress: (done, total) => progress.push(`${done}/${total}`),
+    });
+
+    expect(progress).toEqual(["0/2", "1/2", "2/2", "2/2"]);
+  });
+
+  it("counts already-finished mailboxes in the first progress report", async () => {
+    const world = fakeWorld({ existing: ["user1@example.com"] });
+    const progress: string[] = [];
+    await runMailboxCreation([inbox(1, { hasPassword: true })], {
+      ...world.deps,
+      onProgress: (done, total) => progress.push(`${done}/${total}`),
+    });
+
+    expect(progress[0]).toBe("1/1");
+  });
 });
