@@ -90,14 +90,14 @@ export const setSuspended = createServerFn({ method: "POST" })
     const target = await managedAccount(db, data.userId);
     if ("error" in target) return { ok: false, error: target.error as string | null };
     if (data.suspended) {
-      // A new session version signs them out everywhere at once.
+      // Suspend / Reactivate: both bump session_version to sign out existing sessions everywhere at once.
       await db
         .update(users)
         .set({ status: "suspended", sessionVersion: sql`${users.sessionVersion} + 1` })
         .where(eq(users.id, target.account.id));
     } else {
       if (target.account.status !== "suspended") return { ok: false, error: "This account isn't suspended." };
-      await db.update(users).set({ status: "active" }).where(eq(users.id, target.account.id));
+      await db.update(users).set({ status: "active", sessionVersion: sql`${users.sessionVersion} + 1` }).where(eq(users.id, target.account.id));
     }
     return { ok: true, error: null as string | null };
   });
@@ -129,8 +129,12 @@ export const rejectSignup = createServerFn({ method: "POST" })
       return { ok: false, error: "Only a pending sign-up can be rejected. Suspend this account instead." };
     }
     try {
-      await db.delete(userSecrets).where(eq(userSecrets.userId, target.account.id));
-      await db.delete(users).where(eq(users.id, target.account.id));
+      // One transaction: if the account turns out to own data, its settings aren't deleted either.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await db.transaction(async (tx: any) => {
+        await tx.delete(userSecrets).where(eq(userSecrets.userId, target.account.id));
+        await tx.delete(users).where(eq(users.id, target.account.id));
+      });
     } catch (err) {
       const code = (err as { code?: string; cause?: { code?: string } })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
       if (code === "23503") return { ok: false, error: "This account has data, so it can't be deleted. Suspend it instead." };
