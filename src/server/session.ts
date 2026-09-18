@@ -203,6 +203,10 @@ export const login = createServerFn({ method: "POST" })
       return { ok: false, error: DB_DOWN };
     }
     setSessionCookie(createAccountToken({ accountId: account.id, version: account.sessionVersion, admin }, auth.config));
+    // Start every sign-in back in the account's own workspace, not whatever the browser last had open
+    // (only the admin can view another workspace anyway, but this also clears a stale cookie left by an
+    // earlier admin session on a shared machine).
+    deleteCookie(WORKSPACE_COOKIE, { path: "/" });
     // A pending, suspended or expired account is signed in too: the app sends it to /account.
     return { ok: true, error: null as string | null };
   });
