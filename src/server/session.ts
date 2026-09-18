@@ -54,6 +54,11 @@ import {
 // Failed sign-ins per client (an IPv6 /64 counts as one), plus a cap on failures from everyone together.
 // In memory: a restart clears it, which is fine for slowing guessing.
 const loginThrottle = createLoginThrottle();
+// Failed sign-ins per email, regardless of which client they come from: without this, a successful
+// sign-in resets the *client's* count, so an attacker who owns a self-signed-up account could alternate
+// guesses at a victim's email with real sign-ins to their own and never trip the per-client limit. No
+// global cap here (that's loginThrottle's job); this only slows guessing against one email address.
+const emailThrottle = createLoginThrottle({ maxFailures: 10, maxGlobalFailures: Number.MAX_SAFE_INTEGER });
 // Sign-ups (not failures) per client and in total.
 const signupThrottle = createSignupThrottle();
 
@@ -163,7 +168,8 @@ export const login = createServerFn({ method: "POST" })
     }
 
     const client = clientAddress();
-    const waitMs = loginThrottle.retryAfterMs(client);
+    const emailKey = data.email.trim().toLowerCase();
+    const waitMs = Math.max(loginThrottle.retryAfterMs(client), emailThrottle.retryAfterMs(emailKey));
     if (waitMs > 0) return { ok: false, error: `Too many failed attempts. ${tryAgainIn(waitMs)}` };
 
     let account: Account;
@@ -175,8 +181,7 @@ export const login = createServerFn({ method: "POST" })
         found = await ensureAdminAccount(db, auth.config.email);
         admin = true;
       } else {
-        const email = data.email.trim().toLowerCase();
-        const row: Account | undefined = await db.query.users.findFirst({ where: eq(users.email, email) });
+        const row: Account | undefined = await db.query.users.findFirst({ where: eq(users.email, emailKey) });
         if (row && row.role === "user") {
           if (await verifyPassword(data.password, row.passwordHash)) found = row;
         } else {
@@ -186,9 +191,11 @@ export const login = createServerFn({ method: "POST" })
 
       if (!found) {
         loginThrottle.recordFailure(client);
+        emailThrottle.recordFailure(emailKey);
         return { ok: false, error: "Wrong email or password." };
       }
       loginThrottle.reset(client);
+      emailThrottle.reset(emailKey);
       await db.update(users).set({ lastSignInAt: new Date() }).where(eq(users.id, found.id));
       account = found;
     } catch (err) {
