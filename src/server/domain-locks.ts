@@ -63,3 +63,21 @@ export function releaseDomain(domainId: string, owner: string): void {
 export function busyMessage(running: DomainRunKind): string {
   return `A ${running} is already running for this domain. Wait for it to finish, then try again.`;
 }
+
+const g2 = globalThis as unknown as { __serverClaims?: Map<string, { owner: string; since: number }> };
+const serverClaims = g2.__serverClaims ?? (g2.__serverClaims = new Map());
+const ipKey = (ip: string) => ip.trim().toLowerCase();
+
+/** One setup per server IP at a time: two Mailcow installs on one box would trample each other. */
+export function claimServer(ip: string, owner: string, now = Date.now()): { ok: true } | { ok: false; heldBy: string } {
+  const key = ipKey(ip);
+  const current = serverClaims.get(key);
+  if (current && now - current.since <= STALE_CLAIM_MS && current.owner !== owner) return { ok: false, heldBy: current.owner };
+  serverClaims.set(key, { owner, since: now });
+  return { ok: true };
+}
+
+export function releaseServer(ip: string, owner: string): void {
+  const key = ipKey(ip);
+  if (serverClaims.get(key)?.owner === owner) serverClaims.delete(key);
+}

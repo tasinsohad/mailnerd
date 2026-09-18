@@ -5,6 +5,8 @@ import {
   activeRun,
   busyMessage,
   newClaimOwner,
+  claimServer,
+  releaseServer,
   STALE_CLAIM_MS,
 } from "../domain-locks";
 
@@ -18,8 +20,16 @@ function claim(kind: Parameters<typeof claimDomain>[1], owner = newClaimOwner(),
   return result;
 }
 
+const heldServers: { ip: string; owner: string }[] = [];
+function claimSrv(ip: string, owner: string, now?: number) {
+  const result = claimServer(ip, owner, now);
+  if (result.ok) heldServers.push({ ip, owner });
+  return result;
+}
+
 afterEach(() => {
   for (const owner of held.splice(0)) releaseDomain("d1", owner);
+  for (const { ip, owner } of heldServers.splice(0)) releaseServer(ip, owner);
 });
 
 describe("domain run locks", () => {
@@ -65,5 +75,38 @@ describe("domain run locks", () => {
   it("says what's already running", () => {
     expect(busyMessage("server setup")).toMatch(/server setup is already running/i);
     expect(busyMessage("mailbox setup")).toMatch(/mailbox setup is already running/i);
+  });
+});
+
+// Regression: two Mailcow installs on the same server IP would trample each other, even across
+// different domains (each domain has its own domain-lock, but they can share a server).
+describe("server run locks", () => {
+  it("lets one owner claim a server IP and refuses a second owner with heldBy", () => {
+    expect(claimSrv("1.2.3.4", "a")).toEqual({ ok: true });
+    expect(claimSrv("1.2.3.4", "b")).toEqual({ ok: false, heldBy: "a" });
+  });
+
+  it("lets the same owner re-claim the server", () => {
+    expect(claimSrv("1.2.3.4", "a")).toEqual({ ok: true });
+    expect(claimSrv("1.2.3.4", "a")).toEqual({ ok: true });
+  });
+
+  it("ignores a release from a non-owner", () => {
+    claimSrv("1.2.3.4", "a");
+    releaseServer("1.2.3.4", "someone-else");
+    expect(claimServer("1.2.3.4", "b")).toEqual({ ok: false, heldBy: "a" });
+    releaseServer("1.2.3.4", "a");
+  });
+
+  it("treats a different IP as independent", () => {
+    expect(claimSrv("1.2.3.4", "a")).toEqual({ ok: true });
+    expect(claimSrv("5.6.7.8", "b")).toEqual({ ok: true });
+  });
+
+  it("treats a claim nobody refreshed for STALE_CLAIM_MS as abandoned", () => {
+    const start = Date.now();
+    claimSrv("1.2.3.4", "a", start);
+    expect(claimServer("1.2.3.4", "b", start + STALE_CLAIM_MS - 1)).toEqual({ ok: false, heldBy: "a" });
+    expect(claimSrv("1.2.3.4", "b", start + STALE_CLAIM_MS + 1)).toEqual({ ok: true });
   });
 });
