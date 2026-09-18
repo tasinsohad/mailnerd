@@ -10,6 +10,7 @@ import {
   cloudflareZones,
   userSecrets,
   serverHealth,
+  jobTemplates,
 } from "@/lib/db/schema";
 import { eq, and, desc, inArray, getTableColumns } from "drizzle-orm";
 import { planDomain, randInt, DomainPlan, generateDnsRecords } from "@/lib/planning";
@@ -266,6 +267,12 @@ export const deleteDomain = createServerFn({ method: "POST" })
     if (!db) return { ok: false, error: "Database not connected" };
 
     try {
+      // The child tables are keyed by domain id alone, so check the domain is in this workspace first.
+      const owned = await db.query.domains.findFirst({
+        where: and(eq(domains.id, data.id), eq(domains.userId, userId)),
+        columns: { id: true },
+      });
+      if (!owned) return { ok: false, error: "Domain not found" };
       await db.delete(dnsRecords).where(eq(dnsRecords.domainId, data.id));
       await db.delete(plannedInboxes).where(eq(plannedInboxes.domainId, data.id));
       await db.delete(domainPlans).where(eq(domainPlans.domainId, data.id));
@@ -353,12 +360,22 @@ export const addDomainsWizardAction = createServerFn({ method: "POST" })
       const names = data.names ?? ["Alice Johnson", "John Doe", "Marco", "Sofia Rossi"];
       const placement = data.placement ?? "subdomain";
 
+      // A template from another workspace is ignored rather than linked.
+      const templateId = data.templateId
+        ? ((
+            await db.query.jobTemplates.findFirst({
+              where: and(eq(jobTemplates.id, data.templateId), eq(jobTemplates.userId, userId)),
+              columns: { id: true },
+            })
+          )?.id ?? null)
+        : null;
+
       const [batch] = await db
         .insert(domainBatches)
         .values({
           userId,
           name: data.batchName,
-          templateId: data.templateId ?? null,
+          templateId,
         })
         .returning();
 

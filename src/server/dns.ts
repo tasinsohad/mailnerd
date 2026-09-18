@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireAuth } from "@/lib/auth";
 import { z } from "zod";
-import { dnsRecords } from "@/lib/db/schema";
+import { dnsRecords, domains } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 
 export const listDnsRecords = createServerFn({ method: "GET" })
@@ -32,6 +32,12 @@ export const createDnsRecord = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { db, userId } = context as any;
+    // Only on a domain in this workspace: records get pushed to the domain owner's Cloudflare zone.
+    const owned = await db.query.domains.findFirst({
+      where: and(eq(domains.id, data.domainId), eq(domains.userId, userId)),
+      columns: { id: true },
+    });
+    if (!owned) throw new Error("Domain not found");
     const [res] = await db
       .insert(dnsRecords)
       .values({

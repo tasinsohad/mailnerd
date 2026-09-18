@@ -18,6 +18,13 @@ export const createDomainBatch = createServerFn({ method: "POST" })
     if (!db) return { error: "Database not connected" };
 
     try {
+      if (data.templateId) {
+        const template = await db.query.jobTemplates.findFirst({
+          where: and(eq(jobTemplates.id, data.templateId), eq(jobTemplates.userId, userId)),
+          columns: { id: true },
+        });
+        if (!template) return { error: "Template not found" };
+      }
       const [res] = await db
         .insert(domainBatches)
         .values({
