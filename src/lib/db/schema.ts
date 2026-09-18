@@ -7,6 +7,18 @@ export const users = pgTable("users", {
     .primaryKey()
     .$defaultFn(() => crypto.randomUUID()),
   email: text("email").notNull().unique(),
+  // Accounts (supabase/migrations/20260918100000_user_accounts.sql). The admin signs in with ADMIN_EMAIL /
+  // ADMIN_PASSWORD from the environment, so its password_hash stays null.
+  name: text("name"),
+  passwordHash: text("password_hash"),
+  role: text("role").notNull().default("user"), // 'admin' | 'user'
+  status: text("status").notNull().default("pending"), // 'pending' | 'active' | 'suspended'
+  planName: text("plan_name"),
+  planEndsAt: timestamp("plan_ends_at", { withTimezone: true }),
+  activatedAt: timestamp("activated_at", { withTimezone: true }),
+  lastSignInAt: timestamp("last_sign_in_at", { withTimezone: true }),
+  // Bumped on password reset/change and suspension: every session issued before it stops working.
+  sessionVersion: integer("session_version").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
