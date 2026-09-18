@@ -11,10 +11,18 @@ import { createSlotLimiter } from "./slot-limiter";
 import { claimDomain, releaseDomain, busyMessage } from "./domain-locks";
 import { ensureMailDomains, createMailboxes, syncDkim, unproxyDns } from "./pipeline";
 import { ensureWorkingApiKey } from "./mailcow-key";
+import {
+  isFinalAttempt,
+  isServerBusyError,
+  runAttempts,
+  SETUP_ATTEMPTS,
+  RETRY_BASE_MS,
+  SERVER_BUSY_RECHECK_MS,
+} from "./setup-attempts";
 import crypto from "crypto";
 
 // Try to decrypt credentials, falling back to plain text if not encrypted
-function tryDecrypt(value: string | null | undefined): string | null {
+export function tryDecrypt(value: string | null | undefined): string | null {
   if (!value) return null;
   try {
     return decrypt(value);
@@ -86,9 +94,10 @@ if (process.env.REDIS_URL) {
       connection: connection as any,
       defaultJobOptions: {
         // Retry each domain up to 3 times with exponential backoff, then leave it failed
-        // (executeProvisionJob records the error in terminalLogs + status on each attempt).
-        attempts: 3,
-        backoff: { type: "exponential", delay: 30000 },
+        // (each attempt records its error in terminalLogs; a setup run also in setup_state).
+        // setup-attempts.ts mirrors this for the in-process fallback.
+        attempts: SETUP_ATTEMPTS,
+        backoff: { type: "exponential", delay: RETRY_BASE_MS },
         removeOnComplete: 100,
         // Kept a week for troubleshooting, then dropped: Redis writes job data to disk.
         removeOnFail: { age: 7 * 24 * 60 * 60, count: 200 },
@@ -104,7 +113,12 @@ if (process.env.REDIS_URL) {
           const key = String(job.id);
           const inFlight = setupPasses.get(key);
           if (inFlight) return inFlight;
-          const pass = runQueuedSetup(connection, job, token);
+          // "domain-setup": a setup run (domain-setup.ts). "setup": the older provisioning job, still
+          // run for jobs queued before setup runs existed.
+          const pass =
+            job.name === "domain-setup"
+              ? runQueuedDomainSetup(connection, job, token)
+              : runQueuedSetup(connection, job, token);
           setupPasses.set(key, pass);
           try {
             await pass;
@@ -125,13 +139,8 @@ if (process.env.REDIS_URL) {
   }
 }
 
-export async function addServerSetupJob(
-  domainId: string,
-  ipAddress: string,
-  sshUser: string,
-  sshPassword?: string | null,
-  domainName?: string,
-) {
+// The IP, SSH user and domain name end up in the deploy script's shell: validate and sanitize them first.
+export function checkedServerTarget(ipAddress: string, sshUser: string, domainName?: string) {
   if (!isValidHost(ipAddress)) {
     throw new Error("Invalid IP address or hostname");
   }
@@ -141,10 +150,25 @@ export async function addServerSetupJob(
   if (domainName && !isValidDomainName(domainName)) {
     throw new Error("Invalid domain name");
   }
+  return {
+    ipAddress: sanitizeShellInput(ipAddress),
+    sshUser: sanitizeShellInput(sshUser),
+    domainName: sanitizeShellInput(domainName),
+  };
+}
 
-  const sanitizedIp = sanitizeShellInput(ipAddress);
-  const sanitizedUser = sanitizeShellInput(sshUser);
-  const sanitizedDomain = sanitizeShellInput(domainName);
+export async function addServerSetupJob(
+  domainId: string,
+  ipAddress: string,
+  sshUser: string,
+  sshPassword?: string | null,
+  domainName?: string,
+) {
+  const { ipAddress: sanitizedIp, sshUser: sanitizedUser, domainName: sanitizedDomain } = checkedServerTarget(
+    ipAddress,
+    sshUser,
+    domainName,
+  );
 
   // One server setup per domain at a time: a second one re-installs Mailcow under the first.
   const claim = claimDomain(domainId, "server setup");
@@ -249,12 +273,7 @@ async function startServerSetup(
 async function runQueuedSetup(connection: Redis, job: Job, token: string | undefined): Promise<void> {
   const { domainId, ipAddress, sshUser, domainName } = job.data;
   const owner: string = job.data.lockOwner ?? `job:${job.id}`;
-  const channel = `server-log:${domainId}`;
-  const pub = connection.duplicate();
-  const logFn = (msg: string, status?: string) => {
-    pub.publish(channel, JSON.stringify({ msg, status }));
-    jobEvents.emit(channel, { msg, status, chunk: msg });
-  };
+  const { logFn, close } = queuedLogFn(connection, domainId);
 
   try {
     const claim = claimDomain(domainId, "server setup", owner);
@@ -270,12 +289,147 @@ async function runQueuedSetup(connection: Redis, job: Job, token: string | undef
       await executeProvisionJob(domainId, ipAddress, sshUser, sshPassword, domainName, logFn);
       succeeded = true;
     } finally {
-      if (succeeded || job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) {
+      if (succeeded || isFinalAttempt(job.attemptsMade, job.opts.attempts)) {
         releaseDomain(domainId, owner);
       }
     }
   } finally {
-    await pub.quit().catch(() => pub.disconnect());
+    await close();
+  }
+}
+
+// A queued job's log line goes to the domain's log channel: over Redis pub/sub for the SSE handler, and on
+// jobEvents for listeners in this process.
+function queuedLogFn(connection: Redis, domainId: string): { logFn: LogFn; close: () => Promise<void> } {
+  const channel = `server-log:${domainId}`;
+  const pub = connection.duplicate();
+  const logFn: LogFn = (msg, status) => {
+    pub.publish(channel, JSON.stringify({ msg, status }));
+    jobEvents.emit(channel, { msg, status, chunk: msg });
+  };
+  return { logFn, close: () => pub.quit().then(() => undefined, () => pub.disconnect()) };
+}
+
+export interface DomainSetupJobData {
+  domainId: string;
+  runId: string;
+  /** Owner of the domain's "server setup" claim: the enqueuer took it, the job keeps it until it finishes. */
+  lockOwner: string;
+}
+
+// Queue a setup run (domain-setup.ts enqueueDomainSetup), or run it in-process when Redis isn't answering,
+// with the same checks and timeouts as startServerSetup. `prepare` saves the run's state: it runs after the
+// duplicate check (so a refused start never touches the state of the run already going) and before the job
+// can start.
+export async function startDomainSetupJob(
+  data: DomainSetupJobData,
+  prepare: () => Promise<void>,
+): Promise<{ jobId: string }> {
+  if (serverSetupQueue && redisConnection && (await waitForRedis(redisConnection))) {
+    // After an app restart the in-process claim is gone, but a job for this domain (either kind) can still
+    // be sitting in Redis.
+    const queued = await withTimeout<Job[]>(
+      serverSetupQueue.getJobs(["active", "waiting", "delayed", "prioritized", "paused"]),
+      REDIS_CALL_TIMEOUT_MS,
+      "Redis stopped answering while checking the setup queue. Try again in a minute.",
+    );
+    if (queued.some((j: any) => j?.data?.domainId === data.domainId)) throw new Error(busyMessage("server setup"));
+    await prepare();
+    // Only ids in the job: the worker reads credentials from the database (Redis writes job data to disk).
+    const job = await withTimeout<Job>(
+      serverSetupQueue.add("domain-setup", data),
+      REDIS_CALL_TIMEOUT_MS,
+      "Redis stopped answering while queueing the setup. Check the job page before starting it again.",
+    );
+    return { jobId: String(job.id) };
+  }
+
+  const notice = serverSetupQueue
+    ? "[Queue] Redis (REDIS_URL) is unreachable, so this setup is running inside the app process and will not survive an app restart. The server console says why Redis failed.\n"
+    : undefined;
+  console.log(`[startDomainSetupJob] Running in-process${notice ? " (Redis unreachable)" : ""}`);
+  await prepare();
+  // Mark before returning: the SSE handler checks this to listen on jobEvents instead of Redis.
+  inProcessProvisions.add(data.domainId);
+  // Start after 2 s so the browser can open the log stream first.
+  setTimeout(() => void runDomainSetupInProcess(data, notice), 2000);
+  return { jobId: data.runId };
+}
+
+// One pass of a queued setup run. Holds the domain's "server setup" claim for the whole run: across retries
+// and app restarts (the owner id is in the job data). Released when the run finishes, waits for the user,
+// or fails for good.
+async function runQueuedDomainSetup(connection: Redis, job: Job, token: string | undefined): Promise<void> {
+  const { domainId, runId } = job.data as DomainSetupJobData;
+  const owner: string = job.data.lockOwner ?? `job:${job.id}`;
+  const { logFn, close } = queuedLogFn(connection, domainId);
+
+  try {
+    const claim = claimDomain(domainId, "server setup", owner);
+    if (!claim.ok) {
+      logFn(`Waiting for the ${claim.running} on this domain to finish before starting...\n`);
+      await job.moveToDelayed(Date.now() + BUSY_RECHECK_MS, token);
+      throw new DelayedError();
+    }
+    const finalAttempt = isFinalAttempt(job.attemptsMade, job.opts.attempts);
+    let finished = false;
+    try {
+      // Loaded here, not at the top: domain-setup.ts imports this module (see its header).
+      const { executeDomainSetupJob } = await import("./domain-setup");
+      await executeDomainSetupJob(domainId, runId, logFn, {
+        lockOwner: owner,
+        attempt: job.attemptsMade + 1,
+        finalAttempt,
+      });
+      finished = true;
+    } catch (err) {
+      // Another setup is using the server: check again later without using up an attempt.
+      if (isServerBusyError(err)) {
+        await job.moveToDelayed(Date.now() + SERVER_BUSY_RECHECK_MS, token);
+        throw new DelayedError();
+      }
+      // With attempts left the run stays "running" (its failed step and error are saved) and BullMQ retries it.
+      finished = finalAttempt;
+      throw err;
+    } finally {
+      if (finished) releaseDomain(domainId, owner);
+    }
+  } finally {
+    await close();
+  }
+}
+
+// A setup run without Redis: the same attempts and waits as the queue, in one of the in-process slots.
+async function runDomainSetupInProcess(data: DomainSetupJobData, notice?: string): Promise<void> {
+  const { domainId, runId, lockOwner } = data;
+  const channel = `server-log:${domainId}`;
+  const logFn: LogFn = (msg, status) => {
+    jobEvents.emit(channel, { msg, status, chunk: msg });
+  };
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+  try {
+    const { executeDomainSetupJob } = await import("./domain-setup");
+    await runAttempts({
+      attempts: SETUP_ATTEMPTS,
+      run: (attempt, finalAttempt) => {
+        if (inProcessSlots.isFull()) {
+          logFn(`Waiting for a free setup slot (${PROVISION_CONCURRENCY} setups already running)...\n`);
+        }
+        return inProcessSlots.run(() =>
+          executeDomainSetupJob(domainId, runId, logFn, { lockOwner, attempt, finalAttempt, notice }),
+        );
+      },
+      sleep,
+      onRetry: (failed, delayMs) =>
+        logFn(`Attempt ${failed} failed. Trying again in ${Math.round(delayMs / 1000)} s...\n`),
+      onServerBusy: (_err, waitMs) => logFn(`Checking the server again in ${Math.round(waitMs / 1000)} s...\n`),
+    });
+  } catch (err) {
+    console.error(`In-process setup run failed for domain ${domainId}:`, err);
+  } finally {
+    inProcessProvisions.delete(domainId);
+    releaseDomain(domainId, lockOwner);
   }
 }
 
