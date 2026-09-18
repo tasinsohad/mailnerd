@@ -289,48 +289,58 @@ async function loadSshPassword(domainId: string): Promise<string | null> {
   return domain?.sshPassword || domain?.server?.sshPassword || null;
 }
 
-async function executeProvisionJob(
-  domainId: string,
-  ipAddress: string,
-  sshUser: string,
-  sshPassword?: string | null,
-  domainName?: string,
-  logFn?: (msg: string, status?: string) => void,
-  notice?: string,
-) {
+export type LogFn = (msg: string, status?: string) => void;
+
+export interface DomainLogger {
+  /** Append to the domain's terminal log and send it to live viewers. */
+  log: LogFn;
+  /** Persist the whole log now, after any write already in flight. Never rejects. */
+  flush: () => Promise<void>;
+}
+
+// One run's terminal log for a domain. Every chunk goes to live SSE clients at once, and the whole log is
+// persisted to domains.terminal_logs so a reconnect always has history. A run appends to the previous log
+// behind a separator, so earlier runs stay readable during a retry.
+export async function createDomainLogger(domainId: string, logFn?: LogFn, notice?: string): Promise<DomainLogger> {
   const db = getDb();
   let accumulatedLogs = "";
 
-  // Persist the full log to DB so SSE reconnects always have history. Steps like
-  // `docker compose pull` emit hundreds of progress chunks per second; writing the
-  // entire (growing) log on every chunk floods the DB and stalls the job. So throttle
-  // DB writes to at most once every 2s, with a trailing write so the last chunk lands.
+  // Steps like `docker compose pull` emit hundreds of progress chunks per second; writing the entire
+  // (growing) log on every chunk floods the DB and stalls the job. So throttle DB writes to at most once
+  // every 2s, with a trailing write so the last chunk lands.
   const FLUSH_INTERVAL_MS = 2000;
   let lastFlush = 0;
   let pendingFlush: NodeJS.Timeout | null = null;
+  // Writes run one after another, so an older (shorter) log can never land after a newer one.
+  let lastWrite: Promise<void> = Promise.resolve();
 
-  const flushLogsToDB = () => {
+  const flushLogsToDB = (): Promise<void> => {
     lastFlush = Date.now();
     if (pendingFlush) {
       clearTimeout(pendingFlush);
       pendingFlush = null;
     }
-    db.update(domains)
-      .set({ terminalLogs: accumulatedLogs })
-      .where(eq(domains.id, domainId))
-      .catch((err: any) => console.error("Failed to flush logs to DB:", err));
+    const snapshot = accumulatedLogs;
+    lastWrite = lastWrite.then(async () => {
+      try {
+        await db.update(domains).set({ terminalLogs: snapshot }).where(eq(domains.id, domainId));
+      } catch (err) {
+        console.error("Failed to flush logs to DB:", err);
+      }
+    });
+    return lastWrite;
   };
 
   const scheduleFlush = () => {
     const sinceLast = Date.now() - lastFlush;
     if (sinceLast >= FLUSH_INTERVAL_MS) {
-      flushLogsToDB();
+      void flushLogsToDB();
     } else if (!pendingFlush) {
       pendingFlush = setTimeout(flushLogsToDB, FLUSH_INTERVAL_MS - sinceLast);
     }
   };
 
-  const log = (msg: string, status?: string) => {
+  const log: LogFn = (msg, status) => {
     accumulatedLogs += msg;
     // Emit every chunk to live SSE clients in real time...
     if (logFn) logFn(msg, status);
@@ -348,6 +358,29 @@ async function executeProvisionJob(
   }
 
   if (notice) log(notice, "Connecting");
+  return { log, flush: flushLogsToDB };
+}
+
+// The server part of a setup: SSH in, un-proxy the mail host in Cloudflare, keep an existing Mailcow's
+// hostname, then run the deploy script, which WIPES and reinstalls Mailcow on the server. Saves the API key
+// the moment the script prints it, then marks the domain "ready". On failure it marks the domain "failed"
+// and rethrows. The caller owns the log (createDomainLogger) and persists it when the run ends.
+export async function installMailcowOnServer({
+  domainId,
+  ipAddress,
+  sshUser,
+  sshPassword,
+  domainName,
+  log,
+}: {
+  domainId: string;
+  ipAddress: string;
+  sshUser: string;
+  sshPassword?: string | null;
+  domainName?: string;
+  log: LogFn;
+}): Promise<void> {
+  const db = getDb();
   log(`Connecting to ${ipAddress} via SSH...`, "Connecting");
 
   const decryptedPassword = tryDecrypt(sshPassword);
@@ -617,11 +650,42 @@ async function executeProvisionJob(
         status: "ready",
         mailcowHostname,
         mailcowApiKey: apiKey,
-        terminalLogs: accumulatedLogs,
       })
       .where(eq(domains.id, domainId));
 
     log("Mailcow setup completed successfully!", "Ready");
+  } catch (err: any) {
+    log(`Setup failed: ${err.message}`, "Failed");
+    try {
+      await db
+        .update(domains)
+        .set({ status: "failed" })
+        .where(eq(domains.id, domainId));
+    } catch (dbErr) {
+      console.error("Failed to update domain status to failed:", dbErr);
+    }
+    throw err;
+  } finally {
+    await ssh.dispose().catch(() => {});
+  }
+}
+
+// A "setup" job (the provisioning flow before setup runs, still used by jobs already queued in Redis):
+// install Mailcow, then create the mailboxes and sync DKIM as a guarded best-effort tail.
+async function executeProvisionJob(
+  domainId: string,
+  ipAddress: string,
+  sshUser: string,
+  sshPassword?: string | null,
+  domainName?: string,
+  logFn?: (msg: string, status?: string) => void,
+  notice?: string,
+) {
+  const db = getDb();
+  const { log, flush } = await createDomainLogger(domainId, logFn, notice);
+
+  try {
+    await installMailcowOnServer({ domainId, ipAddress, sshUser, sshPassword, domainName, log });
 
     // End-to-end: now that the server is provisioned and the API key is saved, create the
     // mailboxes too, reusing the proven idempotent pipeline. GUARDED: a mailbox hiccup must
@@ -665,27 +729,9 @@ async function executeProvisionJob(
         "Ready",
       );
     }
-  } catch (err: any) {
-    log(`Setup failed: ${err.message}`, "Failed");
-    try {
-      await db
-        .update(domains)
-        .set({ 
-          status: "failed",
-          terminalLogs: accumulatedLogs,
-        })
-        .where(eq(domains.id, domainId));
-    } catch (dbErr) {
-      console.error("Failed to update domain status to failed:", dbErr);
-    }
-    throw err;
   } finally {
-    // Cancel any pending throttled log write; the success/failure branches above
-    // already persisted the final log + status.
-    if (pendingFlush) {
-      clearTimeout(pendingFlush);
-      pendingFlush = null;
-    }
-    await ssh.dispose().catch(() => {});
+    // Persist the final lines. (This used to cancel the pending throttled write instead, which dropped
+    // whatever was logged in the last 2 s, e.g. the mailbox and DKIM results.)
+    await flush();
   }
 }
