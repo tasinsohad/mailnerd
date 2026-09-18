@@ -13,7 +13,7 @@ export const Route = createFileRoute("/_app")({
     if (!session.authenticated) {
       throw redirect({ to: "/auth", search: { redirect: location.href } });
     }
-    return { userEmail: session.email ?? "" };
+    return { userEmail: session.account?.email ?? "" };
   },
   component: AppLayout,
 });
