@@ -220,6 +220,8 @@ async function isolation(created: string[]) {
   const spoof = await call("listDomains", "GET", {}, `${cookieB}; mn_workspace=${a.id}`);
   check(leaked(spoof.text).length === 0, "B can't open A's workspace with a forged mn_workspace cookie");
 
+  const domBefore = await db.query.domains.findFirst({ where: eq(schema.domains.id, domA.id) });
+
   const writes: [string, unknown][] = [
     ["updateDomain", { id: domA.id, ipAddress: "192.0.2.99" }],
     // createDnsRecord (src/server/dns.ts) is likewise dead code, absent from .output/server (see the
@@ -254,7 +256,10 @@ async function isolation(created: string[]) {
 
   // None of A's rows changed.
   const domAfter = await db.query.domains.findFirst({ where: eq(schema.domains.id, domA.id) });
-  check(domAfter?.ipAddress === "192.0.2.10" && domAfter?.name === domainName, "A's domain is unchanged");
+  check(JSON.stringify(domAfter) === JSON.stringify(domBefore), "A's domain row is unchanged (every column)");
+  const aHealth = await db.select().from(schema.serverHealth).where(eq(schema.serverHealth.userId, a.id));
+  const aHistory = await db.select().from(schema.healthHistory).where(eq(schema.healthHistory.userId, a.id));
+  check(aHealth.length === 0 && aHistory.length === 0, "no health checks ran on A's servers");
   const records = await db.select().from(schema.dnsRecords).where(eq(schema.dnsRecords.domainId, domA.id));
   check(records.length === 1 && records[0].name === "iso", "A's DNS records are unchanged (nothing added by B)");
   const inboxes = await db.select().from(schema.plannedInboxes).where(eq(schema.plannedInboxes.domainId, domA.id));
@@ -282,10 +287,15 @@ async function isolation(created: string[]) {
     ["listWorkspaces", "GET", {}],
     ["applyPlan", "POST", { userId: b.id, choice: { preset: "12m" } }],
     ["setWorkspace", "POST", { userId: a.id }],
+    ["setSuspended", "POST", { userId: a.id, suspended: true }],
+    ["resetUserPassword", "POST", { userId: a.id }],
+    ["rejectSignup", "POST", { userId: a.id }],
   ];
   for (const [name, method, data] of adminOnly) {
     check((await call(name, method, data, cookieB)).text.includes("FORBIDDEN"), `B is refused ${name}`);
   }
+  const [aRow] = await db.select().from(schema.users).where(eq(schema.users.id, a.id));
+  check(aRow?.status === "active" && aRow?.sessionVersion === 1, "B's refused admin-only calls left A's account untouched");
 
   // The admin: Nextus doesn't show A's data; A's workspace does; Nextus lists every one of its domains.
   const adminOwn = await call("listDomains", "GET", {}, cookieAdmin);
@@ -341,6 +351,9 @@ async function flow(created: string[]) {
   await db.update(schema.users).set({ planEndsAt: new Date(Date.now() - 60_000) }).where(eq(schema.users.id, row.id));
   check((await call("getSession", "GET", {}, cookieC)).text.includes('"expired"'), "an ended plan locks the account");
   check((await call("listDomains", "GET", {}, cookieC)).text.includes("ACCOUNT_LOCKED"), "an expired account can't use the app");
+  const sseLocked = await fetch(`${base}/api/sse?runId=00000000-0000-4000-8000-000000000000`, { headers: { cookie: cookieC } });
+  check(sseLocked.status === 403, `a locked account can't open live streams (HTTP ${sseLocked.status})`);
+  await sseLocked.body?.cancel();
   await call("applyPlan", "POST", { userId: row.id, choice: { days: 3 } }, cookieAdmin);
   check((await call("getSession", "GET", {}, cookieC)).text.includes('"ok"'), "extending the plan brings the account back");
 }
