@@ -20,7 +20,13 @@ import {
 } from "../lib/setup-state";
 import { runDomainSetup, type SetupDeps } from "./domain-setup-core";
 import { ServerBusyError, isServerBusyError } from "./setup-attempts";
-import { claimDomain, releaseDomain, busyMessage, claimServer, releaseServer } from "./domain-locks";
+import {
+  claimDomain,
+  releaseDomain,
+  busyMessage,
+  claimServer,
+  releaseServer,
+} from "./domain-locks";
 import {
   checkedServerTarget,
   createDomainLogger,
@@ -50,7 +56,11 @@ export async function loadSetupState(db: Db, domainId: string): Promise<SetupSta
 }
 
 /** Merge `patch` into the domain's saved setup state and save it. */
-export async function saveSetupState(db: Db, domainId: string, patch: Partial<SetupState>): Promise<SetupState> {
+export async function saveSetupState(
+  db: Db,
+  domainId: string,
+  patch: Partial<SetupState>,
+): Promise<SetupState> {
   const prev = await loadSetupState(db, domainId);
   if (!prev) throw new Error("This domain has no setup run to update.");
   const next = mergeSetupState(prev, patch, new Date().toISOString());
@@ -90,7 +100,8 @@ export async function enqueueDomainSetup(opts: {
     });
     if (!domain) throw new Error("Domain not found");
     const current = domain.setupState as SetupState | null;
-    if (current?.status === "waiting" && !opts.allowWaiting) throw new Error(busyMessage("server setup"));
+    if (current?.status === "waiting" && !opts.allowWaiting)
+      throw new Error(busyMessage("server setup"));
 
     await startDomainSetupJob({ domainId, runId, lockOwner: claim.owner }, async () => {
       const state = newSetupState(runId, new Date().toISOString(), {
@@ -109,7 +120,9 @@ export async function enqueueDomainSetup(opts: {
         status: "failed",
         error: errorMessage(err),
         finishedAt: new Date().toISOString(),
-      }).catch((saveErr) => console.error(`[enqueueDomainSetup] couldn't save the failure for ${domainId}:`, saveErr));
+      }).catch((saveErr) =>
+        console.error(`[enqueueDomainSetup] couldn't save the failure for ${domainId}:`, saveErr),
+      );
     }
     throw err;
   }
@@ -135,9 +148,26 @@ export async function executeDomainSetupJob(
     return "superseded";
   }
 
+  // The last pass found the server busy (it left the run queued at the server step). While it still is, check
+  // again later without a new log section and state writes every minute.
+  // (If the domain can't be read here, the normal pass below reports it.)
+  if (current.status === "queued" && current.step === "server") {
+    const ipAddress = await loadDomain(db, domainId)
+      .then((domain) => serverTarget(domain).ipAddress)
+      .catch(() => null);
+    if (ipAddress && !claimServer(ipAddress, opts.lockOwner).ok) {
+      logFn(`Still waiting for the other setup on server ${ipAddress} to finish...\n`);
+      throw new ServerBusyError(ipAddress);
+    }
+    // Free now: let go until the server step claims it again (a new run may take it in between; the step
+    // then finds it busy and waits as usual).
+    if (ipAddress) releaseServer(ipAddress, opts.lockOwner);
+  }
+
   const logger = await createDomainLogger(domainId, logFn, opts.notice);
   let label = "Setup";
-  const log = (line: string, status: string = label) => logger.log(line.endsWith("\n") ? line : `${line}\n`, status);
+  const log = (line: string, status: string = label) =>
+    logger.log(line.endsWith("\n") ? line : `${line}\n`, status);
 
   let latest: SetupState = current;
   let currentStep: SetupStep | null = null;
@@ -173,8 +203,10 @@ export async function executeDomainSetupJob(
       }
       const stepStatus = currentStep ? patch.steps?.[currentStep] : undefined;
       if (stepStatus === "done") log(`${label}: done.`);
-      else if (stepStatus === "failed" && !serverBusy) log(`${label} failed: ${patch.error ?? "unknown error"}`);
-      if (patch.status === "done") log("Setup complete: DNS, server, mailboxes and DKIM are done.", "Ready");
+      else if (stepStatus === "failed" && !serverBusy)
+        log(`${label} failed: ${patch.error ?? "unknown error"}`);
+      if (patch.status === "done")
+        log("Setup complete: DNS, server, mailboxes and DKIM are done.", "Ready");
       return latest;
     },
 
@@ -215,11 +247,16 @@ export async function executeDomainSetupJob(
         .select({ name: domains.name, userId: domains.userId })
         .from(domains)
         .where(and(eq(domains.ipAddress, target.ipAddress), ne(domains.id, domainId)));
-      const otherDomainsOnServer = others.filter((o) => o.userId === domain.userId).map((o) => o.name);
-      if (others.some((o) => o.userId !== domain.userId)) otherDomainsOnServer.push("another account's domain");
+      const otherDomainsOnServer = others
+        .filter((o) => o.userId === domain.userId)
+        .map((o) => o.name);
+      if (others.some((o) => o.userId !== domain.userId))
+        otherDomainsOnServer.push("another account's domain");
 
       const host = hostname?.toLowerCase() ?? null;
-      const savedHost = domain.mailcowHostname ? String(domain.mailcowHostname).toLowerCase() : null;
+      const savedHost = domain.mailcowHostname
+        ? String(domain.mailcowHostname).toLowerCase()
+        : null;
       const ready = domain.status === "ready";
       const inspection = {
         ip: target.ipAddress,
@@ -227,14 +264,16 @@ export async function executeDomainSetupJob(
         hostname,
         otherDomainsOnServer,
         ownInstallComplete: ready && !!host && host === savedHost,
-        ownUnfinishedInstall: !ready && !!host && (host === `mail.${domain.name}`.toLowerCase() || host === savedHost),
+        ownUnfinishedInstall:
+          !ready && !!host && (host === `mail.${domain.name}`.toLowerCase() || host === savedHost),
       };
       log(
         hasMailcow
           ? `Mailcow is installed there (host name ${hostname ?? "unknown"}).`
           : "No Mailcow on the server yet.",
       );
-      if (otherDomainsOnServer.length) log(`Other domains on this server: ${otherDomainsOnServer.join(", ")}.`);
+      if (otherDomainsOnServer.length)
+        log(`Other domains on this server: ${otherDomainsOnServer.join(", ")}.`);
       return inspection;
     },
 
@@ -265,9 +304,15 @@ export async function executeDomainSetupJob(
       const target = serverTarget(domain);
       holdServer(target.ipAddress);
       try {
-        log(`Adding ${domain.name} to the Mailcow already on ${target.ipAddress}. Nothing is reinstalled.`);
+        log(
+          `Adding ${domain.name} to the Mailcow already on ${target.ipAddress}. Nothing is reinstalled.`,
+        );
         const config = await readMailcowConfigOverSsh(
-          { ipAddress: target.ipAddress, sshUser: target.sshUser, sshPassword: tryDecrypt(target.sshPassword) ?? "" },
+          {
+            ipAddress: target.ipAddress,
+            sshUser: target.sshUser,
+            sshPassword: tryDecrypt(target.sshPassword) ?? "",
+          },
           { wantApiKey: true },
         );
         if (!config.hostname || !config.apiKey) {
@@ -292,7 +337,9 @@ export async function executeDomainSetupJob(
       // A re-provision regenerates the key: re-read it from the server if the saved one stopped working.
       const { domain } = await ensureWorkingApiKey(db, loaded);
       if (!domain.mailcowHostname || !domain.mailcowApiKey) {
-        throw new Error("The domain has no Mailcow host name or API key yet: the server step hasn't finished.");
+        throw new Error(
+          "The domain has no Mailcow host name or API key yet: the server step hasn't finished.",
+        );
       }
       const { existingDomains, ssh } = await ensureMailDomains(db, domain);
       const [{ n: total }] = await db
@@ -306,7 +353,9 @@ export async function executeDomainSetupJob(
         onProgress: (done, failed, _total, finished) =>
           finished ? void progress.finish(done, failed) : progress.update(done),
       });
-      log(`Mailboxes: ${summary.created}/${summary.total} created${summary.failed ? `, ${summary.failed} failed` : ""}.`);
+      log(
+        `Mailboxes: ${summary.created}/${summary.total} created${summary.failed ? `, ${summary.failed} failed` : ""}.`,
+      );
       return { created: summary.created, failed: summary.failed, total: summary.total };
     },
 
@@ -314,7 +363,10 @@ export async function executeDomainSetupJob(
       const domain = await loadDomain(db, domainId);
       const { results } = await syncDkim(db, domain, domain.userId);
       const bad = results.find((r) => !r.success);
-      if (bad) throw new Error(`DKIM for ${bad.name} couldn't be synced to Cloudflare: ${bad.error ?? "unknown error"}`);
+      if (bad)
+        throw new Error(
+          `DKIM for ${bad.name} couldn't be synced to Cloudflare: ${bad.error ?? "unknown error"}`,
+        );
       log(`DKIM synced to Cloudflare for ${results.length} domain(s).`);
     },
   };
@@ -330,14 +382,18 @@ export async function executeDomainSetupJob(
         status: "queued",
         error: null,
         steps: { ...latest.steps, server: "pending" },
-      }).catch((saveErr) => console.error(`[domain-setup] couldn't save the wait for ${domainId}:`, saveErr));
+      }).catch((saveErr) =>
+        console.error(`[domain-setup] couldn't save the wait for ${domainId}:`, saveErr),
+      );
     } else if (opts.finalAttempt) {
       log(`Setup failed: ${message}`, "Failed");
       await saveSetupState(db, domainId, {
         status: "failed",
         error: message,
         finishedAt: new Date().toISOString(),
-      }).catch((saveErr) => console.error(`[domain-setup] couldn't save the failure for ${domainId}:`, saveErr));
+      }).catch((saveErr) =>
+        console.error(`[domain-setup] couldn't save the failure for ${domainId}:`, saveErr),
+      );
     } else {
       log(`Attempt ${opts.attempt} failed: ${message}. It will be retried.`);
     }
@@ -349,13 +405,20 @@ export async function executeDomainSetupJob(
 }
 
 async function loadDomain(db: Db, domainId: string): Promise<Domain> {
-  const domain = await db.query.domains.findFirst({ where: eq(domains.id, domainId), with: { server: true } });
+  const domain = await db.query.domains.findFirst({
+    where: eq(domains.id, domainId),
+    with: { server: true },
+  });
   if (!domain) throw new Error("Domain not found");
   return domain;
 }
 
 // The same credentials provisionServer checks: the domain's own, else its server's.
-function serverTarget(domain: Domain): { ipAddress: string; sshUser: string; sshPassword: string | null } {
+function serverTarget(domain: Domain): {
+  ipAddress: string;
+  sshUser: string;
+  sshPassword: string | null;
+} {
   const ipAddress = domain.ipAddress || domain.server?.ipAddress;
   const sshUser = domain.sshUser || domain.server?.sshUser;
   const sshPassword = domain.sshPassword || domain.server?.sshPassword || null;
@@ -385,7 +448,10 @@ async function readServerMailcow(target: {
     const lines = res.stdout.split("\n").map((l) => l.trim());
     if (lines.includes("MAILCOW_CONF=no")) return { hasMailcow: false, hostname: null };
     const at = lines.indexOf("MAILCOW_CONF=yes");
-    if (at < 0) throw new Error(`Couldn't tell whether ${target.ipAddress} already runs Mailcow (no answer from the server).`);
+    if (at < 0)
+      throw new Error(
+        `Couldn't tell whether ${target.ipAddress} already runs Mailcow (no answer from the server).`,
+      );
     const host = lines[at + 1] ?? "";
     return { hasMailcow: true, hostname: /\./.test(host) ? host : null };
   } finally {

@@ -99,7 +99,12 @@ describe("runAttempts", () => {
   });
 
   it("waits for a busy server without using up an attempt", async () => {
-    const h = harness([new ServerBusyError("1.2.3.4"), new ServerBusyError("1.2.3.4"), new Error("x"), "done"]);
+    const h = harness([
+      new ServerBusyError("1.2.3.4"),
+      new ServerBusyError("1.2.3.4"),
+      new Error("x"),
+      "done",
+    ]);
     await expect(h.run()).resolves.toBe("done");
     expect(h.calls.map((c) => c.attempt)).toEqual([1, 1, 1, 2]);
     expect(h.sleeps).toEqual([SERVER_BUSY_RECHECK_MS, SERVER_BUSY_RECHECK_MS, 30_000]);
@@ -108,7 +113,12 @@ describe("runAttempts", () => {
   });
 
   it("still gets its final attempt after waiting for a busy server on it", async () => {
-    const h = harness([new Error("a"), new Error("b"), new ServerBusyError("1.2.3.4"), new Error("c")]);
+    const h = harness([
+      new Error("a"),
+      new Error("b"),
+      new ServerBusyError("1.2.3.4"),
+      new Error("c"),
+    ]);
     await expect(h.run()).rejects.toThrow("c");
     expect(h.calls).toEqual([
       { attempt: 1, finalAttempt: false },

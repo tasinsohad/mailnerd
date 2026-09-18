@@ -4,7 +4,8 @@ import { z } from "zod";
 import { domains } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { NodeSSH } from "node-ssh";
-import { addServerSetupJob } from "./queue";
+import { enqueueDomainSetup } from "./domain-setup";
+import { checkedServerTarget } from "./queue";
 import { activeRun, busyMessage } from "./domain-locks";
 
 export const testSshConnection = createServerFn({ method: "POST" })
@@ -138,7 +139,6 @@ export const provisionServer = createServerFn({ method: "POST" })
 
     const ipAddress = domain.ipAddress || domain.server?.ipAddress;
     const sshUser = domain.sshUser || domain.server?.sshUser;
-    const sshPassword = domain.sshPassword || domain.server?.sshPassword;
 
     if (!ipAddress || !sshUser) {
       return { error: "Server credentials not configured for this domain" };
@@ -149,21 +149,20 @@ export const provisionServer = createServerFn({ method: "POST" })
     if (running) return { success: false, error: busyMessage(running) };
 
     try {
-      console.log(`[provisionServer] Enqueuing job for IP: ${ipAddress}`);
-      // Enqueue job via BullMQ
-      const job = await addServerSetupJob(
-        domain.id,
-        ipAddress,
-        sshUser,
-        sshPassword,
-        domain.name,
-      );
-
-      console.log(`[provisionServer] Job enqueued: ${job.jobId}, updating DB status to provisioning`);
-      await db.update(domains).set({ status: "provisioning" }).where(eq(domains.id, domain.id));
-
-      console.log(`[provisionServer] Done, returning to client.`);
-      return { success: true, jobId: job.jobId };
+      // The checks the install applies before anything reaches the server's shell: fail now, not after
+      // three attempts.
+      checkedServerTarget(ipAddress, sshUser, domain.name);
+      console.log(`[provisionServer] Starting a setup run from the server step for ${ipAddress}`);
+      // The run (domain-setup.ts) reads the SSH password from the database, sets the domain to
+      // "provisioning" once the install starts, and never wipes a server other domains use without
+      // asking.
+      const { runId } = await enqueueDomainSetup({
+        domainId: domain.id,
+        userId: domain.userId,
+        fromStep: "server",
+      });
+      console.log(`[provisionServer] Setup run queued: ${runId}`);
+      return { success: true, jobId: runId };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // A refused duplicate isn't a failure of the setup that's already running.
