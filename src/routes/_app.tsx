@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createFileRoute, Link, Outlet, redirect, useRouterState } from "@tanstack/react-router";
 import { Globe, Server, Settings, Mail, FolderGit2, Stethoscope, LogOut, Menu, Users } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { getSession, logout } from "@/server/session";
@@ -141,8 +142,16 @@ function AppLayout() {
     window.location.assign("/auth");
   };
   const backToOwnWorkspace = async () => {
-    await setWorkspace({ data: { userId: null } });
-    window.location.assign("/");
+    try {
+      const result = await setWorkspace({ data: { userId: null } });
+      if (!result.ok) {
+        toast.error(result.error ?? "Couldn't switch back.");
+        return;
+      }
+      window.location.assign("/");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't switch back.");
+    }
   };
 
   return (

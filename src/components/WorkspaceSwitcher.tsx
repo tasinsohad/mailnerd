@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { listWorkspaces, setWorkspace } from "@/server/admin-users";
 
@@ -12,8 +13,18 @@ export function WorkspaceSwitcher({ currentId }: { currentId: string }) {
   const change = async (id: string) => {
     if (id === currentId) return;
     setSwitching(true);
-    await setWorkspace({ data: { userId: id } });
-    window.location.assign("/");
+    try {
+      const result = await setWorkspace({ data: { userId: id } });
+      if (!result.ok) {
+        toast.error(result.error ?? "Couldn't open that workspace.");
+        setSwitching(false);
+        return;
+      }
+      window.location.assign("/");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't open that workspace.");
+      setSwitching(false);
+    }
   };
 
   return (
