@@ -1,9 +1,10 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
-import { AlertTriangle, Loader2, Mail } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { AuthShell } from "@/components/AuthShell";
 import { safeRedirectPath } from "@/lib/safe-redirect";
 import { getSession, login } from "@/server/session";
 
@@ -39,7 +40,8 @@ function SignInPage() {
         setPending(false);
         return;
       }
-      // Full page load, so every page starts fresh with the new session.
+      // Full page load, so every page starts fresh with the new session. A pending or expired account is
+      // sent on to /account by the app.
       window.location.assign(safeRedirectPath(redirectTo));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed.");
@@ -48,71 +50,47 @@ function SignInPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 font-sans text-foreground">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 flex items-center justify-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-lg shadow-primary/25">
-            <Mail className="h-5 w-5" />
-          </div>
-          <div className="leading-tight">
-            <div className="font-display text-base font-semibold tracking-tight">Mail Nerd</div>
-            <div className="ident text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              control console
-            </div>
+    <AuthShell>
+      <h1 className="font-display text-lg font-semibold tracking-tight">Sign in</h1>
+
+      {notSetUp && (
+        <div role="alert" className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          {/* Deliberately generic: this page is public. The details are in the server log. */}
+          <div className="flex items-start gap-2 font-medium">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <span>{setupError}</span>
           </div>
         </div>
+      )}
 
-        <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
-          <h1 className="font-display text-lg font-semibold tracking-tight">Sign in</h1>
-
-          {notSetUp && (
-            <div role="alert" className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-              {/* Deliberately generic: this page is public. The details are in the server log. */}
-              <div className="flex items-start gap-2 font-medium">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-                <span>{setupError}</span>
-              </div>
-            </div>
-          )}
-
-          <form onSubmit={onSubmit} className="mt-5 space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                autoComplete="username"
-                autoFocus
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                disabled={notSetUp || pending}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                disabled={notSetUp || pending}
-              />
-            </div>
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            <Button type="submit" className="w-full" disabled={notSetUp || pending}>
-              {pending && <Loader2 className="h-4 w-4 animate-spin" />}
-              {pending ? "Signing in…" : "Sign in"}
-            </Button>
-          </form>
+      <form onSubmit={onSubmit} className="mt-5 space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="email">Email</Label>
+          <Input id="email" type="email" autoComplete="username" autoFocus required value={email}
+            onChange={(e) => setEmail(e.target.value)} disabled={notSetUp || pending} />
         </div>
-      </div>
-    </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="password">Password</Label>
+          <Input id="password" type="password" autoComplete="current-password" required value={password}
+            onChange={(e) => setPassword(e.target.value)} disabled={notSetUp || pending} />
+        </div>
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+        <Button type="submit" className="w-full" disabled={notSetUp || pending}>
+          {pending && <Loader2 className="h-4 w-4 animate-spin" />}
+          {pending ? "Signing in…" : "Sign in"}
+        </Button>
+      </form>
+
+      <p className="mt-5 text-center text-sm text-muted-foreground">
+        New here?{" "}
+        <Link to="/signup" className="font-medium text-primary hover:underline">
+          Create an account
+        </Link>
+      </p>
+    </AuthShell>
   );
 }
