@@ -130,6 +130,25 @@ Check the **Jobs** page first, as when updating: this restarts the app. Change `
 `.env`, then run `docker compose up -d --force-recreate app`. Everyone is signed out. Changing
 `SESSION_SECRET` the same way also signs everyone out.
 
+## Accounts
+
+- **The admin** signs in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env`. The admin's workspace holds everything
+  created before accounts existed (the Nextus data). Changing `ADMIN_PASSWORD` signs the admin out; changing
+  `SESSION_SECRET` signs everyone out.
+- **Everyone else** signs up at `/signup`. A new account waits until the admin activates it on the **Users** page
+  with a plan (7-day trial, 1/3/6 months, 1 year, a custom length, or an end date). When the plan ends the account
+  is locked; its data stays and comes back when the plan is extended.
+- **Forgotten password:** the admin uses **Reset password** on the Users page and passes on the temporary password.
+- **Workspaces are private.** The admin can open any account's workspace from the switcher in the sidebar.
+- Before any schema change, back up the database: `npx tsx scripts/backup-db.ts <folder outside the repo>`.
+- `DB_POOL_MAX` (default 5) sets how many database connections the app uses.
+- **Row Level Security** is on for every table, so Supabase's public anon key can't read them; the app connects as
+  the table owner and isn't affected. To undo for one table: `ALTER TABLE public.<name> DISABLE ROW LEVEL SECURITY;`
+- **Rolling back to a release before accounts:** that release finds the admin's data by the internal email
+  `admin@smtpforge.local`. Before rolling back, run
+  `update users set email = 'admin@smtpforge.local' where role = 'admin';` — otherwise it creates a new empty
+  account and the Nextus data looks missing.
+
 ## Local development
 
 `npm run dev` works as before, and sign-in applies there too: add `ADMIN_EMAIL`, `ADMIN_PASSWORD`
