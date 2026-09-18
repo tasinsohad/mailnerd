@@ -166,28 +166,35 @@ export const login = createServerFn({ method: "POST" })
     const waitMs = loginThrottle.retryAfterMs(client);
     if (waitMs > 0) return { ok: false, error: `Too many failed attempts. ${tryAgainIn(waitMs)}` };
 
-    const db = await database();
-    let account: Account | null = null;
+    let account: Account;
     let admin = false;
-    if (credentialsMatch(data.email, data.password, auth.config)) {
-      account = await ensureAdminAccount(db, auth.config.email);
-      admin = true;
-    } else {
-      const email = data.email.trim().toLowerCase();
-      const found: Account | undefined = await db.query.users.findFirst({ where: eq(users.email, email) });
-      if (found && found.role === "user") {
-        if (await verifyPassword(data.password, found.passwordHash)) account = found;
+    try {
+      const db = await database();
+      let found: Account | null = null;
+      if (credentialsMatch(data.email, data.password, auth.config)) {
+        found = await ensureAdminAccount(db, auth.config.email);
+        admin = true;
       } else {
-        await burnPasswordCheck(data.password);
+        const email = data.email.trim().toLowerCase();
+        const row: Account | undefined = await db.query.users.findFirst({ where: eq(users.email, email) });
+        if (row && row.role === "user") {
+          if (await verifyPassword(data.password, row.passwordHash)) found = row;
+        } else {
+          await burnPasswordCheck(data.password);
+        }
       }
-    }
 
-    if (!account) {
-      loginThrottle.recordFailure(client);
-      return { ok: false, error: "Wrong email or password." };
+      if (!found) {
+        loginThrottle.recordFailure(client);
+        return { ok: false, error: "Wrong email or password." };
+      }
+      loginThrottle.reset(client);
+      await db.update(users).set({ lastSignInAt: new Date() }).where(eq(users.id, found.id));
+      account = found;
+    } catch (err) {
+      console.error("login: couldn't sign in:", err instanceof Error ? err.message : err);
+      return { ok: false, error: DB_DOWN };
     }
-    loginThrottle.reset(client);
-    await db.update(users).set({ lastSignInAt: new Date() }).where(eq(users.id, account.id));
     setSessionCookie(createAccountToken({ accountId: account.id, version: account.sessionVersion, admin }, auth.config));
     // A pending, suspended or expired account is signed in too: the app sends it to /account.
     return { ok: true, error: null as string | null };
@@ -221,21 +228,26 @@ export const signup = createServerFn({ method: "POST" })
     if (waitMs > 0) return { ok: false, error: `Too many new accounts from here. ${tryAgainIn(waitMs)}` };
 
     signupThrottle.recordFailure(client); // counts every attempt, taken emails included, so the limit also slows probing for which emails have accounts
-    const db = await database();
-    const existing = await db.query.users.findFirst({ where: eq(users.email, checked.value.email), columns: { id: true } });
-    if (existing) return { ok: false, error: EMAIL_TAKEN };
-
-    const passwordHash = await hashPassword(checked.value.password);
     let created: Account;
     try {
-      [created] = await db
-        .insert(users)
-        .values({ name: checked.value.name, email: checked.value.email, passwordHash, role: "user", status: "pending" })
-        .returning();
+      const db = await database();
+      const existing = await db.query.users.findFirst({ where: eq(users.email, checked.value.email), columns: { id: true } });
+      if (existing) return { ok: false, error: EMAIL_TAKEN };
+
+      const passwordHash = await hashPassword(checked.value.password);
+      try {
+        [created] = await db
+          .insert(users)
+          .values({ name: checked.value.name, email: checked.value.email, passwordHash, role: "user", status: "pending" })
+          .returning();
+      } catch (err) {
+        const code = (err as { code?: string; cause?: { code?: string } })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
+        if (code === "23505") return { ok: false, error: EMAIL_TAKEN }; // the same email, a moment earlier
+        throw err;
+      }
     } catch (err) {
-      const code = (err as { code?: string; cause?: { code?: string } })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
-      if (code === "23505") return { ok: false, error: EMAIL_TAKEN }; // the same email, a moment earlier
-      throw err;
+      console.error("signup: couldn't create the account:", err instanceof Error ? err.message : err);
+      return { ok: false, error: DB_DOWN };
     }
     // Signed in straight away; the app shows "waiting for approval" until the admin activates the account.
     setSessionCookie(createAccountToken({ accountId: created.id, version: created.sessionVersion, admin: false }, auth.config));
