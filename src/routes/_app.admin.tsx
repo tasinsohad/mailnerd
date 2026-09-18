@@ -192,15 +192,17 @@ function AdminUsersPage() {
                         Reactivate
                       </DropdownMenuItem>
                     ) : (
-                      <DropdownMenuItem
-                        className="text-destructive focus:text-destructive"
-                        onClick={() =>
-                          confirm(`Suspend ${u.name}? They're signed out at once and can't use the app until you reactivate them.`) &&
-                          act(u, () => setSuspended({ data: { userId: u.id, suspended: true } }), `${u.name} is suspended.`)
-                        }
-                      >
-                        Suspend
-                      </DropdownMenuItem>
+                      u.state !== "pending" && (
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={() =>
+                            confirm(`Suspend ${u.name}? They're signed out at once and can't use the app until you reactivate them.`) &&
+                            act(u, () => setSuspended({ data: { userId: u.id, suspended: true } }), `${u.name} is suspended.`)
+                          }
+                        >
+                          Suspend
+                        </DropdownMenuItem>
+                      )
                     )}
                     {u.state === "pending" && (
                       <DropdownMenuItem

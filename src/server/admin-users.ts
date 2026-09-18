@@ -147,7 +147,7 @@ export const listWorkspaces = createServerFn({ method: "GET" })
   .middleware([requireAdmin])
   .handler(async ({ context }) => {
     const { db } = context as unknown as Ctx;
-    const rows: Account[] = await db.select().from(users).orderBy(desc(users.role), asc(users.name));
+    const rows: Account[] = await db.select().from(users).orderBy(asc(users.role), asc(users.name));
     return rows
       .filter((row) => row.role === "admin" || row.status !== "pending")
       .map((row) => {

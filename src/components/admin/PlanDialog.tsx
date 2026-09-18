@@ -22,6 +22,7 @@ export function PlanDialog({ user, onClose, onDone }: { user: PlanTarget; onClos
   const [until, setUntil] = useState("");
   const [saving, setSaving] = useState(false);
 
+  const untilDate = until ? new Date(`${until}T23:59:59`) : null; // the end of that day, in your timezone
   const choice: PlanChoice | null =
     kind === "preset"
       ? { preset }
@@ -29,9 +30,9 @@ export function PlanDialog({ user, onClose, onDone }: { user: PlanTarget; onClos
         ? unit === "days"
           ? { days: Number(amount) }
           : { months: Number(amount) }
-        : until
-          ? { until: new Date(`${until}T23:59:59`).toISOString() } // the end of that day, in your timezone
-          : null;
+        : untilDate && Number.isFinite(untilDate.getTime())
+          ? { until: untilDate.toISOString() }
+          : null; // no date typed, or one Date can't represent (e.g. a year out of range)
 
   let preview = "Pick an end date.";
   let valid = false;
