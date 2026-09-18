@@ -75,9 +75,9 @@ function DomainsPage() {
   const refresh = () => qc.invalidateQueries({ queryKey: ["domains"] });
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6 p-8">
-      <div className="flex items-center justify-between">
-        <div>
+    <div className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <div className="ident text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
             Control console
           </div>
@@ -92,10 +92,10 @@ function DomainsPage() {
             ) : null}
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-2 sm:gap-3">
           {batches.length > 0 && (
             <Select value={batchFilter} onValueChange={setFilter}>
-              <SelectTrigger className="w-44 rounded-lg">
+              <SelectTrigger className="w-full rounded-lg sm:w-44">
                 <SelectValue placeholder="All jobs" />
               </SelectTrigger>
               <SelectContent>
@@ -152,33 +152,34 @@ function DomainsPage() {
           {domains.map((d: any, i: number) => (
             <div
               key={d.id}
-              className={`flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/40 ${i > 0 ? "border-t border-border" : ""}`}
+              className={`flex items-center gap-2 px-4 py-3 transition-colors hover:bg-muted/40 sm:gap-3 ${i > 0 ? "border-t border-border" : ""}`}
             >
               <Link
                 to="/domains/$id"
                 params={{ id: d.id }}
                 className="flex min-w-0 flex-1 items-center gap-3"
               >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                {/* Decorative icon + chevron are dropped on phones so the domain name has room. */}
+                <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 sm:flex">
                   <Globe className="h-4 w-4 text-primary" />
                 </div>
                 <div className="min-w-0">
                   <div className="ident truncate text-sm font-medium text-foreground">{d.name}</div>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                     {d.batchName ? (
-                      <span className="inline-flex items-center gap-1">
-                        <FolderGit2 className="h-3 w-3" /> {d.batchName}
+                      <span className="inline-flex min-w-0 items-center gap-1">
+                        <FolderGit2 className="h-3 w-3 shrink-0" /> <span className="truncate">{d.batchName}</span>
                       </span>
                     ) : (
-                      <span>No job</span>
+                      <span className="shrink-0">No job</span>
                     )}
-                    <span aria-hidden>·</span>
-                    <span>{d.plannedInboxCount ? `${d.plannedInboxCount} mailboxes` : "No plan yet"}</span>
+                    <span aria-hidden className="shrink-0">·</span>
+                    <span className="truncate">{d.plannedInboxCount ? `${d.plannedInboxCount} mailboxes` : "No plan yet"}</span>
                   </div>
                 </div>
               </Link>
-              <StatusPill status={d.status} />
-              <Link to="/domains/$id" params={{ id: d.id }} className="text-muted-foreground hover:text-foreground">
+              <StatusPill status={d.status} className="shrink-0" />
+              <Link to="/domains/$id" params={{ id: d.id }} className="hidden text-muted-foreground hover:text-foreground sm:inline">
                 <ChevronRight className="h-4 w-4" />
               </Link>
               <DomainActionsMenu

@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import {
   deleteCookie,
   getCookie,
+  getRequest,
   getRequestHeader,
   getRequestIP,
   getRequestUrl,
@@ -12,6 +13,8 @@ import {
   createLoginThrottle,
   createSessionToken,
   credentialsMatch,
+  CROSS_SITE_ERROR,
+  crossSiteServerFnReason,
   isHttpsRequest,
   readAuthConfig,
   SESSION_COOKIE,
@@ -26,16 +29,39 @@ import {
 // Only createServerFn exports here. One plain runtime export would make this a "mixed" module that
 // TanStack Start can't strip out of the browser bundle.
 
-// Failed sign-ins per client IP. In memory: a restart clears it, which is fine for slowing guessing.
+// Failed sign-ins per client (an IPv6 /64 counts as one), plus a cap on failures from everyone
+// together. In memory: a restart clears it, which is fine for slowing guessing.
 const throttle = createLoginThrottle();
+
+// What an anonymous visitor learns when sign-in isn't configured. Which variables are missing or too
+// short goes to the server log instead.
+const NOT_CONFIGURED = "Sign-in isn't configured on the server yet. Check the server logs.";
+let reportedSetupProblems = false;
+
+function reportSetupProblems(problems: string[]) {
+  if (reportedSetupProblems) return; // process.env doesn't change without a restart
+  reportedSetupProblems = true;
+  console.error(`Sign-in is not configured: ${problems.join("; ")}. Fix .env and restart the app.`);
+}
+
+// Signing in and out change the session cookie, so another site mustn't be able to trigger either.
+// requireAuth makes the same check for every other server function.
+function refuseCrossSiteCall() {
+  const reason = crossSiteServerFnReason(getRequest());
+  if (reason) {
+    console.warn(`Refused a server function call from another site: ${reason}`);
+    throw new Error(CROSS_SITE_ERROR);
+  }
+}
 
 export const getSession = createServerFn({ method: "GET" }).handler(async () => {
   const auth = readAuthConfig(process.env);
   if (!auth.ok) {
-    return { authenticated: false, email: null as string | null, setupProblems: auth.problems };
+    reportSetupProblems(auth.problems);
+    return { authenticated: false, email: null as string | null, setupError: NOT_CONFIGURED as string | null };
   }
   const email = verifySessionToken(getCookie(SESSION_COOKIE), auth.config);
-  return { authenticated: email !== null, email, setupProblems: [] as string[] };
+  return { authenticated: email !== null, email, setupError: null as string | null };
 });
 
 export const login = createServerFn({ method: "POST" })
@@ -43,9 +69,12 @@ export const login = createServerFn({ method: "POST" })
     z.object({ email: z.string().max(320), password: z.string().max(1024) }).parse(d),
   )
   .handler(async ({ data }) => {
+    refuseCrossSiteCall();
+
     const auth = readAuthConfig(process.env);
     if (!auth.ok) {
-      return { ok: false, error: `Sign-in isn't set up on the server: ${auth.problems.join("; ")}.` };
+      reportSetupProblems(auth.problems);
+      return { ok: false, error: NOT_CONFIGURED };
     }
 
     // Caddy sets X-Forwarded-For. The app's port isn't published (docker-compose.yml), so nobody
@@ -79,6 +108,7 @@ export const login = createServerFn({ method: "POST" })
   });
 
 export const logout = createServerFn({ method: "POST" }).handler(async () => {
+  refuseCrossSiteCall();
   deleteCookie(SESSION_COOKIE, { path: "/" });
   return { ok: true };
 });

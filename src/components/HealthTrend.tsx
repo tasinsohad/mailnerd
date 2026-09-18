@@ -64,7 +64,9 @@ export function HealthTrend({
         />
       </svg>
       <span className="ident text-xs text-muted-foreground">{last.score}%</span>
-      {change && <span className={cn("text-[11px] font-medium", change.tone)}>{change.text}</span>}
+      {change && (
+        <span className={cn("hidden text-[11px] font-medium sm:inline", change.tone)}>{change.text}</span>
+      )}
     </div>
   );
 }

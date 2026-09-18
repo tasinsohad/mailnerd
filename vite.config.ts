@@ -31,6 +31,8 @@ export default defineConfig({
       // Live logs. In dev, sse-dev-plugin above serves /api/sse inside Vite's own process, where server
       // functions publish; the production server mounts the same Node handler here.
       handlers: [{ route: "/api/sse", handler: "./src/server/sse-node.ts", format: "node", env: "prod" }],
+      // Start the server-setup queue worker at boot, not on the first provisioning click.
+      plugins: ["./src/server/start-queue-worker.ts"],
       minify: false, // Drizzle ORM crashes if the server build is minified
       externals: {
         external: nativeExternals,

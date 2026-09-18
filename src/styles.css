@@ -200,3 +200,23 @@
     }
   }
 }
+
+/* iOS Safari zooms the whole page when you focus a form control whose font-size is under 16px, and
+   the app's inputs use text-xs/text-sm. On phone widths (below Tailwind's `sm`), pin them to 16px.
+   Deliberately NOT inside any @layer: Tailwind v4 emits utilities into @layer utilities, and
+   unlayered declarations beat every layer regardless of specificity, so this wins over text-sm etc. */
+@media (width < 40rem) {
+  input:not(
+      [type="checkbox"],
+      [type="radio"],
+      [type="range"],
+      [type="color"],
+      [type="button"],
+      [type="submit"],
+      [type="reset"]
+    ),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

@@ -55,7 +55,8 @@ export function downloadText(filename: string, text: string) {
   a.href = url;
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(url);
+  // Revoking straight away can cancel the download before iOS Safari has started it.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // Live terminal for a run: shows each command we send and the server's output as it arrives.
@@ -68,14 +69,28 @@ export function LiveConsole({
   running: boolean;
   filenameBase: string;
 }) {
-  const endRef = useRef<HTMLDivElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  // Where our own auto-scroll last left the pane, so its scroll event isn't mistaken for the user.
+  const autoScrollTop = useRef(0);
   const [stick, setStick] = useState(true);
   const [copied, setCopied] = useState(false);
 
-  // Follow the tail while it streams, unless the user has scrolled up to read something.
+  // Follow the tail while it streams, unless the user has scrolled up to read something. Scroll the
+  // pane itself: scrollIntoView would also scroll the page, yanking it back on every new line.
   useEffect(() => {
-    if (stick) endRef.current?.scrollIntoView({ block: "end" });
+    const el = logRef.current;
+    if (!stick || !el) return;
+    el.scrollTop = el.scrollHeight;
+    autoScrollTop.current = el.scrollTop;
   }, [lines, stick]);
+
+  // Works for wheel, touch and keyboard alike: scrolling up pauses, reaching the bottom resumes.
+  const onLogScroll = () => {
+    const el = logRef.current;
+    if (!el) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight <= 8) setStick(true);
+    else if (el.scrollTop < autoScrollTop.current - 1) setStick(false);
+  };
 
   const copyAll = async () => {
     try {
@@ -103,7 +118,7 @@ export function LiveConsole({
           onClick={() => setStick((s) => !s)}
           aria-pressed={stick}
           className={cn(
-            "rounded px-2 py-1 font-sans text-xs transition-colors duration-150",
+            "rounded px-3 py-2 font-sans text-xs transition-colors duration-150 sm:px-2 sm:py-1",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
             stick ? "text-terminal-foreground" : "text-white/55 hover:text-white/80",
           )}
@@ -114,7 +129,7 @@ export function LiveConsole({
         <button
           onClick={copyAll}
           disabled={lines.length === 0}
-          className="inline-flex items-center gap-1.5 rounded border border-white/15 px-2 py-1 font-sans text-xs text-white/80 transition-colors duration-150 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:pointer-events-none disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 rounded border border-white/15 px-3 py-2 sm:px-2 sm:py-1 font-sans text-xs text-white/80 transition-colors duration-150 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:pointer-events-none disabled:opacity-40"
           title="Copy the whole console"
         >
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
@@ -123,7 +138,7 @@ export function LiveConsole({
         <button
           onClick={() => downloadText(`${filenameBase}-console.log`, consoleText(lines))}
           disabled={lines.length === 0}
-          className="inline-flex items-center gap-1.5 rounded border border-white/15 px-2 py-1 font-sans text-xs text-white/80 transition-colors duration-150 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:pointer-events-none disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 rounded border border-white/15 px-3 py-2 sm:px-2 sm:py-1 font-sans text-xs text-white/80 transition-colors duration-150 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:pointer-events-none disabled:opacity-40"
           title="Download the whole console"
         >
           <Download className="h-3 w-3" />
@@ -131,8 +146,13 @@ export function LiveConsole({
         </button>
       </div>
       <div
+        ref={logRef}
         className="max-h-[22rem] overflow-auto px-4 py-3"
-        onWheel={() => setStick(false)}
+        // Wheel-up pauses at once, so a fast stream can't snap the pane back before onScroll runs.
+        onWheel={(e) => {
+          if (e.deltaY < 0) setStick(false);
+        }}
+        onScroll={onLogScroll}
         role="log"
         aria-live="polite"
         aria-label="Server console output"
@@ -155,7 +175,6 @@ export function LiveConsole({
             ))}
           </pre>
         )}
-        <div ref={endRef} />
       </div>
     </div>
   );

@@ -5,6 +5,7 @@ import { domainPlans, plannedInboxes, domains } from "@/lib/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { planDomain } from "@/lib/planning";
 import { subdomainExportRows } from "@/lib/subdomains";
+import { claimDomain, releaseDomain, busyMessage } from "./domain-locks";
 
 export const getDomainPlan = createServerFn({ method: "GET" })
   .middleware([requireAuth])
@@ -57,7 +58,8 @@ export const getInboxExport = createServerFn({ method: "GET" })
       const mailServer = dom.mailcowHostname || `mail.${dom.name}`;
       const inbs = await db.select().from(plannedInboxes).where(eq(plannedInboxes.domainId, dom.id));
       for (const ib of inbs) {
-        if (!ib.password) continue; // only created/usable accounts
+        // Only mailboxes confirmed in Mailcow: a failed or unconfirmed one can still hold a password.
+        if (ib.status !== "active" || !ib.password) continue;
         rows.push({
           domain: dom.name,
           name: ib.fullName || [ib.firstName, ib.lastName].filter(Boolean).join(" ") || ib.localPart || "",
@@ -126,7 +128,7 @@ export const regeneratePlan = createServerFn({ method: "POST" })
     z
       .object({
         domainId: z.string(),
-        totalInboxes: z.number(),
+        totalInboxes: z.number().int().min(1).max(10000),
         prefixes: z.array(z.string()),
         names: z.array(z.string()),
         placement: z.enum(["subdomain", "main", "both"]).optional(),
@@ -142,76 +144,94 @@ export const regeneratePlan = createServerFn({ method: "POST" })
     });
     if (!domain) throw new Error("Domain not found");
 
-    const existingPlan = await db.query.domainPlans.findFirst({
-      where: eq(domainPlans.domainId, data.domainId),
-    });
+    // Replacing the planned mailboxes mid-run would pull them out from under that run, and no run may start
+    // while they're being replaced.
+    const claim = claimDomain(domain.id, "mailbox count change");
+    if (!claim.ok) return { ok: false, error: busyMessage(claim.running) };
 
-    // Preserve the placement (main / subdomain / both) chosen at creation, unless overridden.
-    const placement = data.placement ?? existingPlan?.placement ?? "subdomain";
+    try {
+      const existingPlan = await db.query.domainPlans.findFirst({
+        where: eq(domainPlans.domainId, data.domainId),
+      });
 
-    const built = planDomain(domain.name, {
-      totalInboxes: data.totalInboxes,
-      prefixes: data.prefixes,
-      names: data.names,
-      placement,
-    });
+      // Preserve the placement (main / subdomain / both) chosen at creation, unless overridden.
+      const placement = data.placement ?? existingPlan?.placement ?? "subdomain";
 
-    await db.delete(plannedInboxes).where(eq(plannedInboxes.domainId, data.domainId));
+      const built = planDomain(domain.name, {
+        totalInboxes: data.totalInboxes,
+        prefixes: data.prefixes,
+        names: data.names,
+        placement,
+      });
 
-    let planId: string;
-    if (existingPlan) {
-      await db
-        .update(domainPlans)
-        .set({
-          totalInboxes: built.totalInboxes,
-          subdomainCount: built.subdomainCount,
-          status: "planned",
-          prefixesSnapshot: data.prefixes,
-          namesSnapshot: data.names,
-          placement,
-        })
-        .where(eq(domainPlans.id, existingPlan.id));
-      planId = existingPlan.id;
-    } else {
-      const [p] = await db
-        .insert(domainPlans)
-        .values({
+      // All or nothing: a failure part-way used to leave the domain with its old mailboxes deleted and only
+      // some of the new ones planned.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await db.transaction(async (tx: any) => {
+        await tx.delete(plannedInboxes).where(eq(plannedInboxes.domainId, data.domainId));
+
+        let planId: string;
+        if (existingPlan) {
+          await tx
+            .update(domainPlans)
+            .set({
+              totalInboxes: built.totalInboxes,
+              subdomainCount: built.subdomainCount,
+              status: "planned",
+              prefixesSnapshot: data.prefixes,
+              namesSnapshot: data.names,
+              placement,
+            })
+            .where(eq(domainPlans.id, existingPlan.id));
+          planId = existingPlan.id;
+        } else {
+          const [p] = await tx
+            .insert(domainPlans)
+            .values({
+              userId,
+              domainId: data.domainId,
+              totalInboxes: built.totalInboxes,
+              subdomainCount: built.subdomainCount,
+              status: "planned",
+              prefixesSnapshot: data.prefixes,
+              namesSnapshot: data.names,
+              placement,
+            })
+            .returning();
+          planId = p.id;
+        }
+
+        await tx
+          .update(domains)
+          .set({ plannedInboxCount: built.totalInboxes })
+          .where(eq(domains.id, data.domainId));
+
+        const rows = built.inboxes.map((ib) => ({
           userId,
           domainId: data.domainId,
-          totalInboxes: built.totalInboxes,
-          subdomainCount: built.subdomainCount,
+          planId,
+          subdomainPrefix: ib.subdomainPrefix,
+          subdomainFqdn: ib.subdomainFqdn,
+          localPart: ib.localPart,
+          email: ib.email,
+          fullName: ib.fullName,
+          firstName: ib.firstName,
+          lastName: ib.lastName,
+          format: ib.format,
           status: "planned",
-          prefixesSnapshot: data.prefixes,
-          namesSnapshot: data.names,
-          placement,
-        })
-        .returning();
-      planId = p.id;
+        }));
+
+        // In chunks: Postgres takes at most 65535 parameters per statement, which one insert of a
+        // 10000-mailbox plan (12 columns each) would pass.
+        for (let i = 0; i < rows.length; i += INSERT_CHUNK_ROWS) {
+          await tx.insert(plannedInboxes).values(rows.slice(i, i + INSERT_CHUNK_ROWS));
+        }
+      });
+
+      return { ok: true };
+    } finally {
+      releaseDomain(domain.id, claim.owner);
     }
-
-    await db
-      .update(domains)
-      .set({ plannedInboxCount: built.totalInboxes })
-      .where(eq(domains.id, data.domainId));
-
-    const rows = built.inboxes.map((ib) => ({
-      userId,
-      domainId: data.domainId,
-      planId,
-      subdomainPrefix: ib.subdomainPrefix,
-      subdomainFqdn: ib.subdomainFqdn,
-      localPart: ib.localPart,
-      email: ib.email,
-      fullName: ib.fullName,
-      firstName: ib.firstName,
-      lastName: ib.lastName,
-      format: ib.format,
-      status: "planned",
-    }));
-
-    if (rows.length) {
-      await db.insert(plannedInboxes).values(rows);
-    }
-
-    return { ok: true };
   });
+
+const INSERT_CHUNK_ROWS = 500;

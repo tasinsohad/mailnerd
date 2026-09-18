@@ -75,19 +75,26 @@ function IndicatorRows({
         const isOpen = open[ind.id];
         const fixStep = fixStepFor(ind.id);
         return (
-          <li key={ind.id} className="px-6 py-3">
+          <li key={ind.id} className="px-4 py-3 sm:px-6">
             <div className="flex items-center gap-3">
               <span
                 className={cn(
-                  "status-dot",
+                  "status-dot shrink-0",
                   DOT[ind.status],
                   ind.status === "fail" && "status-dot--pulse",
                 )}
               />
-              <span className="w-40 shrink-0 text-sm font-medium text-foreground">{ind.label}</span>
-              <span className="flex-1 truncate text-sm text-muted-foreground" title={ind.detail}>
-                {ind.detail}
-              </span>
+              {/* Phones: label above the diagnosis, which wraps (no hover tooltip on touch).
+                  sm+: label column + one truncated line, as before. */}
+              <div className="flex min-w-0 flex-1 flex-col gap-x-3 gap-y-0.5 sm:flex-row sm:items-center">
+                <span className="shrink-0 text-sm font-medium text-foreground sm:w-40">{ind.label}</span>
+                <span
+                  className="min-w-0 break-words text-sm text-muted-foreground sm:flex-1 sm:truncate"
+                  title={ind.detail}
+                >
+                  {ind.detail}
+                </span>
+              </div>
               {ind.id === "queue" && (ind.status === "fail" || ind.status === "warn") ? (
                 // The queue always gets a direct "Flush now" that bypasses the planner's smart
                 // gating — so a stuck queue can always be retried on demand, even when the planner
@@ -95,7 +102,7 @@ function IndicatorRows({
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-8"
+                  className="h-8 shrink-0"
                   disabled={busy}
                   onClick={onForceFlush}
                   title="Run postqueue -f on the server now, regardless of the auto-heal plan"
@@ -109,7 +116,7 @@ function IndicatorRows({
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8"
+                    className="h-8 shrink-0"
                     disabled={busy}
                     onClick={() => onFix(ind.id)}
                   >
@@ -118,10 +125,14 @@ function IndicatorRows({
                 )
               )}
               {ind.fix && (
+                // 40px tap target; the negative margin cancels the padding so the layout is unchanged.
                 <button
+                  type="button"
                   onClick={() => setOpen((o) => ({ ...o, [ind.id]: !o[ind.id] }))}
-                  className="text-muted-foreground hover:text-foreground"
+                  className="-m-3 shrink-0 rounded-md p-3 text-muted-foreground hover:text-foreground"
                   title="How to fix"
+                  aria-label="How to fix"
+                  aria-expanded={!!isOpen}
                 >
                   <ChevronDown
                     className={cn("h-4 w-4 transition-transform", isOpen && "rotate-180")}
@@ -301,9 +312,9 @@ export function HealthCard({
 
   return (
     <div className="rounded-xl border border-border bg-card">
-      <div className="flex items-center gap-3 border-b border-border px-6 py-4">
-        <ShieldCheck className="h-5 w-5 text-muted-foreground" />
-        <div className="flex-1">
+      <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-4 sm:px-6">
+        <ShieldCheck className="h-5 w-5 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
           <h2 className="font-display text-base font-semibold text-foreground">
             Deliverability health
           </h2>
@@ -311,45 +322,48 @@ export function HealthCard({
             {checkedAt ? `Checked ${new Date(checkedAt).toLocaleString()}` : "Not checked yet"}
           </div>
         </div>
-        {health && (
-          <span className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs font-medium">
-            <span className={cn("status-dot", overall.color)} />
-            {overall.label}
-            <span className="ident text-muted-foreground">{health.score}%</span>
-          </span>
-        )}
-        {hasHealables && (
+        {/* Phones: status + controls drop to their own row; sm+: inline as before. */}
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:gap-3">
+          {health && (
+            <span className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs font-medium">
+              <span className={cn("status-dot", overall.color)} />
+              {overall.label}
+              <span className="ident text-muted-foreground">{health.score}%</span>
+            </span>
+          )}
+          {hasHealables && (
+            <Button
+              size="sm"
+              className="h-9 gap-1.5"
+              onClick={() => openPlan()}
+              disabled={rowsBusy}
+              title="Diagnose and fix the issues in the right order"
+            >
+              <Wrench className="h-4 w-4" />
+              Auto-heal
+            </Button>
+          )}
           <Button
+            variant="outline"
             size="sm"
             className="h-9 gap-1.5"
-            onClick={() => openPlan()}
+            onClick={recheck}
             disabled={rowsBusy}
-            title="Diagnose and fix the issues in the right order"
           >
-            <Wrench className="h-4 w-4" />
-            Auto-heal
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Re-check
           </Button>
-        )}
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-9 gap-1.5"
-          onClick={recheck}
-          disabled={rowsBusy}
-        >
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          Re-check
-        </Button>
+        </div>
       </div>
 
       {!health ? (
-        <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+        <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground sm:p-6">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           {busy ? "Running checks…" : "No result yet."}
         </div>
       ) : (
         <>
-          <div className="flex items-center justify-between px-6 pt-3">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 pt-3 sm:px-6">
             <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
               Domain — DNS authentication
             </span>
@@ -363,9 +377,9 @@ export function HealthCard({
             onForceFlush={flushNow}
           />
 
-          <div className="flex items-center justify-between border-t border-border px-6 pt-4 pb-1">
-            <span className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-              <Server className="h-3.5 w-3.5" />
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border px-4 pt-4 pb-1 sm:px-6">
+            <span className="flex min-w-0 items-center gap-2 break-all text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              <Server className="h-3.5 w-3.5 shrink-0" />
               Server{serverIp ? ` — ${serverIp}` : ""}
             </span>
             {serverIp && <HealthTrend scope="server" targetKey={serverIp} version={trendVersion} />}
@@ -379,13 +393,13 @@ export function HealthCard({
               onForceFlush={flushNow}
             />
           ) : (
-            <div className="px-6 py-3 text-sm text-muted-foreground">
+            <div className="px-4 py-3 text-sm text-muted-foreground sm:px-6">
               {busy ? "Checking server…" : "No server result yet — Re-check to run server checks."}
             </div>
           )}
 
           {plan && (
-            <div className="border-t border-border p-6">
+            <div className="border-t border-border p-4 sm:p-6">
               <RemediationPlanPanel
                 plan={plan}
                 running={running}

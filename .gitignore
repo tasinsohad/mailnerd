@@ -36,3 +36,4 @@ nul
 
 # Local Claude Code settings
 .claude/settings.local.json
+.gstack/

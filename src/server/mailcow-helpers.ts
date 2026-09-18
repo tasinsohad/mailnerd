@@ -13,6 +13,83 @@ export const QUOTA = {
   MAILBOX_QUOTA_MB: 1024, // default/created mailbox size: 1 GB (sending accounts)
 } as const;
 
+export interface MailDomainLimits {
+  mailboxes: number;
+  quotaMb: number;
+  maxQuotaMb: number;
+}
+
+// What a mail domain allows now, plus what its existing mailboxes already use (from get/domain/all).
+export interface CurrentMailDomainLimits extends Partial<MailDomainLimits> {
+  mailboxesUsed?: number;
+  quotaUsedMb?: number;
+}
+
+// The limits a Mailcow mail domain needs to hold `plannedMailboxes`, never below what it already allows.
+// Mailcow refuses a mailbox once the domain's mailbox count OR the sum of mailbox quotas would pass its
+// limits, so both grow with the plan (a fixed 50 / 50 GB used to silently lose mailbox 51 onward), and
+// with mailboxes already on the domain that aren't in the plan: `missingMailboxes` still have to be added
+// on top of what's used. When that number isn't known, every planned mailbox is assumed missing.
+// `raise` says whether Mailcow needs updating at all.
+export function mailDomainLimitsFor(
+  plannedMailboxes: number,
+  current: CurrentMailDomainLimits = {},
+  missingMailboxes: number = plannedMailboxes,
+): MailDomainLimits & { raise: boolean } {
+  const toAdd = Math.max(0, missingMailboxes);
+  const mailboxes = Math.max(
+    QUOTA.DOMAIN_MAX_MAILBOXES,
+    plannedMailboxes,
+    (current.mailboxesUsed ?? 0) + toAdd,
+    current.mailboxes ?? 0,
+  );
+  const quotaMb = Math.max(
+    QUOTA.DOMAIN_QUOTA_MB,
+    plannedMailboxes * QUOTA.MAILBOX_QUOTA_MB,
+    (current.quotaUsedMb ?? 0) + toAdd * QUOTA.MAILBOX_QUOTA_MB,
+    current.quotaMb ?? 0,
+  );
+  const maxQuotaMb = Math.min(quotaMb, Math.max(QUOTA.MAILBOX_MAX_QUOTA_MB, current.maxQuotaMb ?? 0));
+  const raise =
+    current.mailboxes === undefined ||
+    current.quotaMb === undefined ||
+    current.maxQuotaMb === undefined ||
+    mailboxes > current.mailboxes ||
+    quotaMb > current.quotaMb ||
+    maxQuotaMb > current.maxQuotaMb;
+  return { mailboxes, quotaMb, maxQuotaMb, raise };
+}
+
+// A domain's current limits and usage from a Mailcow get/domain row (quotas arrive in bytes, sometimes as
+// strings). quota_used_in_domain is the sum of its mailboxes' quotas, which is what Mailcow checks.
+export function currentLimitsFromMailcow(row: Record<string, unknown>): CurrentMailDomainLimits {
+  const num = (v: unknown) => {
+    const n = typeof v === "string" && v.trim() !== "" ? Number(v) : typeof v === "number" ? v : NaN;
+    return Number.isFinite(n) && n >= 0 ? n : undefined;
+  };
+  const mb = (v: unknown) => {
+    const n = num(v);
+    return n === undefined ? undefined : Math.round(n / (1024 * 1024));
+  };
+  return {
+    mailboxes: num(row.max_num_mboxes_for_domain),
+    quotaMb: mb(row.max_quota_for_domain),
+    maxQuotaMb: mb(row.max_quota_for_mbox),
+    mailboxesUsed: num(row.mboxes_in_domain),
+    quotaUsedMb: mb(row.quota_used_in_domain),
+  };
+}
+
+// The Mailcow usernames (addresses) that belong to a registrable domain: on the domain itself or any of its
+// subdomains. Others on a shared Mailcow server are left out.
+export function mailboxesOnDomain(usernames: string[], domainName: string): string[] {
+  const name = domainName.toLowerCase();
+  return usernames.filter((u) => {
+    const d = u.split("@")[1]?.toLowerCase();
+    return d === name || (d ? d.endsWith(`.${name}`) : false);
+  });
+}
+
 // Generate a strong mailbox password that satisfies any sane complexity policy:
 // guaranteed >=2 each of upper/lower/digit/special, length 20, cryptographically random.
 // (Math.random().toString(36) was weak/inconsistent — it could omit a character class

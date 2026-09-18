@@ -2,5 +2,14 @@
 # domain's DNS A record must point at this server, and ports 80 and 443 must be open.
 # Live logs (/api/sse) are event streams, which Caddy passes through without buffering.
 {$DOMAIN} {
+	# Standard hardening for an admin console: HTTPS only from now on, no MIME sniffing, never framed by
+	# another site (clickjacking), and no full URLs leaked to other sites.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Via
+	}
 	reverse_proxy app:3000
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 function MatrixAnimation() {
@@ -94,14 +95,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Plus, Trash2, Wand2, Save, FolderOpen, X, Upload, Download } from "lucide-react";
+import { Loader2, Plus, Trash2, Wand2, Save, FolderOpen, Upload, Download } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "@tanstack/react-router";
 import {
   parseList,
   planDomain,
   randInt,
-  allocateInboxesAcrossDomains,
+  allocateInboxes,
+  inboxCountSettingsError,
+  type InboxCountMode,
+  type InboxCountSettings,
   DomainPlan,
   generateDnsRecords,
 } from "@/lib/planning";
@@ -113,7 +117,10 @@ interface DomainRow {
   sshPassword?: string;
   plannedSubdomainCount?: number;
   plannedInboxCount?: number;
-  plannedDistribution?: number[];
+  // The previewed split per mail domain ("@" = main domain); the server creates exactly this.
+  plannedDistribution?: { prefix: string; count: number }[];
+  // "Set per domain" mode: the count typed for this domain (or imported from the CSV).
+  manualInboxCount?: number;
 }
 
 interface AddDomainWizardProps {
@@ -121,17 +128,41 @@ interface AddDomainWizardProps {
   onOpenChange: (open: boolean) => void;
 }
 
+const INBOX_MODES: { value: InboxCountMode; label: string; hint: string }[] = [
+  { value: "even", label: "Even split", hint: "A total, split evenly across the domains" },
+  { value: "random", label: "Random split", hint: "A total, split at random; still adds up exactly" },
+  { value: "fixed", label: "Same per domain", hint: "The same number for every domain" },
+  { value: "range", label: "Random range", hint: "Each domain gets a random number in a range" },
+  { value: "manual", label: "Set per domain", hint: "Type a number for each domain" },
+];
+
+// Mailcow's standard mailbox limit per mail domain. Bigger plans are fine: the app raises the limit.
+const MAILCOW_DEFAULT_MAILBOX_LIMIT = 50;
+
+function describeFailures(failed: { domain: string; error: string }[] | undefined): string {
+  if (!failed?.length) return "";
+  const shown = failed
+    .slice(0, 3)
+    .map((f) => `${f.domain}: ${f.error}`)
+    .join("; ");
+  return `Not added: ${shown}${failed.length > 3 ? ` and ${failed.length - 3} more` : ""}.`;
+}
+
 type CsvRow = {
   domain: string;
   ipAddress?: string;
   sshUser?: string;
   sshPassword?: string;
+  inboxes?: number; // optional mailbox count column
 };
 
 // Parse a CSV of domains + optional server credentials.
 // Accepts comma / semicolon / tab delimiters. If a header row is present
-// (contains "domain"), columns are matched by name; otherwise columns are
-// assumed to be: domain, ipAddress, sshUser, sshPassword.
+// (contains "domain"), columns are matched by name, including an optional
+// mailbox count column ("inboxes", "mailboxes", ...). Otherwise columns are
+// assumed to be: domain, ipAddress, sshUser, sshPassword. A headerless CSV
+// never yields a mailbox count, so an extra 5th column (e.g. an SSH port)
+// isn't mistaken for one.
 function parseDomainCsv(text: string): CsvRow[] {
   const lines = text
     .split(/\r?\n/)
@@ -146,7 +177,8 @@ function parseDomainCsv(text: string): CsvRow[] {
   const first = splitLine(lines[0]).map(normalize);
   const hasHeader = first.some((h) => h.includes("domain"));
 
-  let idx = { domain: 0, ipAddress: 1, sshUser: 2, sshPassword: 3 };
+  // inboxes: -1 = not read. Only a named header column supplies mailbox counts.
+  let idx = { domain: 0, ipAddress: 1, sshUser: 2, sshPassword: 3, inboxes: -1 };
   if (hasHeader) {
     const find = (aliases: string[]) =>
       first.findIndex((h) => aliases.some((a) => h === a || h.includes(a)));
@@ -155,8 +187,17 @@ function parseDomainCsv(text: string): CsvRow[] {
       ipAddress: find(["ipaddress", "ip"]),
       sshUser: find(["sshuser", "user", "username"]),
       sshPassword: find(["sshpassword", "password", "pass"]),
+      // Exact names only: "count" alone would also match a header like "account".
+      inboxes: first.findIndex((h) =>
+        ["inboxes", "mailboxes", "inboxcount", "mailboxcount", "emails", "count"].includes(h),
+      ),
     };
   }
+
+  const parseCount = (value: string | undefined) => {
+    const n = value ? Number(value) : NaN;
+    return Number.isFinite(n) ? n : undefined;
+  };
 
   const rows: CsvRow[] = [];
   const dataLines = hasHeader ? lines.slice(1) : lines;
@@ -169,6 +210,7 @@ function parseDomainCsv(text: string): CsvRow[] {
       ipAddress: idx.ipAddress >= 0 ? cols[idx.ipAddress] || undefined : undefined,
       sshUser: idx.sshUser >= 0 ? cols[idx.sshUser] || undefined : undefined,
       sshPassword: idx.sshPassword >= 0 ? cols[idx.sshPassword] || undefined : undefined,
+      inboxes: idx.inboxes >= 0 ? parseCount(cols[idx.inboxes]) : undefined,
     });
   }
   return rows;
@@ -213,11 +255,13 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
   // Where mailboxes are created: on subdomains, the main domain, or both.
   const [placement, setPlacement] = useState<"subdomain" | "main" | "both">("subdomain");
 
-  // Each count control can be a per-domain range or an exact count (independent toggles).
+  // Subdomains: a per-domain range or an exact count.
   const [subdomainMode, setSubdomainMode] = useState<"range" | "exact">("range");
-  const [inboxMode, setInboxMode] = useState<"range" | "exact">("range");
   const [exactSubdomains, setExactSubdomains] = useState(3);
-  const [exactTotalInboxes, setExactTotalInboxes] = useState(50);
+  // Mailboxes: how the batch's counts are decided (see INBOX_MODES).
+  const [inboxMode, setInboxMode] = useState<InboxCountMode>("even");
+  const [totalInboxes, setTotalInboxes] = useState(50);
+  const [perDomainInboxes, setPerDomainInboxes] = useState(20);
 
   // Planned results for preview
   const [plannedResults, setPlannedResults] = useState<DomainPlan[]>([]);
@@ -293,11 +337,21 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
 
   const addMutation = useMutation({
     mutationFn: (data: any) => addDomainsWizardAction({ data }),
-    onSuccess: (res) => {
+    onSuccess: (res: any) => {
       if (res.error) {
         toast.error(res.error);
+      } else if (res.okCount === 0) {
+        // Nothing was added: keep the wizard open so the batch can be fixed and submitted again.
+        toast.error(`No domains were added. ${describeFailures(res.failed)}`, { duration: 15000 });
       } else {
-        toast.success(`Successfully added ${res.okCount} domains!`);
+        if (res.failed?.length) {
+          toast.warning(
+            `Added ${res.okCount} of ${res.okCount + res.failed.length} domains. ${describeFailures(res.failed)}`,
+            { duration: 15000 },
+          );
+        } else {
+          toast.success(`Successfully added ${res.okCount} domains!`);
+        }
         qc.invalidateQueries({ queryKey: ["domain-batches"] });
         qc.invalidateQueries({ queryKey: ["domains"] });
         onOpenChange(false);
@@ -325,6 +379,12 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
     setSelectedTemplateId("");
     setDomainRows([]);
     setCsvCreds({});
+    setInboxMode("even");
+    setTotalInboxes(50);
+    setPerDomainInboxes(20);
+    setMinInboxes(10);
+    setMaxInboxes(50);
+    setPlannedResults([]);
   };
 
   const applyTemplate = (template: any) => {
@@ -376,7 +436,17 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
     });
   };
 
-  // Returns a human-readable error string if the active Step-2 modes are invalid, else null.
+  const inboxSettings = (): InboxCountSettings => ({
+    mode: inboxMode,
+    total: totalInboxes,
+    perDomain: perDomainInboxes,
+    min: minInboxes,
+    max: maxInboxes,
+    // Blank counts are left out, so a missing one reads as "enter a count for every domain".
+    manual: domainRows.map((row) => row.manualInboxCount).filter((n): n is number => n !== undefined),
+  });
+
+  // Returns a human-readable error string if the active Step-2 settings are invalid, else null.
   const step2Errors = (): string | null => {
     if (subdomainMode === "range") {
       if (minSubdomains < 1) return "Min subdomains must be ≥ 1";
@@ -384,62 +454,81 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
     } else if (exactSubdomains < 1) {
       return "Exact subdomains must be ≥ 1";
     }
-    if (inboxMode === "range") {
-      if (minInboxes < 1) return "Min inboxes must be ≥ 1";
-      if (maxInboxes < minInboxes) return "Max inboxes must be ≥ Min inboxes";
-      if (subdomainMode === "range" && minInboxes < maxSubdomains)
-        return "Min inboxes must be ≥ Max subdomains (to ensure at least 1 inbox per subdomain)";
-    } else if (exactTotalInboxes < domainRows.length) {
-      return `Total inboxes must be ≥ number of domains (${domainRows.length}) so each domain gets at least one`;
-    }
-    return null;
+    return inboxCountSettingsError(inboxSettings(), domainRows.length);
   };
 
-  const planAllDomains = () => {
+  // One line under the mailbox inputs saying what the chosen mode will do.
+  const inboxModeSummary = (): string => {
+    const n = domainRows.length;
+    switch (inboxMode) {
+      case "even": {
+        if (n === 0) return "";
+        const low = Math.floor(totalInboxes / n);
+        const high = Math.ceil(totalInboxes / n);
+        return `${totalInboxes} total: ${low === high ? low : `${low}–${high}`} per domain across ${n} domains`;
+      }
+      case "random":
+        return `${totalInboxes} total, split at random across ${n} domains (adds up exactly)`;
+      case "fixed":
+        return `${perDomainInboxes} per domain: ${perDomainInboxes * n} total`;
+      case "range":
+        return `Each of ${n} domains gets ${minInboxes}–${maxInboxes}: ${minInboxes * n}–${maxInboxes * n} total`;
+      case "manual": {
+        const entered = domainRows.reduce((sum, row) => sum + (row.manualInboxCount ?? 0), 0);
+        return `Type a count for each domain below: ${entered} total so far`;
+      }
+      default:
+        return "";
+    }
+  };
+  const inboxSettingsError = step === 2 ? inboxCountSettingsError(inboxSettings(), domainRows.length) : null;
+
+  // Plan every domain for the chosen count mode. Returns false (after telling the user why) if it can't.
+  const planAllDomains = (): boolean => {
     const prefixes = parseList(prefixesText);
     const names = parseList(namesText);
     const results: DomainPlan[] = [];
 
-    // In exact-total inbox mode, split the batch total across domains up front.
-    const inboxAllocation =
-      inboxMode === "exact"
-        ? allocateInboxesAcrossDomains(exactTotalInboxes, domainRows.length)
-        : null;
+    let counts: number[];
+    try {
+      counts = allocateInboxes(inboxSettings(), domainRows.length);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+      return false;
+    }
 
     for (let d = 0; d < domainRows.length; d++) {
       const row = domainRows[d];
       let attempts = 0;
       let plan: DomainPlan | null = null;
+      let lastError = "";
 
       while (attempts < 10 && !plan) {
         const subdomainCount =
           subdomainMode === "exact" ? exactSubdomains : randInt(minSubdomains, maxSubdomains);
-        const totalInboxes =
-          inboxMode === "exact" ? inboxAllocation![d] : randInt(minInboxes, maxInboxes);
-
         try {
           plan = planDomain(row.domain, {
-            totalInboxes,
+            totalInboxes: counts[d],
             prefixes,
             names,
             minSubdomains: subdomainCount,
             maxSubdomains: subdomainCount,
             placement,
           });
-          if (plan.inboxes.length !== totalInboxes) {
+          if (plan.inboxes.length !== counts[d]) {
             plan = null;
             attempts++;
           }
         } catch (e) {
+          lastError = e instanceof Error ? e.message : String(e);
           attempts++;
         }
       }
 
       if (!plan) {
-        toast.error(`Failed to plan ${row.domain} after 10 attempts`);
-        return;
+        toast.error(`Couldn't plan ${row.domain}${lastError ? `: ${lastError}` : ""}`);
+        return false;
       }
-
       results.push(plan);
     }
 
@@ -449,16 +538,20 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
         ...row,
         plannedSubdomainCount: results[i]?.subdomainCount,
         plannedInboxCount: results[i]?.totalInboxes,
-        plannedDistribution: results[i] ? Object.values(results[i].subdomainDistribution) : [],
+        plannedDistribution: results[i]
+          ? Object.entries(results[i].subdomainDistribution).map(([prefix, count]) => ({ prefix, count }))
+          : [],
       })),
     );
+    return true;
   };
 
   const handleDownloadTemplate = () => {
-    const headers = ["domain", "ipAddress", "sshUser", "sshPassword"];
+    // "inboxes" is optional: fill it in to set each domain's mailbox count.
+    const headers = ["domain", "ipAddress", "sshUser", "sshPassword", "inboxes"];
     const sampleRows = [
-      ["example.com", "192.168.1.10", "root", "your-password"],
-      ["another.net", "192.168.1.11", "root", "your-password"],
+      ["example.com", "192.168.1.10", "root", "your-password", "20"],
+      ["another.net", "192.168.1.11", "root", "your-password", "25"],
     ];
     const csv = [headers, ...sampleRows].map((row) => row.join(",")).join("\r\n") + "\r\n";
 
@@ -470,7 +563,8 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    // Revoking straight away can cancel the download before iOS Safari has started it.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -491,6 +585,24 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
         const creds: Record<string, CsvRow> = {};
         for (const row of rows) creds[row.domain.toLowerCase()] = row;
         setCsvCreds(creds);
+        // Rows already made on step 2 are kept when moving forward again (see handleNext), so apply
+        // this newer CSV's values to them here, or they'd be ignored for those domains.
+        setDomainRows((prev) =>
+          prev.map((row) => {
+            const c = creds[row.domain.trim().toLowerCase()];
+            if (!c) return row;
+            return {
+              ...row,
+              ipAddress: c.ipAddress || row.ipAddress,
+              sshUser: c.sshUser || row.sshUser,
+              sshPassword: c.sshPassword || row.sshPassword,
+              manualInboxCount: c.inboxes ?? row.manualInboxCount,
+            };
+          }),
+        );
+        // A CSV with a mailbox count column means: use those exact counts.
+        const withCounts = rows.some((r) => r.inboxes !== undefined);
+        if (withCounts) setInboxMode("manual");
 
         // Merge with any domains already entered, de-duplicating.
         const existing = parseList(domainList);
@@ -502,7 +614,8 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
         const withCreds = rows.filter((r) => r.ipAddress || r.sshUser || r.sshPassword).length;
         toast.success(
           `Imported ${rows.length} domain${rows.length === 1 ? "" : "s"} from CSV` +
-            (withCreds > 0 ? ` (${withCreds} with server credentials)` : ""),
+            (withCreds > 0 ? ` (${withCreds} with server credentials)` : "") +
+            (withCounts ? ` with mailbox counts — using "Set per domain"` : ""),
         );
 
         validateMutation.mutate(merged);
@@ -541,17 +654,30 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
         toast.error("Please enter at least one domain");
         return;
       }
-      setDomainRows(
-        domains.map((d) => {
-          const cred = csvCreds[d.toLowerCase()];
+      // Keep what was typed on step 2 for domains that are still listed (going Back and forward
+      // again must not wipe it); new domains start from the CSV values, then the defaults.
+      const previousRows = new Map(domainRows.map((row) => [row.domain.trim().toLowerCase(), row]));
+      const rows: DomainRow[] = domains.map((d) => {
+        const prev = previousRows.get(d.toLowerCase());
+        if (prev) {
           return {
             domain: d,
-            ipAddress: cred?.ipAddress || servers[0]?.ipAddress || "1.2.3.4",
-            sshUser: cred?.sshUser || servers[0]?.sshUser || "root",
-            sshPassword: cred?.sshPassword || "",
+            ipAddress: prev.ipAddress,
+            sshUser: prev.sshUser,
+            sshPassword: prev.sshPassword,
+            manualInboxCount: prev.manualInboxCount,
           };
-        }),
-      );
+        }
+        const cred = csvCreds[d.toLowerCase()];
+        return {
+          domain: d,
+          ipAddress: cred?.ipAddress || servers[0]?.ipAddress || "1.2.3.4",
+          sshUser: cred?.sshUser || servers[0]?.sshUser || "root",
+          sshPassword: cred?.sshPassword || "",
+          manualInboxCount: cred?.inboxes,
+        };
+      });
+      setDomainRows(rows);
       setStep(2);
     } else if (step === 2) {
       const err = step2Errors();
@@ -559,8 +685,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
         toast.error(err);
         return;
       }
-      planAllDomains();
-      setStep(3);
+      if (planAllDomains()) setStep(3);
     }
   };
 
@@ -574,6 +699,10 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (domainRows.some((row) => !row.plannedInboxCount)) {
+      toast.error("Some domains aren't planned yet. Go back a step and press Next again.");
+      return;
+    }
     setLoading(true);
 
     const prefixes = parseList(prefixesText);
@@ -590,7 +719,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
         sshUser: row.sshUser,
         sshPassword: row.sshPassword,
         plannedSubdomainCount: row.plannedSubdomainCount,
-        plannedInboxCount: row.plannedInboxCount || 0,
+        plannedInboxCount: row.plannedInboxCount,
         plannedDistribution: row.plannedDistribution,
       })),
       prefixes,
@@ -601,25 +730,32 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
 
   return (
     <>
+    {/* Outside DialogContent: its transform + overflow-y-auto would contain this full-window canvas and
+        add scrollbars. Portalled to <body> so no ancestor on the page can contain it either; z-[100]
+        keeps it above the dialog (z-50). */}
+    {loading && typeof document !== "undefined" && createPortal(<MatrixAnimation />, document.body)}
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl rounded-lg p-0 overflow-hidden border-none shadow-lg">
-        {loading && <MatrixAnimation />}
-        <DialogHeader className="p-8 bg-[#23242A] text-white">
-          <div className="flex items-center justify-between w-full">
+      {/* Full-screen on phones (rows: header, then the body fills the rest); from sm up, the
+          centred scrolling card as before. The centring transform still lands a 100vw x 100dvh
+          box at 0,0. */}
+      <DialogContent className="h-dvh max-h-dvh w-screen max-w-none grid-rows-[auto_1fr] rounded-none p-0 border-none shadow-lg sm:h-auto sm:max-h-[calc(100dvh-1.5rem)] sm:w-[calc(100%-1.5rem)] sm:max-w-3xl sm:grid-rows-none sm:rounded-lg">
+        <DialogHeader className="p-4 sm:p-8 bg-[#23242A] text-white">
+          {/* pr-8 keeps the progress bars clear of the dialog's close X on phones. */}
+          <div className="flex items-center justify-between gap-3 w-full pr-8 sm:pr-0">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-white">
                 <Wand2 className="h-5 w-5" />
               </div>
               <div>
-                <DialogTitle className="text-xl">Add Domains Wizard</DialogTitle>
+                <DialogTitle className="text-lg sm:text-xl">Add Domains Wizard</DialogTitle>
                 <p className="text-xs text-muted-foreground mt-1">Step {step + 1} of 4</p>
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex shrink-0 gap-2">
               {[0, 1, 2, 3].map((s) => (
                 <div
                   key={s}
-                  className={`h-1.5 w-8 rounded-full transition-colors ${s <= step ? "bg-primary" : "bg-card/10"}`}
+                  className={`h-1.5 w-5 sm:w-8 rounded-full transition-colors ${s <= step ? "bg-primary" : "bg-card/10"}`}
                 />
               ))}
             </div>
@@ -628,8 +764,9 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
 
         <div className="bg-card min-h-[400px] flex flex-col">
           {step === 0 && (
-            <div className="p-8 flex flex-col gap-8 flex-1">
-              <div className="flex items-center gap-4 p-4 bg-primary/10/50 rounded-lg border border-blue-100">
+            <div className="p-4 sm:p-8 flex flex-col gap-8 flex-1">
+              {/* Wraps on phones: icon + text on one line, the full-width select below. */}
+              <div className="flex flex-wrap items-center gap-4 p-4 bg-primary/10/50 rounded-lg border border-blue-100">
                 <FolderOpen className="h-5 w-5 text-primary" />
                 <div className="flex-1">
                   <h3 className="font-semibold text-sm text-foreground">Load Template (Optional)</h3>
@@ -648,7 +785,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                     }
                   }}
                 >
-                  <SelectTrigger className="w-48 rounded-xl">
+                  <SelectTrigger className="w-full sm:w-48 rounded-xl">
                     <SelectValue placeholder="Select template..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -680,7 +817,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 </div>
               )}
 
-              <div className="bg-success/10/50 border border-green-100 rounded-xl p-6 flex items-start gap-4">
+              <div className="bg-success/10/50 border border-green-100 rounded-xl p-4 sm:p-6 flex items-start gap-4">
                 <div className="h-10 w-10 rounded-lg bg-primary text-white flex items-center justify-center shrink-0">
                   <Wand2 className="h-5 w-5" />
                 </div>
@@ -693,7 +830,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-8">
+              <div className="grid grid-cols-1 gap-8 sm:grid-cols-2">
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <div className="flex flex-col">
@@ -748,7 +885,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 <p className="text-[10px] text-muted-foreground -mt-1">
                   Choose where mailboxes are created for each domain.
                 </p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                   {(
                     [
                       { v: "subdomain", label: "Subdomains", hint: "user@web.domain.com" },
@@ -773,45 +910,43 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 </div>
               </div>
 
-              {savingTemplate && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                  <div className="bg-card rounded-lg p-6 w-96 shadow-lg">
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="font-semibold">Save Template</h3>
-                      <Button variant="ghost" size="sm" onClick={() => setSavingTemplate(false)}>
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    <Input
-                      placeholder="Template name..."
-                      value={newTemplateName}
-                      onChange={(e) => setNewTemplateName(e.target.value)}
-                      className="rounded-xl mb-4"
-                    />
-                    <div className="flex gap-2 justify-end">
-                      <Button variant="ghost" onClick={() => setSavingTemplate(false)}>
-                        Cancel
-                      </Button>
-                      <Button
-                        onClick={handleSaveTemplate}
-                        disabled={saveTemplateMutation.isPending}
-                      >
-                        {saveTemplateMutation.isPending ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Save className="h-4 w-4" />
-                        )}
-                        Save Template
-                      </Button>
-                    </div>
+              {/* A nested dialog portals to <body>, so the wizard's transform and scrolling can't
+                  pin or clip it the way a `fixed` overlay inside the wizard was. Its own close X
+                  replaces the old one (same handler: onOpenChange(false) → setSavingTemplate(false)). */}
+              <Dialog open={savingTemplate} onOpenChange={setSavingTemplate}>
+                <DialogContent className="max-w-96 shadow-lg" aria-describedby={undefined}>
+                  <DialogHeader className="text-left pr-6">
+                    <DialogTitle className="text-base">Save Template</DialogTitle>
+                  </DialogHeader>
+                  <Input
+                    placeholder="Template name..."
+                    value={newTemplateName}
+                    onChange={(e) => setNewTemplateName(e.target.value)}
+                    className="rounded-xl"
+                  />
+                  <div className="flex gap-2 justify-end">
+                    <Button variant="ghost" onClick={() => setSavingTemplate(false)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleSaveTemplate}
+                      disabled={saveTemplateMutation.isPending}
+                    >
+                      {saveTemplateMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Save className="h-4 w-4" />
+                      )}
+                      Save Template
+                    </Button>
                   </div>
-                </div>
-              )}
+                </DialogContent>
+              </Dialog>
             </div>
           )}
 
           {step === 1 && (
-            <div className="p-8 flex flex-col gap-8 flex-1">
+            <div className="p-4 sm:p-8 flex flex-col gap-8 flex-1">
               <div className="flex flex-col gap-3">
                 <Label className="text-foreground font-bold text-sm tracking-tight">Batch Name</Label>
                 <Input
@@ -822,7 +957,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 />
               </div>
               <div className="flex flex-col gap-3">
-                <div className="flex justify-between items-end">
+                <div className="flex flex-wrap justify-between items-end gap-2">
                   <div className="flex flex-col">
                     <Label className="text-foreground font-bold text-sm tracking-tight">
                       Domains List
@@ -831,7 +966,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                       Enter one domain per line, or import a CSV
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <input
                       ref={csvInputRef}
                       type="file"
@@ -843,7 +978,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="h-7 rounded-lg gap-1.5 text-[11px] text-muted-foreground"
+                      className="h-9 sm:h-7 rounded-lg gap-1.5 text-[11px] text-muted-foreground"
                       onClick={handleDownloadTemplate}
                     >
                       <Download className="h-3.5 w-3.5" />
@@ -853,7 +988,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-7 rounded-lg gap-1.5 text-[11px]"
+                      className="h-9 sm:h-7 rounded-lg gap-1.5 text-[11px]"
                       onClick={() => csvInputRef.current?.click()}
                     >
                       <Upload className="h-3.5 w-3.5" />
@@ -909,17 +1044,19 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
           )}
 
           {step === 2 && (
-            <div className="flex-1 flex flex-col min-h-0">
+            // min-h-0 only from sm up: on phones the step must keep its full height, or its rows spill
+            // past the body and drag the sticky Back/Next footer up into the middle of the screen.
+            <div className="flex-1 flex flex-col sm:min-h-0">
               {/* Global Range Inputs */}
-              <div className="p-8 pb-4 flex flex-col gap-6">
-                <div className="bg-success/10/50 border border-green-100 rounded-xl p-6">
+              <div className="p-4 pb-4 sm:p-8 sm:pb-4 flex flex-col gap-6">
+                <div className="bg-success/10/50 border border-green-100 rounded-xl p-4 sm:p-6">
                   <h3 className="font-semibold text-foreground text-sm mb-1">Count Settings</h3>
                   <p className="text-[10px] text-muted-foreground mb-4">
-                    Set subdomains and inboxes as a per-domain range (each domain rolls a random
-                    value) or as an exact count. Exact inboxes are split across the batch's domains.
+                    Choose how many subdomains each domain uses and how many mailboxes the batch gets.
+                    The preview on the next step is exactly what will be created.
                   </p>
 
-                  <div className="grid grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     {/* Subdomains */}
                     <div className="flex flex-col gap-2">
                       <div className="flex items-center justify-between">
@@ -974,28 +1111,55 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                       )}
                     </div>
 
-                    {/* Inboxes */}
+                    {/* Mailboxes */}
                     <div className="flex flex-col gap-2">
-                      <div className="flex items-center justify-between">
-                        <Label className="text-foreground font-bold text-xs">Inboxes</Label>
-                        <div className="flex rounded-lg bg-muted p-0.5">
-                          {(["range", "exact"] as const).map((m) => (
-                            <button
-                              key={m}
-                              type="button"
-                              onClick={() => setInboxMode(m)}
-                              className={`px-2 py-0.5 text-[10px] rounded-md capitalize transition-colors ${
-                                inboxMode === m
-                                  ? "bg-card text-foreground shadow-sm"
-                                  : "text-muted-foreground"
-                              }`}
-                            >
-                              {m}
-                            </button>
-                          ))}
-                        </div>
+                      <Label className="text-foreground font-bold text-xs">Mailboxes</Label>
+                      <div
+                        className="flex flex-wrap gap-1 rounded-lg bg-muted p-0.5"
+                        role="radiogroup"
+                        aria-label="How to count mailboxes"
+                      >
+                        {INBOX_MODES.map((m) => (
+                          <button
+                            key={m.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={inboxMode === m.value}
+                            title={m.hint}
+                            onClick={() => setInboxMode(m.value)}
+                            className={`px-2 py-1 text-[11px] rounded-md transition-colors ${
+                              inboxMode === m.value
+                                ? "bg-card text-foreground shadow-sm"
+                                : "text-muted-foreground"
+                            }`}
+                          >
+                            {m.label}
+                          </button>
+                        ))}
                       </div>
-                      {inboxMode === "range" ? (
+                      {(inboxMode === "even" || inboxMode === "random") && (
+                        <Input
+                          type="number"
+                          value={totalInboxes}
+                          onChange={(e) => setTotalInboxes(Number(e.target.value))}
+                          className="h-9 rounded-xl text-xs"
+                          placeholder="Total mailboxes for the batch"
+                          aria-label="Total mailboxes for the batch"
+                          min={1}
+                        />
+                      )}
+                      {inboxMode === "fixed" && (
+                        <Input
+                          type="number"
+                          value={perDomainInboxes}
+                          onChange={(e) => setPerDomainInboxes(Number(e.target.value))}
+                          className="h-9 rounded-xl text-xs"
+                          placeholder="Mailboxes per domain"
+                          aria-label="Mailboxes per domain"
+                          min={1}
+                        />
+                      )}
+                      {inboxMode === "range" && (
                         <div className="flex items-center gap-2">
                           <Input
                             type="number"
@@ -1003,6 +1167,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                             onChange={(e) => setMinInboxes(Number(e.target.value))}
                             className="h-9 rounded-xl text-xs"
                             placeholder="Min"
+                            aria-label="Minimum mailboxes per domain"
                             min={1}
                           />
                           <span className="text-muted-foreground">—</span>
@@ -1012,28 +1177,12 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                             onChange={(e) => setMaxInboxes(Number(e.target.value))}
                             className="h-9 rounded-xl text-xs"
                             placeholder="Max"
+                            aria-label="Maximum mailboxes per domain"
                             min={1}
                           />
-                        </div>
-                      ) : (
-                        <div className="flex flex-col gap-1">
-                          <Input
-                            type="number"
-                            value={exactTotalInboxes}
-                            onChange={(e) => setExactTotalInboxes(Number(e.target.value))}
-                            className="h-9 rounded-xl text-xs"
-                            placeholder="Total inboxes for the batch"
-                            min={1}
-                          />
-                          <span className="text-[10px] text-muted-foreground">
-                            ≈{" "}
-                            {domainRows.length > 0
-                              ? Math.round(exactTotalInboxes / domainRows.length)
-                              : 0}{" "}
-                            per domain across {domainRows.length} domains
-                          </span>
                         </div>
                       )}
+                      <span className="text-[10px] text-muted-foreground">{inboxModeSummary()}</span>
                     </div>
                   </div>
 
@@ -1051,41 +1200,37 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                         capped at {parseList(prefixesText).length}.
                       </p>
                     )}
-                  {inboxMode === "range" && minInboxes < 1 && (
-                    <p className="text-[10px] text-red-500 mt-2">Min inboxes must be ≥ 1</p>
-                  )}
-                  {inboxMode === "range" && maxInboxes < minInboxes && (
-                    <p className="text-[10px] text-red-500 mt-2">Max inboxes must be ≥ Min inboxes</p>
-                  )}
-                  {inboxMode === "range" &&
-                    subdomainMode === "range" &&
-                    minInboxes < maxSubdomains && (
-                      <p className="text-[10px] text-red-500 mt-2">
-                        Min inboxes must be ≥ Max subdomains (to ensure at least 1 inbox per
-                        subdomain)
-                      </p>
-                    )}
-                  {inboxMode === "exact" && exactTotalInboxes < domainRows.length && (
-                    <p className="text-[10px] text-red-500 mt-2">
-                      Total inboxes must be ≥ number of domains ({domainRows.length}) so each domain
-                      gets at least one.
+                  {inboxSettingsError && (
+                    <p className="text-[10px] text-red-500 mt-2" role="alert">
+                      {inboxSettingsError}
                     </p>
                   )}
                 </div>
               </div>
 
-              {/* Domain List with Server Config */}
-              <div className="grid grid-cols-[1.5fr,1.2fr,0.8fr,0.8fr] gap-4 px-8 text-[10px] font-bold text-muted-foreground uppercase tracking-[0.1em] mb-3">
+              {/* Domain list with server config (+ a count per domain in "Set per domain" mode) */}
+              <div
+                className={`hidden sm:grid gap-4 px-8 text-[10px] font-bold text-muted-foreground uppercase tracking-[0.1em] mb-3 ${
+                  inboxMode === "manual"
+                    ? "grid-cols-[1.5fr_1.2fr_0.8fr_0.8fr_0.7fr]"
+                    : "grid-cols-[1.5fr_1.2fr_0.8fr_0.8fr]"
+                }`}
+              >
                 <div>Domain Name</div>
                 <div>IP Address</div>
                 <div>SSH User</div>
                 <div>SSH Password</div>
+                {inboxMode === "manual" && <div>Mailboxes</div>}
               </div>
-              <div className="px-8 flex flex-col gap-3 flex-1 overflow-auto max-h-[350px] scrollbar-thin scrollbar-thumb-gray-200">
+              <div className="px-4 sm:px-8 flex flex-col gap-3 flex-1 sm:overflow-auto sm:max-h-[350px]">
                 {domainRows.map((row, i) => (
                   <div
                     key={i}
-                    className="grid grid-cols-[1.5fr,1.2fr,0.8fr,0.8fr] gap-4 items-center bg-card p-2 px-3 rounded-xl ring-1 ring-black/[0.03] shadow-sm hover:shadow-md hover:ring-primary/20 transition-all group"
+                    className={`grid grid-cols-1 gap-2 sm:gap-4 items-center bg-card p-2 px-3 rounded-xl ring-1 ring-black/[0.03] shadow-sm hover:shadow-md hover:ring-primary/20 transition-all group ${
+                      inboxMode === "manual"
+                        ? "sm:grid-cols-[1.5fr_1.2fr_0.8fr_0.8fr_0.7fr]"
+                        : "sm:grid-cols-[1.5fr_1.2fr_0.8fr_0.8fr]"
+                    }`}
                   >
                     <Input
                       value={row.domain}
@@ -1112,6 +1257,23 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                       className="h-9 rounded-xl border-border bg-muted/50 focus:bg-card text-xs transition-all"
                       placeholder="Password"
                     />
+                    {inboxMode === "manual" && (
+                      <Input
+                        type="number"
+                        min={1}
+                        value={row.manualInboxCount ?? ""}
+                        onChange={(e) =>
+                          updateRow(
+                            i,
+                            "manualInboxCount",
+                            e.target.value === "" ? undefined : Number(e.target.value),
+                          )
+                        }
+                        className="h-9 rounded-xl border-border bg-muted/50 focus:bg-card text-xs transition-all"
+                        placeholder="Mailboxes"
+                        aria-label={`Mailboxes for ${row.domain}`}
+                      />
+                    )}
                   </div>
                 ))}
               </div>
@@ -1119,33 +1281,38 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
           )}
 
           {step === 3 && (
-            <div className="p-8 flex flex-col gap-6 flex-1">
+            <div className="p-4 sm:p-8 flex flex-col gap-6 flex-1">
               <div className="text-center">
                 <div className="inline-flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 mb-4">
                   <Wand2 className="h-6 w-6 text-primary" />
                 </div>
                 <h3 className="text-xl font-bold text-foreground">Planning Preview</h3>
                 <p className="text-sm text-muted-foreground mt-2">
-                  Review the random values generated for each domain
+                  This is exactly what will be created for each domain.
                 </p>
               </div>
 
-              <div className="flex justify-center">
+              <div className="flex flex-wrap justify-center gap-2">
                 <Button
                   onClick={() => {
-                    planAllDomains();
-                    toast.success("Re-randomized all domains!");
+                    if (planAllDomains()) {
+                      toast.success(
+                        inboxMode === "random" || inboxMode === "range"
+                          ? "New counts, subdomains and addresses"
+                          : "New subdomains and addresses (counts unchanged)",
+                      );
+                    }
                   }}
                   variant="outline"
                   className="rounded-xl border-primary text-primary hover:bg-primary/10"
                 >
                   <Wand2 className="h-4 w-4 mr-2" />
-                  Re-randomize All
+                  {inboxMode === "random" || inboxMode === "range" ? "Re-roll" : "Shuffle addresses"}
                 </Button>
                 <Button
                   onClick={handlePreviewDns}
                   variant="outline"
-                  className="rounded-xl border-blue-500 text-primary hover:bg-primary/10 ml-4"
+                  className="rounded-xl border-blue-500 text-primary hover:bg-primary/10"
                 >
                   Preview DNS Records
                 </Button>
@@ -1155,27 +1322,36 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-card">
                     <tr className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.1em]">
-                      <th className="text-left pb-3">Domain</th>
-                      <th className="text-center pb-3">Subdomains</th>
-                      <th className="text-center pb-3">Total Inboxes</th>
-                      <th className="text-left pb-3">Distribution</th>
+                      <th className="text-left pb-3 pr-3">Domain</th>
+                      <th className="text-center pb-3 px-3">Mailboxes</th>
+                      <th className="text-left pb-3 pl-3">Where they go</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {domainRows.map((row, i) => (
-                      <tr key={i} className="hover:bg-muted/50">
-                        <td className="py-3 font-medium text-foreground">{row.domain}</td>
-                        <td className="py-3 text-center text-muted-foreground">
-                          {row.plannedSubdomainCount || 0}
-                        </td>
-                        <td className="py-3 text-center text-muted-foreground">
-                          {row.plannedInboxCount || 0}
-                        </td>
-                        <td className="py-3 text-[10px] text-muted-foreground font-mono">
-                          {row.plannedDistribution?.join(", ") || "-"}
-                        </td>
-                      </tr>
-                    ))}
+                  <tbody className="divide-y divide-border">
+                    {domainRows.map((row, i) => {
+                      const overLimit = (row.plannedDistribution ?? []).some(
+                        (d) => d.count > MAILCOW_DEFAULT_MAILBOX_LIMIT,
+                      );
+                      return (
+                        <tr key={i} className="hover:bg-muted/50 align-top">
+                          <td className="py-3 pr-3 font-medium text-foreground break-all">{row.domain}</td>
+                          <td className="py-3 px-3 text-center text-foreground tabular-nums">
+                            {row.plannedInboxCount || 0}
+                          </td>
+                          <td className="py-3 pl-3 text-[11px] text-muted-foreground font-mono">
+                            {(row.plannedDistribution ?? [])
+                              .map((d) => `${d.prefix === "@" ? "main domain" : d.prefix} ${d.count}`)
+                              .join(" · ") || "-"}
+                            {overLimit && (
+                              <div className="font-sans text-[10px] text-warning mt-1">
+                                Over {MAILCOW_DEFAULT_MAILBOX_LIMIT} on one mail domain: Mailcow's limit is
+                                raised automatically.
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1200,7 +1376,8 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
             </div>
           )}
 
-          <DialogFooter className="p-8 border-t border-border bg-muted/50">
+          {/* Pinned to the bottom of the scrolling dialog, so Back / Next stay reachable on short screens. */}
+          <DialogFooter className="sticky bottom-0 z-10 gap-2 sm:gap-0 p-4 sm:p-6 border-t border-border bg-muted">
             <Button
               type="button"
               variant="ghost"
@@ -1240,11 +1417,11 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
     
     <Dialog open={showDnsPreview} onOpenChange={setShowDnsPreview}>
       <DialogContent className="max-w-4xl max-h-[80vh] flex flex-col rounded-lg p-0">
-        <DialogHeader className="p-6 bg-muted border-b">
+        <DialogHeader className="p-3 sm:p-6 bg-muted border-b">
           <DialogTitle>DNS Records Preview</DialogTitle>
           <p className="text-sm text-muted-foreground mt-1">These records will be pushed to Cloudflare</p>
         </DialogHeader>
-        <div className="flex-1 overflow-auto p-6">
+        <div className="flex-1 overflow-auto p-3 sm:p-6">
           <table className="w-full text-sm text-left">
             <thead className="text-xs text-muted-foreground uppercase bg-muted">
               <tr>
@@ -1278,7 +1455,7 @@ export function AddDomainWizard({ open, onOpenChange }: AddDomainWizardProps) {
             </tbody>
           </table>
         </div>
-        <DialogFooter className="p-4 bg-muted border-t">
+        <DialogFooter className="p-3 sm:p-4 bg-muted border-t">
           <Button onClick={() => setShowDnsPreview(false)}>Close Preview</Button>
         </DialogFooter>
       </DialogContent>

@@ -3,7 +3,7 @@
 // 20-minute Mailcow image pull). Both the BullMQ worker and the manual per-step buttons
 // call these same functions, so there is exactly one code path.
 
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { plannedInboxes, dnsRecords, userSecrets, domains } from "@/lib/db/schema";
 import {
   mailcowRequest,
@@ -22,10 +22,15 @@ import {
   findMatchingCfRecord,
   isCfAlreadyExistsError,
   QUOTA,
+  mailDomainLimitsFor,
+  currentLimitsFromMailcow,
+  mailboxesOnDomain,
+  type CurrentMailDomainLimits,
   type MailcowSshTarget,
 } from "./mailcow-helpers";
 import { resolveAndSaveCfZoneId } from "./cloudflare";
 import { doh, isCloudflareIp } from "./health-net";
+import { runMailboxCreation } from "./mailbox-creation";
 
 // SSH target for a domain, for tunnelling Mailcow API calls FROM the server. Credentials live on
 // the domain OR its linked server relation (domains.sshPassword is nullable) — mirror the fallback
@@ -336,25 +341,65 @@ export async function ensureMailDomains(
   const uniqueSubdomains = Array.from(new Set(inboxes.map((i: any) => String(i.subdomainFqdn)))).filter(
     (s) => String(s).toLowerCase() !== mailHost,
   );
-  const { DOMAIN_MAX_MAILBOXES, DOMAIN_QUOTA_MB, MAILBOX_MAX_QUOTA_MB, MAILBOX_QUOTA_MB } = QUOTA;
+  const { MAILBOX_QUOTA_MB } = QUOTA;
+
+  // Mailboxes planned per mail domain, so each one's Mailcow limits fit its plan (a fixed 50 used to
+  // silently refuse mailbox 51 onward). Limits of mail domains that already exist come from the probe's
+  // get/domain/all, so an existing domain is only ever raised, never reset down to the defaults.
+  const plannedPerMailDomain = new Map<string, number>();
+  for (const ib of inboxes) {
+    const fqdn = String(ib.subdomainFqdn).toLowerCase();
+    plannedPerMailDomain.set(fqdn, (plannedPerMailDomain.get(fqdn) ?? 0) + 1);
+  }
+  const currentLimits = new Map<string, CurrentMailDomainLimits>();
+  for (const row of probe) {
+    if (row?.domain_name) currentLimits.set(String(row.domain_name).toLowerCase(), currentLimitsFromMailcow(row));
+  }
+  // Planned mailboxes each mail domain is still missing, so its limits leave room for them on top of the
+  // mailboxes already there (including ones outside the plan). If the list can't be read, the limits assume
+  // every planned mailbox is missing.
+  const mailboxList = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/mailbox/all", {
+    attempts: 2,
+    ssh,
+  });
+  const missingPerMailDomain = new Map<string, number>();
+  if (mailboxList) {
+    const inMailcow = new Set(
+      mailboxList.filter((m: any) => m?.username).map((m: any) => String(m.username).toLowerCase()),
+    );
+    for (const ib of inboxes) {
+      if (inMailcow.has(String(ib.email).toLowerCase())) continue;
+      const fqdn = String(ib.subdomainFqdn).toLowerCase();
+      missingPerMailDomain.set(fqdn, (missingPerMailDomain.get(fqdn) ?? 0) + 1);
+    }
+  }
 
   const addDomainErrors: Record<string, string> = {};
   for (const sub of uniqueSubdomains) {
+    const key = String(sub).toLowerCase();
+    const limits = mailDomainLimitsFor(
+      plannedPerMailDomain.get(key) ?? 0,
+      currentLimits.get(key),
+      mailboxList ? (missingPerMailDomain.get(key) ?? 0) : undefined,
+    );
     try {
-      const addRes = await mc("add/domain", {
-        domain: sub,
-        active: 1,
-        mailboxes: DOMAIN_MAX_MAILBOXES,
-        defquota: MAILBOX_QUOTA_MB,
-        maxquota: MAILBOX_MAX_QUOTA_MB,
-        quota: DOMAIN_QUOTA_MB,
-      });
-      const addOutcome = parseMailcowResult(addRes.ok, addRes.json);
-      if (!addOutcome.success) {
+      if (!currentLimits.has(key)) {
+        const addRes = await mc("add/domain", {
+          domain: sub,
+          active: 1,
+          mailboxes: limits.mailboxes,
+          defquota: MAILBOX_QUOTA_MB,
+          maxquota: limits.maxQuotaMb,
+          quota: limits.quotaMb,
+        });
+        const addOutcome = parseMailcowResult(addRes.ok, addRes.json);
+        if (addOutcome.success) continue;
         if (addOutcome.error) addDomainErrors[String(sub)] = addOutcome.error;
+      }
+      if (limits.raise) {
         await mc("edit/domain", {
           items: [sub],
-          attr: { mailboxes: DOMAIN_MAX_MAILBOXES, maxquota: MAILBOX_MAX_QUOTA_MB, quota: DOMAIN_QUOTA_MB },
+          attr: { mailboxes: limits.mailboxes, maxquota: limits.maxQuotaMb, quota: limits.quotaMb },
         });
       }
     } catch {
@@ -366,9 +411,13 @@ export async function ensureMailDomains(
   const domList = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/domain/all", {
     ssh,
   });
-  if (domList) {
-    for (const d of domList) if (d?.domain_name) existingDomains.add(String(d.domain_name).toLowerCase());
+  // Without the list every mail domain would look missing, and every mailbox would be marked failed.
+  if (!domList) {
+    throw new Error(
+      "Couldn't read Mailcow's mail domain list to confirm the mail domains, so no mailboxes were changed. Try again once the mail server responds.",
+    );
   }
+  for (const d of domList) if (d?.domain_name) existingDomains.add(String(d.domain_name).toLowerCase());
 
   const results: MailcowResultRow[] = uniqueSubdomains.map((sub) => {
     const ok = existingDomains.has(String(sub).toLowerCase());
@@ -384,113 +433,133 @@ export async function ensureMailDomains(
   return { existingDomains, results, ssh };
 }
 
-// --- Step: create the planned mailboxes. Idempotent + verified: only stores a password
-// for mailboxes created this run; final status comes from get/mailbox/all. `recreate`
-// deletes existing mailboxes first (keeping the domain + DKIM) for a clean slate. ---
+// --- Step: create the planned mailboxes, with retries (rules in mailbox-creation.ts): each password
+// is saved the moment Mailcow accepts the mailbox, a mailbox that exists without a saved password gets a
+// new one, and whatever still isn't confirmed after 3 retries is marked failed with Mailcow's reason.
+// `recreate` deletes every mailbox on the domain in Mailcow first (keeping the mail domains + DKIM), so
+// Mailcow ends up with exactly the planned set. ---
 export async function createMailboxes(
   db: Db,
   domain: Domain,
   existingDomains: Set<string>,
   opts?: { recreate?: boolean; ssh?: MailcowSshTarget },
-): Promise<{ results: MailcowResultRow[]; summary: { total: number; created: number; failed: number } }> {
+): Promise<{
+  results: MailcowResultRow[];
+  summary: { total: number; created: number; failed: number };
+  failed: { email: string; error: string }[];
+}> {
   // Writes go through the retrying client (on the transport ensureMailDomains chose) so a transient
   // hiccup during bulk provisioning (429 / 5xx / timeout) doesn't silently drop a domain or mailbox.
   const mc = (path: string, body?: unknown) =>
     mailcowRequestRetry(domain.mailcowHostname, domain.mailcowApiKey, path, body, { ssh: opts?.ssh });
-  const inboxes = await db.select().from(plannedInboxes).where(eq(plannedInboxes.domainId, domain.id));
+  let inboxes = await db.select().from(plannedInboxes).where(eq(plannedInboxes.domainId, domain.id));
   const { MAILBOX_QUOTA_MB } = QUOTA;
-  const results: MailcowResultRow[] = [];
 
-  if (opts?.recreate && inboxes.length) {
-    try {
-      await mc("delete/mailbox", inboxes.map((ib: any) => ib.email));
-    } catch {
-      // best effort; verification below reflects real state
+  // Old mailboxes a recreate couldn't delete. They stay live with passwords the app doesn't have.
+  const notDeleted: { email: string; error: string }[] = [];
+  if (opts?.recreate) {
+    // Every mailbox on the domain and its subdomains, not only the planned addresses: after a mailbox count
+    // change the old addresses aren't in the plan any more.
+    const listUsernames = async () => {
+      const list = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/mailbox/all", {
+        ssh: opts.ssh,
+      });
+      return list === null
+        ? null
+        : mailboxesOnDomain(list.map((m: any) => String(m?.username ?? "")).filter(Boolean), domain.name);
+    };
+    const before = await listUsernames();
+    if (before === null) {
+      throw new Error(
+        "Couldn't read Mailcow's mailbox list, so no mailboxes were deleted or recreated. Try again once the mail server responds.",
+      );
+    }
+    const DELETE_CHUNK = 100;
+    for (let i = 0; i < before.length; i += DELETE_CHUNK) {
+      try {
+        await mc("delete/mailbox", before.slice(i, i + DELETE_CHUNK));
+      } catch {
+        // checked against the list below
+      }
     }
     await db
       .update(plannedInboxes)
       .set({ status: "planned", password: null })
       .where(eq(plannedInboxes.domainId, domain.id));
+    inboxes = inboxes.map((ib: any) => ({ ...ib, status: "planned", password: null }));
+
+    const planned = new Set(inboxes.map((ib: any) => String(ib.email).toLowerCase()));
+    const after = (await listUsernames()) ?? [];
+    for (const email of after) {
+      if (!planned.has(email.toLowerCase())) {
+        notDeleted.push({ email, error: "Couldn't delete this old mailbox in Mailcow, so it's still live" });
+      }
+    }
   }
 
-  const passwordByEmail: Record<string, string> = {};
-  const createdThisRun = new Set<string>();
-  for (const ib of inboxes) {
-    const key = String(ib.email).toLowerCase();
-    if (!existingDomains.has(String(ib.subdomainFqdn).toLowerCase())) {
-      results.push({
-        type: "mailbox",
-        name: ib.email,
-        success: false,
-        error: `Parent mail domain ${ib.subdomainFqdn} is missing in Mailcow`,
-      });
-      continue;
-    }
+  const call = async (path: string, body: unknown) => {
     try {
-      const pw = generateMailboxPassword();
-      passwordByEmail[key] = pw;
-      const r = await mc("add/mailbox", {
-        local_part: ib.localPart,
-        domain: ib.subdomainFqdn,
-        // Display name. The planned-inbox column is `fullName` — `personName` never existed, so
-        // this was silently sending `undefined` and creating blank-named mailboxes.
-        name: ib.fullName || [ib.firstName, ib.lastName].filter(Boolean).join(" ") || ib.localPart,
-        password: pw,
-        password2: pw, // Mailcow requires the confirmation field; empty -> "password_complexity"
-        quota: MAILBOX_QUOTA_MB,
-        active: 1,
-      });
+      const r = await mc(path, body);
       const outcome = parseMailcowResult(r.ok, r.json);
-      if (outcome.success) createdThisRun.add(key);
-      results.push({ type: "mailbox", name: ib.email, success: outcome.success, error: outcome.error ?? null });
+      return { ok: outcome.success, error: outcome.error };
     } catch (err) {
-      results.push({ type: "mailbox", name: ib.email, success: false, error: String(err) });
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-  }
+  };
+  const updateRows = async (ids: string[], set: Record<string, unknown>) => {
+    if (ids.length) await db.update(plannedInboxes).set(set).where(inArray(plannedInboxes.id, ids));
+  };
 
-  // Verify against the source of truth and persist passwords only for ones created now.
-  // CRITICAL: use the resilient list read. If verification is unavailable (transient API flakiness
-  // during the fresh-provision window), we must NOT fall through to "empty" — that would mark every
-  // just-created mailbox `failed`. Throw instead so statuses are left untouched and a retry can
-  // reconcile them once the API settles.
-  const mbList = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/mailbox/all");
-  if (mbList === null) {
-    throw new Error(
-      "Could not verify mailboxes: Mailcow get/mailbox/all did not return a list after retries. " +
-        "Mailbox statuses left unchanged — re-run once the API is stable.",
-    );
-  }
-  const existingMailboxes = new Set<string>();
-  for (const m of mbList) if (m?.username) existingMailboxes.add(String(m.username).toLowerCase());
-
-  let created = 0;
-  let failed = 0;
-  for (const ib of inboxes) {
-    const key = String(ib.email).toLowerCase();
-    if (existingMailboxes.has(key)) {
-      created++;
-      await db
-        .update(plannedInboxes)
-        .set({ status: "active", ...(createdThisRun.has(key) ? { password: passwordByEmail[key] } : {}) })
-        .where(eq(plannedInboxes.id, ib.id));
-    } else {
-      failed++;
-      await db.update(plannedInboxes).set({ status: "failed" }).where(eq(plannedInboxes.id, ib.id));
-    }
-  }
-
-  const verified = results.map((r) =>
-    r.type !== "mailbox"
-      ? r
-      : {
-          ...r,
-          success: existingMailboxes.has(String(r.name).toLowerCase()),
-          error: existingMailboxes.has(String(r.name).toLowerCase())
-            ? null
-            : r.error || "Mailbox not present in Mailcow after creation",
-        },
+  const run = await runMailboxCreation(
+    inboxes.map((ib: any) => ({
+      id: ib.id,
+      email: String(ib.email),
+      localPart: ib.localPart,
+      mailDomain: String(ib.subdomainFqdn),
+      // Display name. The planned-inbox column is `fullName` — `personName` never existed, so
+      // this was silently sending `undefined` and creating blank-named mailboxes.
+      displayName: ib.fullName || [ib.firstName, ib.lastName].filter(Boolean).join(" ") || ib.localPart,
+      hasPassword: Boolean(ib.password),
+    })),
+    {
+      // Resilient read on the chosen transport. null = "couldn't read", never "no mailboxes": treating a
+      // transient failure as empty is what used to mark just-created mailboxes failed.
+      listMailboxes: async () => {
+        const list = await mailcowListAll(domain.mailcowHostname, domain.mailcowApiKey, "get/mailbox/all", {
+          ssh: opts?.ssh,
+        });
+        return list === null
+          ? null
+          : new Set(list.filter((m: any) => m?.username).map((m: any) => String(m.username).toLowerCase()));
+      },
+      mailDomainExists: (fqdn) => existingDomains.has(fqdn.toLowerCase()),
+      addMailbox: (ib, password) =>
+        call("add/mailbox", {
+          local_part: ib.localPart,
+          domain: ib.mailDomain,
+          name: ib.displayName,
+          password,
+          password2: password, // Mailcow requires the confirmation field; empty -> "password_complexity"
+          quota: MAILBOX_QUOTA_MB,
+          active: 1,
+        }),
+      setPassword: (ib, password) =>
+        call("edit/mailbox", { items: [ib.email], attr: { password, password2: password, active: 1 } }),
+      savePassword: (id, password) => updateRows([id], { password }),
+      clearPasswords: (ids) => updateRows(ids, { password: null }),
+      markActive: (ids) => updateRows(ids, { status: "active" }),
+      markFailed: (ids) => updateRows(ids, { status: "failed" }),
+      newPassword: generateMailboxPassword,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    },
   );
-  return { results: verified, summary: { total: inboxes.length, created, failed } };
+
+  return {
+    results: run.results.map((r) => ({ type: "mailbox", name: r.email, success: r.success, error: r.error })),
+    // Old mailboxes left behind count as failures too, so the domain page reports them.
+    summary: { total: run.total, created: run.created, failed: run.failed.length + notDeleted.length },
+    failed: [...run.failed, ...notDeleted],
+  };
 }
 
 // --- Step: re-verify mailbox existence against Mailcow and reconcile DB status (no

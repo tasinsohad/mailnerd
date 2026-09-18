@@ -5,6 +5,7 @@ import { domains } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { NodeSSH } from "node-ssh";
 import { addServerSetupJob } from "./queue";
+import { activeRun, busyMessage } from "./domain-locks";
 
 export const testSshConnection = createServerFn({ method: "POST" })
   .middleware([requireAuth])
@@ -93,6 +94,7 @@ export const resetMailcowAdminPassword = createServerFn({ method: "POST" })
       });
       const res = await ssh.execCommand(cmd);
       // Strip ANSI colour codes, then pull the generated password the script prints.
+      // eslint-disable-next-line no-control-regex -- matching the escape character is the point
       const out = `${res.stdout}\n${res.stderr}`.replace(/\x1b\[[0-9;]*m/g, "");
       if (out.includes("MAILCOW_RESET_SCRIPT_NOT_FOUND")) {
         return { error: "mailcow-reset-admin.sh not found on the server." };
@@ -142,6 +144,10 @@ export const provisionServer = createServerFn({ method: "POST" })
       return { error: "Server credentials not configured for this domain" };
     }
 
+    // A setup (or mailbox run) is already going: refuse, and leave the domain's status alone.
+    const running = activeRun(domain.id);
+    if (running) return { success: false, error: busyMessage(running) };
+
     try {
       console.log(`[provisionServer] Enqueuing job for IP: ${ipAddress}`);
       // Enqueue job via BullMQ
@@ -159,7 +165,11 @@ export const provisionServer = createServerFn({ method: "POST" })
       console.log(`[provisionServer] Done, returning to client.`);
       return { success: true, jobId: job.jobId };
     } catch (error) {
-      await db.update(domains).set({ status: "error" }).where(eq(domains.id, domain.id));
-      return { success: false, error: String(error) };
+      const message = error instanceof Error ? error.message : String(error);
+      // A refused duplicate isn't a failure of the setup that's already running.
+      if (!/is already running for this domain/.test(message)) {
+        await db.update(domains).set({ status: "error" }).where(eq(domains.id, domain.id));
+      }
+      return { success: false, error: message };
     }
   });

@@ -49,6 +49,9 @@ function JobPipelinePage() {
   const { id } = Route.useParams();
   const [step, setStep] = useState<Step>("VIEW");
   const [autoStepped, setAutoStepped] = useState(false);
+  // Server setup starts by itself only when the user runs the pipeline through to it. Opening the step to
+  // watch (or the jump below) must never start a full Mailcow install on a pending domain.
+  const [autoStartSetup, setAutoStartSetup] = useState(false);
   const [subOpen, setSubOpen] = useState(false);
 
   const qc = useQueryClient();
@@ -92,7 +95,7 @@ function JobPipelinePage() {
     const rows = domains.flatMap((d: any) => {
       const mailServer = d.mailcowHostname || `mail.${d.name}`;
       return inboxes
-        .filter((i: any) => i.domainId === d.id && i.password) // only created mailboxes
+        .filter((i: any) => i.domainId === d.id && i.status === "active" && i.password) // only created mailboxes
         .map((ib: any) => ({
           name:
             ib.fullName ||
@@ -170,23 +173,29 @@ function JobPipelinePage() {
   }
 
   return (
-    <div className="flex flex-col gap-6 p-8 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+    <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-4">
           {step === "VIEW" ? (
-            <Link to="/jobs">
+            <Link to="/jobs" className="shrink-0" aria-label="Back to Jobs">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-card shadow-sm ring-1 ring-border hover:bg-muted transition-colors">
                 <ArrowLeft className="h-5 w-5 text-muted-foreground" />
               </div>
             </Link>
           ) : (
-            <Button variant="ghost" size="icon" onClick={() => setStep("VIEW")}>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setStep("VIEW")}
+              aria-label="Back"
+              className="h-10 w-10 shrink-0 sm:h-9 sm:w-9"
+            >
               <ArrowLeft className="h-5 w-5" />
             </Button>
           )}
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">{batch.name}</h1>
-            <div className="flex gap-2 items-center text-sm text-muted-foreground mt-1">
+          <div className="min-w-0">
+            <h1 className="break-words text-xl font-bold text-foreground sm:text-2xl">{batch.name}</h1>
+            <div className="flex flex-wrap gap-x-2 gap-y-0.5 items-center text-sm text-muted-foreground mt-1">
               <span>Step:</span>
               <span className={`font-bold ${step === "VIEW" ? "text-primary" : ""}`}>Plan</span>
               <span>→</span>
@@ -205,7 +214,7 @@ function JobPipelinePage() {
           </div>
         </div>
         {step === "VIEW" && (
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end sm:gap-3">
             <Button
               variant="outline"
               onClick={() => setSubOpen(true)}
@@ -253,7 +262,7 @@ function JobPipelinePage() {
             )}
             <Button
               onClick={() => setStep("PRE_FLIGHT")}
-              className="h-11 px-8 rounded-lg bg-primary hover:bg-primary/90 text-white shadow-lg"
+              className="h-11 w-full px-8 rounded-lg bg-primary hover:bg-primary/90 text-white shadow-lg sm:w-auto"
             >
               Start Provisioning Pipeline
             </Button>
@@ -290,9 +299,16 @@ function JobPipelinePage() {
         />
       )}
       {step === "DNS_PUSH" && (
-        <DnsPushStep domains={domains} records={records} onNext={() => setStep("SERVER_SETUP")} />
+        <DnsPushStep
+          domains={domains}
+          records={records}
+          onNext={() => {
+            setAutoStartSetup(true);
+            setStep("SERVER_SETUP");
+          }}
+        />
       )}
-      {step === "SERVER_SETUP" && <ServerSetupStep domains={domains} />}
+      {step === "SERVER_SETUP" && <ServerSetupStep domains={domains} autoStart={autoStartSetup} />}
     </div>
   );
 }
@@ -323,65 +339,120 @@ function EditableDomainRow({ domain }: { domain: any }) {
     updateMut.mutate({ id: domain.id, name, ipAddress, sshUser, sshPassword });
   };
 
+  // Each row renders a phone layout (one full-width md:hidden cell with stacked, labelled fields)
+  // and the md+ column cells. Both share this component's state, so editing works the same in either.
+  const phoneLabel = "text-[10px] font-bold uppercase tracking-wider text-muted-foreground";
+
   if (!isEditing) {
+    const actions = (
+      <>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setIsEditing(true)}
+          className="text-primary hover:text-primary hover:bg-primary/10"
+        >
+          Edit
+        </Button>
+        <DomainActionsMenu
+          domainId={domain.id}
+          domainName={domain.name}
+          onChanged={() => qc.invalidateQueries({ queryKey: ["batch"] })}
+        />
+      </>
+    );
     return (
       <tr className="border-b border-border last:border-0 hover:bg-muted/50 transition-colors">
-        <td className="p-4">
+        <td colSpan={5} className="p-3 md:hidden">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="ident break-all text-sm font-medium text-foreground">{domain.name}</div>
+              <div className="mt-1.5">
+                <StatusPill status={domain.status} />
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">{actions}</div>
+          </div>
+          <dl className="mt-3 grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1">
+            <dt className={phoneLabel}>IP Address</dt>
+            <dd className="break-all font-mono text-xs text-muted-foreground">{domain.ipAddress || "-"}</dd>
+            <dt className={phoneLabel}>SSH User</dt>
+            <dd className="break-all font-mono text-xs text-muted-foreground">{domain.sshUser || "-"}</dd>
+            <dt className={phoneLabel}>SSH Password</dt>
+            <dd className="font-mono text-xs text-muted-foreground italic">
+              {domain.hasSshPassword ? "••••••••" : "Not set"}
+            </dd>
+          </dl>
+        </td>
+        <td className="hidden p-4 md:table-cell">
           <div className="ident text-sm font-medium text-foreground">{domain.name}</div>
           <div className="mt-1.5">
             <StatusPill status={domain.status} />
           </div>
         </td>
-        <td className="p-4 font-mono text-xs text-muted-foreground">{domain.ipAddress || "-"}</td>
-        <td className="p-4 font-mono text-xs text-muted-foreground">{domain.sshUser || "-"}</td>
-        <td className="p-4 font-mono text-xs text-muted-foreground italic">
+        <td className="hidden p-4 font-mono text-xs text-muted-foreground md:table-cell">{domain.ipAddress || "-"}</td>
+        <td className="hidden p-4 font-mono text-xs text-muted-foreground md:table-cell">{domain.sshUser || "-"}</td>
+        <td className="hidden p-4 font-mono text-xs text-muted-foreground italic md:table-cell">
           {domain.hasSshPassword ? "••••••••" : "Not set"}
         </td>
-        <td className="p-4">
-          <div className="flex items-center justify-end gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsEditing(true)}
-              className="text-primary hover:text-primary hover:bg-primary/10"
-            >
-              Edit
-            </Button>
-            <DomainActionsMenu
-              domainId={domain.id}
-              domainName={domain.name}
-              onChanged={() => qc.invalidateQueries({ queryKey: ["batch"] })}
-            />
-          </div>
+        <td className="hidden p-4 md:table-cell">
+          <div className="flex items-center justify-end gap-1">{actions}</div>
         </td>
       </tr>
     );
   }
 
+  const nameInput = (
+    <Input value={name} onChange={(e) => setName(e.target.value)} className="h-9 text-sm rounded-xl" />
+  );
+  const ipInput = (
+    <Input value={ipAddress} onChange={(e) => setIpAddress(e.target.value)} className="h-9 text-sm font-mono rounded-xl" />
+  );
+  const userInput = (
+    <Input value={sshUser} onChange={(e) => setSshUser(e.target.value)} className="h-9 text-sm font-mono rounded-xl" />
+  );
+  const passwordInput = (
+    <Input type="password" value={sshPassword} onChange={(e) => setSshPassword(e.target.value)} className="h-9 text-sm font-mono rounded-xl" placeholder="Blank = keep current" />
+  );
+  const editButtons = (
+    <div className="flex justify-end gap-2">
+      <Button variant="ghost" size="sm" onClick={() => setIsEditing(false)} className="rounded-xl">
+        Cancel
+      </Button>
+      <Button size="sm" onClick={handleSave} disabled={updateMut.isPending} className="rounded-xl bg-primary hover:bg-primary/90 text-white">
+        {updateMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
+      </Button>
+    </div>
+  );
+
   return (
     <tr className="border-b border-border last:border-0 bg-primary/10/30">
-      <td className="p-3">
-        <Input value={name} onChange={(e) => setName(e.target.value)} className="h-9 text-sm rounded-xl" />
-      </td>
-      <td className="p-3">
-        <Input value={ipAddress} onChange={(e) => setIpAddress(e.target.value)} className="h-9 text-sm font-mono rounded-xl" />
-      </td>
-      <td className="p-3">
-        <Input value={sshUser} onChange={(e) => setSshUser(e.target.value)} className="h-9 text-sm font-mono rounded-xl" />
-      </td>
-      <td className="p-3">
-        <Input type="password" value={sshPassword} onChange={(e) => setSshPassword(e.target.value)} className="h-9 text-sm font-mono rounded-xl" placeholder="Blank = keep current" />
-      </td>
-      <td className="p-3 text-right">
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setIsEditing(false)} className="rounded-xl">
-            Cancel
-          </Button>
-          <Button size="sm" onClick={handleSave} disabled={updateMut.isPending} className="rounded-xl bg-primary hover:bg-primary/90 text-white">
-            {updateMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
-          </Button>
+      <td colSpan={5} className="p-3 md:hidden">
+        <div className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1">
+            <span className={phoneLabel}>Domain</span>
+            {nameInput}
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className={phoneLabel}>IP Address</span>
+            {ipInput}
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className={phoneLabel}>SSH User</span>
+            {userInput}
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className={phoneLabel}>SSH Password</span>
+            {passwordInput}
+          </label>
+          {editButtons}
         </div>
       </td>
+      <td className="hidden p-3 md:table-cell">{nameInput}</td>
+      <td className="hidden p-3 md:table-cell">{ipInput}</td>
+      <td className="hidden p-3 md:table-cell">{userInput}</td>
+      <td className="hidden p-3 md:table-cell">{passwordInput}</td>
+      <td className="hidden p-3 text-right md:table-cell">{editButtons}</td>
     </tr>
   );
 }
@@ -406,30 +477,31 @@ function ViewStep({
 
   return (
     <div className="grid gap-6">
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+      <div className="grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-4">
+        <div className="rounded-xl bg-card p-4 sm:p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
           <div className="text-xs font-bold text-muted-foreground uppercase">Total Domains</div>
-          <div className="text-3xl font-black text-primary">{domains.length}</div>
+          <div className="text-2xl sm:text-3xl font-black text-primary">{domains.length}</div>
         </div>
-        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+        <div className="rounded-xl bg-card p-4 sm:p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
           <div className="text-xs font-bold text-muted-foreground uppercase">Total Subdomains</div>
-          <div className="text-3xl font-black text-primary">{subdomainCount}</div>
+          <div className="text-2xl sm:text-3xl font-black text-primary">{subdomainCount}</div>
         </div>
-        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+        <div className="rounded-xl bg-card p-4 sm:p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
           <div className="text-xs font-bold text-muted-foreground uppercase">Total Inboxes</div>
-          <div className="text-3xl font-black text-primary">{inboxes.length}</div>
+          <div className="text-2xl sm:text-3xl font-black text-primary">{inboxes.length}</div>
         </div>
-        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
+        <div className="rounded-xl bg-card p-4 sm:p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
           <div className="text-xs font-bold text-muted-foreground uppercase">DNS Records</div>
-          <div className="text-3xl font-black text-purple-500">{records.length}</div>
+          <div className="text-2xl sm:text-3xl font-black text-purple-500">{records.length}</div>
         </div>
       </div>
 
-      <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border">
+      <div className="rounded-xl bg-card p-4 sm:p-6 shadow-sm ring-1 ring-border">
         <h3 className="text-lg font-bold text-foreground mb-4">Domains in Job</h3>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
-            <thead>
+            {/* Phones get one stacked cell per row (see EditableDomainRow), so no column headers. */}
+            <thead className="hidden md:table-header-group">
               <tr className="border-b-2 border-border">
                 <th className="p-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">Domain</th>
                 <th className="p-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">IP Address</th>
@@ -482,17 +554,17 @@ function PreFlightStep({
   };
 
   return (
-    <div className="flex flex-col gap-4 bg-card rounded-xl p-6 shadow-sm ring-1 ring-border">
+    <div className="flex flex-col gap-4 bg-card rounded-xl p-4 sm:p-6 shadow-sm ring-1 ring-border">
       <Tabs
         defaultValue="dns"
         onValueChange={(v) => {
           if (v === "server") runSshTests();
         }}
       >
-        <TabsList className="mb-4">
-          <TabsTrigger value="dns">DNS Preview</TabsTrigger>
-          <TabsTrigger value="mailboxes">Mailbox Plan</TabsTrigger>
-          <TabsTrigger value="server">Server Check</TabsTrigger>
+        <TabsList className="mb-4 grid w-full grid-cols-3 sm:inline-flex sm:w-auto">
+          <TabsTrigger value="dns" className="px-2 sm:px-3">DNS Preview</TabsTrigger>
+          <TabsTrigger value="mailboxes" className="px-2 sm:px-3">Mailbox Plan</TabsTrigger>
+          <TabsTrigger value="server" className="px-2 sm:px-3">Server Check</TabsTrigger>
         </TabsList>
 
         <TabsContent value="dns" className="flex flex-col gap-4">
@@ -521,7 +593,8 @@ function PreFlightStep({
                           <td className="p-2">
                             <span className="bg-secondary px-1 rounded text-xs">{r.type}</span>
                           </td>
-                          <td className="p-2 truncate max-w-[200px]" title={r.content}>
+                          {/* Phones: the full value wraps (no hover tooltip on touch). */}
+                          <td className="p-2 break-all sm:max-w-[200px] sm:truncate" title={r.content}>
                             {r.content}
                           </td>
                           <td className="p-2">{r.ttl}</td>
@@ -551,14 +624,14 @@ function PreFlightStep({
 
         <TabsContent value="server" className="flex flex-col gap-4">
           {domains.map((d) => (
-            <div key={d.id} className="border rounded-xl p-4 flex items-center justify-between">
-              <div className="flex flex-col">
-                <span className="font-bold">{d.name}</span>
-                <span className="text-xs text-muted-foreground">
+            <div key={d.id} className="border rounded-xl p-4 flex items-center justify-between gap-3">
+              <div className="flex min-w-0 flex-col">
+                <span className="font-bold break-all">{d.name}</span>
+                <span className="text-xs text-muted-foreground break-all">
                   {d.ipAddress} | {d.sshUser}
                 </span>
               </div>
-              <div>
+              <div className="shrink-0">
                 {sshStatuses[d.id] === "testing" && (
                   <Loader2 className="animate-spin text-primary" />
                 )}
@@ -652,8 +725,8 @@ function DnsPushStep({
   ).length;
 
   return (
-    <div className="flex flex-col gap-6 bg-card rounded-xl p-6 shadow-sm ring-1 ring-border">
-      <div className="flex items-center justify-between">
+    <div className="flex flex-col gap-6 bg-card rounded-xl p-4 sm:p-6 shadow-sm ring-1 ring-border">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xl font-bold">Cloudflare DNS Push</h2>
         <div className="text-sm text-muted-foreground">
           {totalDone} / {domains.length} domains processed
@@ -666,9 +739,9 @@ function DnsPushStep({
         if (!p) return null;
         return (
           <div key={d.id} className="border rounded-xl p-4 flex flex-col gap-3">
-            <div className="flex justify-between items-center">
-              <span className="font-bold flex items-center gap-2">
-                <Globe className="w-4 h-4" /> {d.name}
+            <div className="flex flex-wrap justify-between items-center gap-x-3 gap-y-1">
+              <span className="font-bold flex min-w-0 items-center gap-2 break-all">
+                <Globe className="w-4 h-4 shrink-0" /> {d.name}
               </span>
               <span className="text-xs text-muted-foreground">
                 {p.status === "pushing" && <Loader2 className="w-3 h-3 animate-spin inline mr-1" />}
@@ -682,7 +755,7 @@ function DnsPushStep({
               />
             </div>
             {l.length > 0 && (
-              <div className="max-h-32 overflow-y-auto text-xs font-mono bg-muted p-2 rounded border">
+              <div className="max-h-32 overflow-y-auto text-xs font-mono bg-muted p-2 rounded border break-words">
                 {l.map((res: any, i) => (
                   <div key={i} className={res.success ? "text-success" : "text-destructive"}>
                     {res.success ? "✅" : "❌"} {res.name} {res.error ? `- ${res.error}` : ""}
@@ -691,7 +764,7 @@ function DnsPushStep({
               </div>
             )}
             {p.status === "done" && (
-              <div className="text-xs flex items-center gap-2 mt-2">
+              <div className="text-xs flex flex-wrap items-center gap-2 mt-2">
                 Propagation Check:
                 {propagation[d.id] === "pending" && (
                   <Loader2 className="w-3 h-3 animate-spin text-primary" />
@@ -722,17 +795,17 @@ function DnsPushStep({
 }
 
 // --- STEP 4: SERVER SETUP ---
-function ServerSetupStep({ domains }: { domains: any[] }) {
+function ServerSetupStep({ domains, autoStart }: { domains: any[]; autoStart: boolean }) {
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
       {domains.map((d) => (
-        <TerminalWindow key={d.id} domain={d} />
+        <TerminalWindow key={d.id} domain={d} autoStart={autoStart} />
       ))}
     </div>
   );
 }
 
-function TerminalWindow({ domain }: { domain: any }) {
+function TerminalWindow({ domain, autoStart }: { domain: any; autoStart: boolean }) {
   const [logs, setLogs] = useState<string[]>(domain.terminalLogs && domain.status !== "failed" ? [domain.terminalLogs] : []);
   const [status, setStatus] = useState(
     domain.status === "ready" ? "Ready" :
@@ -741,7 +814,8 @@ function TerminalWindow({ domain }: { domain: any }) {
     domain.status === "configuring" ? "Configuring" :
     "Queued"
   );
-  const bottomRef = useRef<HTMLDivElement>(null);
+  // The scrollable log pane itself — auto-scroll moves only this box, never the page.
+  const logPaneRef = useRef<HTMLDivElement>(null);
   const provMutation = useMutation({
     mutationFn: (args: { data: { domainId: string } }) => provisionServer(args),
   });
@@ -785,12 +859,12 @@ function TerminalWindow({ domain }: { domain: any }) {
     };
   }, []);
 
-  // Auto-connect SSE for in-progress domains on first mount (no new job needed)
-  // Auto-start for pending domains
+  // Auto-connect SSE for in-progress domains on first mount (no new job needed).
+  // Auto-start pending domains only when the user ran the pipeline to this step; otherwise they get a button.
   useEffect(() => {
     if (domain.status === "provisioning" || domain.status === "configuring") {
       return connectSse();
-    } else if (domain.status === "pending" || !domain.status) {
+    } else if ((domain.status === "pending" || !domain.status) && autoStart) {
       setStartTrigger(1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -816,7 +890,8 @@ function TerminalWindow({ domain }: { domain: any }) {
   }, [startTrigger]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = logPaneRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [logs]);
 
   let statusColor = "bg-gray-500";
@@ -848,10 +923,24 @@ function TerminalWindow({ domain }: { domain: any }) {
           <span className="text-muted-foreground text-xs font-mono">{status}</span>
         </div>
       </div>
-      <div className="p-4 h-80 overflow-y-auto font-mono text-xs text-green-400 leading-relaxed custom-scrollbar">
+      <div
+        ref={logPaneRef}
+        className="p-4 h-80 overflow-y-auto font-mono text-xs text-green-400 leading-relaxed custom-scrollbar"
+      >
         <pre className="whitespace-pre-wrap font-inherit break-all">{logs.join("")}</pre>
-        <div ref={bottomRef} />
       </div>
+      {status === "Queued" && startTrigger === 0 && (
+        <div className="bg-gray-900 p-3 flex flex-wrap items-center justify-between gap-2 border-t border-gray-800">
+          <span className="text-xs text-muted-foreground">Server setup hasn't started for this domain.</span>
+          <Button
+            size="sm"
+            onClick={() => setStartTrigger((n) => n + 1)}
+            className="h-9 text-xs rounded-xl bg-primary hover:bg-primary/90 text-white"
+          >
+            Start setup
+          </Button>
+        </div>
+      )}
       {status === "Failed" && (
         <TerminalWindowFailedFooter
           domain={domain}
@@ -884,7 +973,7 @@ function TerminalWindowFailedFooter({ domain, onRetry }: { domain: any; onRetry:
   return (
     <div className="bg-gray-900 p-3 flex flex-col gap-3 border-t border-gray-800">
       {showEdit ? (
-        <div className="flex gap-2 items-center">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Input
             type="password"
             placeholder="Enter correct SSH Password"
@@ -892,28 +981,30 @@ function TerminalWindowFailedFooter({ domain, onRetry }: { domain: any; onRetry:
             onChange={(e) => setEditPassword(e.target.value)}
             className="h-9 text-xs font-mono bg-black border-gray-800 text-gray-200 placeholder-gray-500 rounded-xl"
           />
-          <Button
-            size="sm"
-            onClick={async () => {
-              await updatePasswordMutation.mutateAsync(editPassword);
-            }}
-            disabled={updatePasswordMutation.isPending}
-            className="h-9 text-xs rounded-xl bg-primary hover:bg-primary/90 text-white"
-          >
-            {updatePasswordMutation.isPending ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              "Save"
-            )}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setShowEdit(false)}
-            className="h-9 text-xs rounded-xl text-muted-foreground hover:text-gray-200"
-          >
-            Cancel
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              onClick={async () => {
+                await updatePasswordMutation.mutateAsync(editPassword);
+              }}
+              disabled={updatePasswordMutation.isPending}
+              className="h-9 flex-1 text-xs rounded-xl bg-primary hover:bg-primary/90 text-white sm:flex-none"
+            >
+              {updatePasswordMutation.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                "Save"
+              )}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowEdit(false)}
+              className="h-9 flex-1 text-xs rounded-xl text-muted-foreground hover:text-gray-200 sm:flex-none"
+            >
+              Cancel
+            </Button>
+          </div>
         </div>
       ) : (
         <div className="flex justify-between items-center gap-2">

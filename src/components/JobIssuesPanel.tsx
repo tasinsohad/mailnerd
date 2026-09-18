@@ -202,8 +202,8 @@ export function JobIssuesPanel({
 
   return (
     <div className="rounded-xl border border-border bg-card">
-      <div className="flex items-center gap-3 border-b border-border px-6 py-4">
-        <Wrench className="h-5 w-5 text-muted-foreground" />
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-4 sm:px-6">
+        <Wrench className="h-5 w-5 shrink-0 text-muted-foreground" />
         <h2 className="font-display text-base font-semibold text-foreground">Troubleshooting</h2>
         <span className="text-xs text-muted-foreground">
           Issues across this job's domains &amp; servers
@@ -223,7 +223,7 @@ export function JobIssuesPanel({
       </div>
 
       {(healing || consoleLines.length > 0) && (
-        <div className="border-b border-border px-6 py-4">
+        <div className="border-b border-border px-4 py-4 sm:px-6">
           <LiveConsole lines={consoleLines} running={healing} filenameBase={`job-${batchId}`} />
         </div>
       )}
@@ -231,16 +231,19 @@ export function JobIssuesPanel({
       {fixes.length > 0 && (
         <ul className="divide-y divide-border">
           {fixes.map((b) => (
-            <li key={b.action} className="flex items-center gap-4 px-6 py-4">
+            <li key={b.action} className="flex items-center gap-3 px-4 py-4 sm:gap-4 sm:px-6">
               <span className={cn("status-dot shrink-0", b.hasFail ? "text-destructive status-dot--pulse" : "text-warning")} />
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                  {b.hasFail ? <CircleAlert className="h-4 w-4 text-destructive" /> : <AlertTriangle className="h-4 w-4 text-warning" />}
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-semibold text-foreground">
+                  {b.hasFail ? <CircleAlert className="h-4 w-4 shrink-0 text-destructive" /> : <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />}
                   {ACTION_LABEL[b.action]}
-                  <span className="text-xs font-normal text-muted-foreground">fixes {b.issueLabels.join(" / ")}</span>
+                  <span className="min-w-0 break-words text-xs font-normal text-muted-foreground">fixes {b.issueLabels.join(" / ")}</span>
                 </div>
-                <div className="mt-0.5 truncate text-xs text-muted-foreground" title={b.domainNames.join(", ")}>
-                  {b.domainIds.length} target{b.domainIds.length === 1 ? "" : "s"}: {scopeLabel(b.domainNames)}
+                <div className="mt-0.5 break-words text-xs text-muted-foreground sm:truncate" title={b.domainNames.join(", ")}>
+                  {b.domainIds.length} target{b.domainIds.length === 1 ? "" : "s"}:{" "}
+                  {/* Phones: the full list (the tooltip isn't reachable on touch). */}
+                  <span className="sm:hidden">{b.domainNames.join(", ")}</span>
+                  <span className="hidden sm:inline">{scopeLabel(b.domainNames)}</span>
                 </div>
               </div>
               <Button
@@ -259,21 +262,23 @@ export function JobIssuesPanel({
       )}
 
       {manual.length > 0 && (
-        <div className="border-t border-border px-6 py-4">
+        <div className="border-t border-border px-4 py-4 sm:px-6">
           <div className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
             Needs your action — no automatic fix
           </div>
           <ul className="flex flex-col gap-3">
             {manual.map((m) => (
               <li key={m.id} className="text-sm">
-                <div className="flex items-center gap-2">
-                  <span className={cn("status-dot", m.hasFail ? "text-destructive" : "text-warning")} />
+                <div className="flex flex-wrap items-center gap-x-2">
+                  <span className={cn("status-dot shrink-0", m.hasFail ? "text-destructive" : "text-warning")} />
                   <span className="font-medium text-foreground">{m.label}</span>
                   <span className="text-xs text-muted-foreground">{m.scopes.length}×</span>
                 </div>
                 <div className="mt-0.5 ml-4 text-xs text-muted-foreground">{m.fix}</div>
-                <div className="ml-4 truncate text-[11px] text-muted-foreground/80" title={m.scopes.join(", ")}>
-                  {scopeLabel(m.scopes)}
+                <div className="ml-4 break-words text-[11px] text-muted-foreground/80 sm:truncate" title={m.scopes.join(", ")}>
+                  {/* Phones: the full list (the tooltip isn't reachable on touch). */}
+                  <span className="sm:hidden">{m.scopes.join(", ")}</span>
+                  <span className="hidden sm:inline">{scopeLabel(m.scopes)}</span>
                 </div>
               </li>
             ))}

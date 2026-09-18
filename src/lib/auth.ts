@@ -6,15 +6,25 @@ import { eq } from "drizzle-orm";
 // servers and jobs point at it. Signing in (src/server/session.ts) is what grants access to it.
 const DEFAULT_USER_EMAIL = "admin@smtpforge.local";
 
-// Runs before every server function. Without a valid session cookie nothing runs, and the error says
-// UNAUTHENTICATED so the browser (src/lib/providers.tsx) goes to the sign-in page.
+// Runs before every server function. A call another site made is refused with FORBIDDEN (see
+// crossSiteServerFnReason in src/server/auth-core.ts). Without a valid session cookie nothing runs, and
+// the error says UNAUTHENTICATED so the browser (src/lib/providers.tsx) goes to the sign-in page.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const requireAuth = createMiddleware().server(async ({ next }: any) => {
   // Imported inside the server-only callback so none of it can end up in the browser bundle.
-  const [{ getCookie }, { readAuthConfig, verifySessionToken, SESSION_COOKIE }] = await Promise.all([
-    import("@tanstack/react-start/server"),
-    import("../server/auth-core"),
-  ]);
+  const [
+    { getCookie, getRequest },
+    { readAuthConfig, verifySessionToken, SESSION_COOKIE, crossSiteServerFnReason, CROSS_SITE_ERROR },
+  ] = await Promise.all([import("@tanstack/react-start/server"), import("../server/auth-core")]);
+
+  // For a page render this is the page's request, which is never refused; for an HTTP call it's the
+  // server-function request itself.
+  const crossSite = crossSiteServerFnReason(getRequest());
+  if (crossSite) {
+    console.warn(`Refused a server function call from another site: ${crossSite}`);
+    throw new Error(CROSS_SITE_ERROR);
+  }
+
   const auth = readAuthConfig(process.env);
   if (!auth.ok || !verifySessionToken(getCookie(SESSION_COOKIE), auth.config)) {
     throw new Error("UNAUTHENTICATED: sign in to continue.");

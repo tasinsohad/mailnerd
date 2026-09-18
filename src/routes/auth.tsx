@@ -14,19 +14,19 @@ export const Route = createFileRoute("/auth")({
   beforeLoad: async ({ search }) => {
     const session = await getSession();
     if (session.authenticated) throw redirect({ href: safeRedirectPath(search.redirect) });
-    return { setupProblems: session.setupProblems };
+    return { setupError: session.setupError };
   },
   component: SignInPage,
 });
 
 function SignInPage() {
   const { redirect: redirectTo } = Route.useSearch();
-  const { setupProblems } = Route.useRouteContext();
+  const { setupError } = Route.useRouteContext();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const notSetUp = setupProblems.length > 0;
+  const notSetUp = setupError !== null;
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -55,7 +55,7 @@ function SignInPage() {
             <Mail className="h-5 w-5" />
           </div>
           <div className="leading-tight">
-            <div className="font-display text-base font-semibold tracking-tight">SMTP Forge</div>
+            <div className="font-display text-base font-semibold tracking-tight">Mail Nerd</div>
             <div className="ident text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
               control console
             </div>
@@ -67,18 +67,11 @@ function SignInPage() {
 
           {notSetUp && (
             <div role="alert" className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-              <div className="flex items-center gap-2 font-medium">
-                <AlertTriangle className="h-4 w-4 text-amber-600" />
-                Sign-in isn't set up yet
+              {/* Deliberately generic: this page is public. The details are in the server log. */}
+              <div className="flex items-start gap-2 font-medium">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <span>{setupError}</span>
               </div>
-              <p className="mt-1 text-muted-foreground">
-                Fix these in the server's <code className="ident">.env</code>, then restart the app:
-              </p>
-              <ul className="mt-2 list-disc space-y-0.5 pl-5">
-                {setupProblems.map((problem) => (
-                  <li key={problem}>{problem}</li>
-                ))}
-              </ul>
             </div>
           )}
 

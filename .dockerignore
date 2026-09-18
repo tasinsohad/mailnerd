@@ -1,17 +1,25 @@
-# Keep secrets and local build state out of the image. The server reads .env at runtime
-# through docker-compose (env_file), never from inside the image.
-.env
-.env.*
-!.env.example
-
-node_modules
-.output
-.vercel
-.tanstack
-.nitro
-dist
-
-.git
-.claude
-scratch
-*.log
+# Allowlist: nothing enters the build context unless it's named at the bottom. What the Dockerfile
+# build actually reads:
+#
+#   package.json, package-lock.json   `npm ci` (both stages) and the runtime image
+#   vite.config.ts                    `npm run build`: TanStack Start, Nitro and Tailwind setup
+#   tsconfig.json                     the "@/..." import alias (vite-tsconfig-paths)
+#   src/                              the app itself, including routeTree.gen.ts, styles.css, and
+#                                     src/server/sse-node.ts and start-queue-worker.ts, which
+#                                     vite.config.ts points Nitro at
+#
+# Everything else stays out, on purpose:
+#   - .env and every other secret: docker-compose passes .env to the running app (env_file)
+#   - node_modules, .output, .tanstack, .nitro, .vercel: installed or built fresh inside the image
+#   - .git, .claude, .gstack/, .superpowers/, docs/, scratch/
+#   - one-off root scripts (script*.ts, verify-mailcow.ts, fix-sogo.ts, clear-queue.ts, diag-batch.ts)
+#   - files the build never reads: drizzle.config.ts, migrations/, drizzle/, supabase/, api/,
+#     scripts/, inngest/, components.json (shadcn CLI only), eslint/prettier/vitest configs
+#
+# There's no public/ folder today. If one is added for static files, allow it here: !public
+*
+!package.json
+!package-lock.json
+!vite.config.ts
+!tsconfig.json
+!src

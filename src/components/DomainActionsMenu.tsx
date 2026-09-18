@@ -11,6 +11,7 @@ import {
   DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   MoreHorizontal,
   Send,
@@ -125,12 +126,17 @@ export function DomainActionsMenu({
           disabled={busy}
           onClick={stop}
           title="Domain actions"
-          className="h-9 w-9"
+          aria-label="Domain actions"
+          className="h-10 w-10 sm:h-9 sm:w-9"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56" onClick={(e) => e.stopPropagation()}>
+      <DropdownMenuContent
+        align="end"
+        className="w-56 max-w-[calc(100vw-1rem)]"
+        onClick={(e) => e.stopPropagation()}
+      >
         <DropdownMenuLabel>Run a step</DropdownMenuLabel>
         <DropdownMenuItem onClick={() => run("Pushing DNS", () => pushDnsToCloudflare({ data: { domainId } }), "DNS pushed to Cloudflare")}>
           <Send className="h-4 w-4" /> Push DNS
@@ -145,10 +151,12 @@ export function DomainActionsMenu({
           <ShieldCheck className="h-4 w-4" /> Sync DKIM
         </DropdownMenuItem>
         <DropdownMenuSeparator />
+        {/* sm+: formats in a flyout submenu. */}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger
             disabled={!canExport}
             title={canExport ? undefined : "Available once mailboxes are created"}
+            className="hidden sm:flex"
           >
             <Download className="h-4 w-4" /> Export CSV
           </DropdownMenuSubTrigger>
@@ -160,6 +168,26 @@ export function DomainActionsMenu({
             ))}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+        {/* Phones: a flyout has no room beside a right-pinned menu, so the formats are listed inline
+            and the disabled reason is shown as text (no hover tooltip on touch). */}
+        <div className="sm:hidden">
+          <DropdownMenuLabel
+            className={cn("flex items-center gap-2 font-normal", !canExport && "opacity-50")}
+          >
+            <Download className="h-4 w-4" /> Export CSV
+          </DropdownMenuLabel>
+          {canExport ? (
+            EXPORT_FORMATS.map((f) => (
+              <DropdownMenuItem key={f.id} inset onClick={() => exportCsv(f.id)}>
+                {f.label}
+              </DropdownMenuItem>
+            ))
+          ) : (
+            <p className="pb-1.5 pl-8 pr-2 text-xs text-muted-foreground">
+              Available once mailboxes are created
+            </p>
+          )}
+        </div>
         <DropdownMenuItem onClick={openSubdomains}>
           <Globe className="h-4 w-4" /> Export subdomains
         </DropdownMenuItem>
@@ -191,7 +219,7 @@ export function DomainActionsMenu({
         <DropdownMenuItem
           className="text-destructive focus:text-destructive"
           onClick={() => {
-            if (confirm(`Delete ${domainName ?? "this domain"}? This removes it from SMTP Forge.`))
+            if (confirm(`Delete ${domainName ?? "this domain"}? This removes it from Mail Nerd.`))
               run("Deleting domain", () => deleteDomain({ data: { id: domainId } }), "Domain deleted");
           }}
         >

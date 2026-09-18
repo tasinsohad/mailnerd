@@ -73,13 +73,23 @@ chmod 600 .env
 
 | Variable | Value |
 | --- | --- |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Your sign-in. The password must be at least 12 characters. |
-| `SESSION_SECRET` | Output of `openssl rand -hex 32` |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Your sign-in. The password must be at least 12 characters. Changing it later signs everyone out. |
+| `SESSION_SECRET` | Output of `openssl rand -hex 32`. Changing it later signs everyone out. |
 | `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Same as your local `.env` |
-| `ENCRYPTION_KEY` | **Copied exactly** from your local `.env`. A different key can't decrypt the SSH passwords and API keys already stored. |
+| `ENCRYPTION_KEY` | Copied from your local `.env`, if it has one. Despite the name, it doesn't protect stored credentials yet (see below). |
 | `DOMAIN` | `app.yourdomain.com` |
 
 `REDIS_URL` is ignored here: Docker Compose runs Redis next to the app.
+
+**Stored credentials are plain text.** SSH passwords, Mailcow API keys and admin passwords, and the
+Cloudflare API token are saved in the database unencrypted; nothing in the app encrypts them with
+`ENCRYPTION_KEY` today. Anyone who can read the database can read them, so:
+
+- Keep `DATABASE_URL` (it contains the database password) and `SUPABASE_SERVICE_ROLE_KEY` secret:
+  only in `.env` on this server and on your own machine, never in the repository or a chat.
+- Limit who can open the Supabase project, and use two-factor sign-in on those accounts.
+- If either leaks, rotate the database password and the service-role key in Supabase, and change
+  the SSH passwords on your mail servers.
 
 ### 5. Start
 
@@ -104,19 +114,21 @@ being blocked.
 
 ### Updating
 
+First make sure no server setup is running (**Jobs** page) before rebuilding. Rebuilding restarts
+the app, and restarting it mid-setup makes the queue retry that setup from the start, which wipes
+and reinstalls Mailcow on that server.
+
 ```bash
 cd /opt/mailnerd
 git pull
 docker compose up -d --build
 ```
 
-Don't update while a server setup is running. Restarting the app interrupts it, and the queue then
-runs that setup again from the start, which wipes and reinstalls Mailcow on that server.
-
 ### Changing the password
 
-Change `ADMIN_PASSWORD` in `.env`, then run `docker compose up -d --force-recreate app`. Everyone
-is signed out.
+Check the **Jobs** page first, as when updating: this restarts the app. Change `ADMIN_PASSWORD` in
+`.env`, then run `docker compose up -d --force-recreate app`. Everyone is signed out. Changing
+`SESSION_SECRET` the same way also signs everyone out.
 
 ## Local development
 

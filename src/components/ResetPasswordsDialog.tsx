@@ -149,12 +149,14 @@ export function ResetPasswordsDialog({
               )}
               . Save these credentials now.
             </div>
-            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
               <span className="text-xs text-muted-foreground">Password</span>
-              <code className="flex-1 truncate font-mono text-sm text-foreground">{result.password}</code>
+              <code className="min-w-0 flex-1 break-all font-mono text-sm text-foreground">
+                {result.password}
+              </code>
               <button
                 onClick={copyPassword}
-                className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-muted"
+                className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-3 py-2 text-xs hover:bg-muted sm:px-2 sm:py-1"
               >
                 {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                 Copy
@@ -163,7 +165,7 @@ export function ResetPasswordsDialog({
             {failRows.length > 0 && (
               <div className="max-h-32 overflow-auto rounded-lg border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
                 {failRows.map((r) => (
-                  <div key={r.email} className="truncate" title={r.error}>
+                  <div key={r.email} className="break-words">
                     {r.email}: {r.error}
                   </div>
                 ))}
@@ -172,7 +174,8 @@ export function ResetPasswordsDialog({
           </div>
         )}
 
-        <DialogFooter>
+        {/* gap-2 separates the stacked buttons on phones; sm:gap-0 leaves desktop on space-x-2. */}
+        <DialogFooter className="gap-2 sm:gap-0">
           {!result ? (
             <Button onClick={run} disabled={busy} className="gap-1.5">
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}

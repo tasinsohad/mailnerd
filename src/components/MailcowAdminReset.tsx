@@ -66,20 +66,25 @@ export function MailcowAdminReset({
       <div className="mt-2 text-sm">
         User: <span className="font-mono font-bold">admin</span>
       </div>
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
         <span>Pass:</span>
-        <span className="font-mono font-bold">{show ? displayPassword : "••••••••"}</span>
+        <span className="min-w-0 break-all font-mono font-bold">
+          {show ? displayPassword : "••••••••"}
+        </span>
+        {/* p-2 gives a finger-sized tap area on phones; desktop keeps the original tight icons. */}
         <button
           onClick={() => setShow((s) => !s)}
-          className="text-muted-foreground hover:text-foreground"
+          className="rounded p-2 text-muted-foreground hover:text-foreground sm:p-0"
           title={show ? "Hide" : "Show"}
+          aria-label={show ? "Hide password" : "Show password"}
         >
           {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
         </button>
         <button
           onClick={() => copy(displayPassword)}
-          className="text-muted-foreground hover:text-foreground"
+          className="rounded p-2 text-muted-foreground hover:text-foreground sm:p-0"
           title="Copy"
+          aria-label="Copy password"
         >
           <Copy className="h-3.5 w-3.5" />
         </button>

@@ -44,10 +44,10 @@ export function JobHealthSummary({ batchId, domains }: { batchId: string; domain
   ];
 
   return (
-    <div className="flex items-center gap-4 rounded-xl border border-border bg-card px-5 py-4">
-      <ShieldCheck className="h-5 w-5 text-muted-foreground" />
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border border-border bg-card px-4 py-4 sm:px-5">
+      <ShieldCheck className="h-5 w-5 shrink-0 text-muted-foreground" />
       <span className="font-display text-sm font-semibold text-foreground">Deliverability</span>
-      <div className="flex flex-1 flex-wrap items-center gap-4">
+      <div className="flex flex-1 flex-wrap items-center gap-x-4 gap-y-1">
         {cells.map((c) => (
           <span key={c.key} className="inline-flex items-center gap-1.5 text-sm">
             <span className={cn("status-dot", TONE[c.key])} />
@@ -59,7 +59,7 @@ export function JobHealthSummary({ batchId, domains }: { batchId: string; domain
       <Button
         variant="outline"
         size="sm"
-        className="h-9 gap-1.5"
+        className="ml-auto h-9 gap-1.5"
         onClick={() => recheck.mutate()}
         disabled={recheck.isPending}
       >

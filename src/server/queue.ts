@@ -1,4 +1,4 @@
-import { Queue, Worker, Job } from "bullmq";
+import { Queue, Worker, Job, DelayedError } from "bullmq";
 import type Redis from "ioredis";
 import { getDb } from "../lib/db";
 import { domains } from "../lib/db/schema";
@@ -8,6 +8,7 @@ import { decrypt } from "../lib/encryption";
 import { jobEvents, inProcessProvisions } from "./events";
 import { createRedis, waitForRedis } from "./redis";
 import { createSlotLimiter } from "./slot-limiter";
+import { claimDomain, releaseDomain, busyMessage } from "./domain-locks";
 import { ensureMailDomains, createMailboxes, syncDkim, unproxyDns } from "./pipeline";
 import { ensureWorkingApiKey } from "./mailcow-key";
 import crypto from "crypto";
@@ -47,9 +48,34 @@ let worker: any = null;
 // The queue's Redis client, so addServerSetupJob can check Redis is answering before using BullMQ.
 let redisConnection: Redis | null = null;
 
-const PROVISION_CONCURRENCY = Number(process.env.PROVISION_CONCURRENCY ?? 3);
+// Setups that run at once (PROVISION_CONCURRENCY), kept to a sane whole number: NaN or 0 would stall the queue.
+const PROVISION_CONCURRENCY = clampConcurrency(process.env.PROVISION_CONCURRENCY);
 // In-process setups get the same cap the BullMQ worker enforces.
 const inProcessSlots = createSlotLimiter(PROVISION_CONCURRENCY);
+// A Redis call still unanswered after this counts as failed: Redis can die right after the reachability check.
+const REDIS_CALL_TIMEOUT_MS = 10_000;
+// How long a queued setup waits before checking again when another run holds its domain.
+const BUSY_RECHECK_MS = 60_000;
+
+// Setup passes this process is running, by job id. If BullMQ decides a long setup stalled (a lock renewal
+// missed during a Redis hiccup) it hands the same job out again; that second pass waits for the first
+// instead of starting a second Mailcow install on the same server. Pinned to globalThis like the worker.
+const globalForPasses = globalThis as unknown as { __setupPasses?: Map<string, Promise<void>> };
+const setupPasses: Map<string, Promise<void>> =
+  globalForPasses.__setupPasses ?? (globalForPasses.__setupPasses = new Map());
+
+function clampConcurrency(raw: string | undefined): number {
+  const n = Math.floor(Number(raw ?? 3));
+  return Number.isFinite(n) ? Math.min(20, Math.max(1, n)) : 3;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 if (process.env.REDIS_URL) {
   try {
@@ -64,7 +90,8 @@ if (process.env.REDIS_URL) {
         attempts: 3,
         backoff: { type: "exponential", delay: 30000 },
         removeOnComplete: 100,
-        removeOnFail: false,
+        // Kept a week for troubleshooting, then dropped: Redis writes job data to disk.
+        removeOnFail: { age: 7 * 24 * 60 * 60, count: 200 },
       },
     });
     serverSetupQueue.on("error", redis.report);
@@ -73,21 +100,16 @@ if (process.env.REDIS_URL) {
     if (!globalForWorker.worker) {
       globalForWorker.worker = new Worker(
         "server-setup",
-        async (job: Job) => {
-          const { domainId, ipAddress, sshUser, sshPassword, domainName } = job.data;
-          const channel = `server-log:${domainId}`;
-          const pub = connection.duplicate();
-
-          const logFn = (msg: string, status?: string) => {
-            const payload = JSON.stringify({ msg, status });
-            pub.publish(channel, payload);
-            jobEvents.emit(channel, { msg, status, chunk: msg });
-          };
-
+        async (job: Job, token?: string) => {
+          const key = String(job.id);
+          const inFlight = setupPasses.get(key);
+          if (inFlight) return inFlight;
+          const pass = runQueuedSetup(connection, job, token);
+          setupPasses.set(key, pass);
           try {
-            await executeProvisionJob(domainId, ipAddress, sshUser, sshPassword, domainName, logFn);
+            await pass;
           } finally {
-            pub.disconnect();
+            if (setupPasses.get(key) === pass) setupPasses.delete(key);
           }
         },
         // Process 3 domains at a time; the rest stay queued and start as slots free.
@@ -124,18 +146,52 @@ export async function addServerSetupJob(
   const sanitizedUser = sanitizeShellInput(sshUser);
   const sanitizedDomain = sanitizeShellInput(domainName);
 
+  // One server setup per domain at a time: a second one re-installs Mailcow under the first.
+  const claim = claimDomain(domainId, "server setup");
+  if (!claim.ok) throw new Error(busyMessage(claim.running));
+  try {
+    return await startServerSetup(domainId, sanitizedIp, sanitizedUser, sshPassword, sanitizedDomain, claim.owner);
+  } catch (err) {
+    releaseDomain(domainId, claim.owner);
+    throw err;
+  }
+}
+
+// Queue the setup on BullMQ or start it in-process. The caller holds the domain's "server setup" claim as
+// `lockOwner`; whatever runs the job keeps it until the job is finished for good, then releases it.
+async function startServerSetup(
+  domainId: string,
+  sanitizedIp: string,
+  sanitizedUser: string,
+  sshPassword: string | null | undefined,
+  sanitizedDomain: string,
+  lockOwner: string,
+): Promise<{ jobId: string | undefined }> {
   // Use the durable BullMQ queue only when Redis is actually answering. Queue.add() against an
   // unreachable Redis never settles (BullMQ waits for a "ready" a dead host never sends), which is
   // how a deleted Upstash database made server setup hang with no error.
   if (serverSetupQueue && redisConnection && (await waitForRedis(redisConnection))) {
     console.log(`[addServerSetupJob] Using BullMQ`);
-    const job = await serverSetupQueue.add("setup", {
-      domainId,
-      ipAddress: sanitizedIp,
-      sshUser: sanitizedUser,
-      sshPassword,
-      domainName: sanitizedDomain,
-    });
+    // After an app restart the in-process claim is gone, but a queued or running job for this domain
+    // can still be sitting in Redis.
+    const queued = await withTimeout<Job[]>(
+      serverSetupQueue.getJobs(["active", "waiting", "delayed", "prioritized", "paused"]),
+      REDIS_CALL_TIMEOUT_MS,
+      "Redis stopped answering while checking the setup queue. Try again in a minute.",
+    );
+    if (queued.some((j: any) => j?.data?.domainId === domainId)) throw new Error(busyMessage("server setup"));
+    // No SSH password in the job: Redis writes job data to disk. The worker reads it from the database.
+    const job = await withTimeout<Job>(
+      serverSetupQueue.add("setup", {
+        domainId,
+        ipAddress: sanitizedIp,
+        sshUser: sanitizedUser,
+        domainName: sanitizedDomain,
+        lockOwner,
+      }),
+      REDIS_CALL_TIMEOUT_MS,
+      "Redis stopped answering while queueing the setup. Check the Jobs page before starting it again.",
+    );
     return { jobId: job.id };
   } else {
     // REDIS_URL is set but Redis isn't answering: say so in the domain's own terminal log, not just
@@ -179,12 +235,58 @@ export async function addServerSetupJob(
         console.error(`In-memory setup error for domain ${domainId}:`, err);
       } finally {
         inProcessProvisions.delete(domainId);
+        releaseDomain(domainId, lockOwner);
       }
     }, 2000);
 
     console.log(`[addServerSetupJob] Returning jobId: ${jobId}`);
     return { jobId };
   }
+}
+
+// One pass of a queued setup. The job keeps its domain claim across retries and app restarts (the owner id
+// is in the job data). If another run holds the domain, the job goes back to waiting and checks again later.
+async function runQueuedSetup(connection: Redis, job: Job, token: string | undefined): Promise<void> {
+  const { domainId, ipAddress, sshUser, domainName } = job.data;
+  const owner: string = job.data.lockOwner ?? `job:${job.id}`;
+  const channel = `server-log:${domainId}`;
+  const pub = connection.duplicate();
+  const logFn = (msg: string, status?: string) => {
+    pub.publish(channel, JSON.stringify({ msg, status }));
+    jobEvents.emit(channel, { msg, status, chunk: msg });
+  };
+
+  try {
+    const claim = claimDomain(domainId, "server setup", owner);
+    if (!claim.ok) {
+      logFn(`Waiting for the ${claim.running} on this domain to finish before starting...\n`);
+      await job.moveToDelayed(Date.now() + BUSY_RECHECK_MS, token);
+      throw new DelayedError();
+    }
+    let succeeded = false;
+    try {
+      // Jobs queued before the password was kept out of Redis still carry it.
+      const sshPassword = job.data.sshPassword ?? (await loadSshPassword(domainId));
+      await executeProvisionJob(domainId, ipAddress, sshUser, sshPassword, domainName, logFn);
+      succeeded = true;
+    } finally {
+      if (succeeded || job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) {
+        releaseDomain(domainId, owner);
+      }
+    }
+  } finally {
+    await pub.quit().catch(() => pub.disconnect());
+  }
+}
+
+// The same credentials provisionServer passes: the domain's own SSH password, else its server's.
+async function loadSshPassword(domainId: string): Promise<string | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const domain: any = await getDb().query.domains.findFirst({
+    where: eq(domains.id, domainId),
+    with: { server: true },
+  });
+  return domain?.sshPassword || domain?.server?.sshPassword || null;
 }
 
 async function executeProvisionJob(
@@ -537,13 +639,14 @@ async function executeProvisionJob(
         : { domain: loadedDomain };
       if (freshDomain?.mailcowHostname && freshDomain?.mailcowApiKey) {
         log("Creating mailboxes...", "Ready");
-        const { existingDomains } = await ensureMailDomains(db, freshDomain);
-        const { summary } = await createMailboxes(db, freshDomain, existingDomains);
+        // Same API transport ensureMailDomains found working (direct, or over SSH when the app's IP is blocked).
+        const { existingDomains, ssh: mailcowSsh } = await ensureMailDomains(db, freshDomain);
+        const { summary } = await createMailboxes(db, freshDomain, existingDomains, { ssh: mailcowSsh });
         log(`Mailboxes: ${summary.created}/${summary.total} created.`, "Ready");
         if (summary.created < summary.total) {
           log(
-            `WARNING: only ${summary.created}/${summary.total} mailboxes were created. ` +
-              `Re-run "Recreate mailboxes" from the domain page.`,
+            `WARNING: ${summary.total - summary.created} of ${summary.total} mailboxes weren't created after 3 retries. ` +
+              `Open the domain page to see why and retry them.`,
             "Ready",
           );
         }

@@ -71,7 +71,7 @@ const GENERIC: ExportFormat = {
   id: "generic",
   label: "EmailBison (default)",
   confidence: "verified",
-  source: "SMTP Forge default format (team-confirmed EmailBison-compatible)",
+  source: "Mail Nerd default format (team-confirmed EmailBison-compatible)",
   headers: [
     "Name",
     "Email",

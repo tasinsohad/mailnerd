@@ -63,6 +63,9 @@ export interface PlanInput {
   maxSubdomains?: number;
   targetPerSubdomain?: number;
   placement?: MailboxPlacement; // default "subdomain" (unchanged behaviour)
+  // An exact split to reproduce (prefix "@" = the main domain), e.g. the wizard's preview replayed on
+  // the server. When set, min/maxSubdomains are ignored.
+  distribution?: { prefix: string; count: number }[];
 }
 
 export interface PlannedInbox {
@@ -329,8 +332,11 @@ const RESERVED_PREFIXES = new Set([
 export function planDomain(domain: string, input: PlanInput): DomainPlan {
   const { totalInboxes, names } = input;
   const placement: MailboxPlacement = input.placement ?? "subdomain";
-  // Strip reserved names so `mail` (etc.) can never become a sending subdomain.
-  const prefixes = input.prefixes.filter((p) => !RESERVED_PREFIXES.has(p.toLowerCase().trim()));
+  // Strip reserved names so `mail` (etc.) can never become a sending subdomain. DNS names ignore case, so
+  // "Web" and "web" are one subdomain: lower-case and de-duplicate.
+  const prefixes = Array.from(
+    new Set(input.prefixes.map((p) => p.trim().toLowerCase()).filter((p) => p && !RESERVED_PREFIXES.has(p))),
+  );
   if (totalInboxes < 1) {
     return { domain, totalInboxes: 0, subdomainCount: 0, subdomainDistribution: {}, inboxes: [] };
   }
@@ -340,33 +346,11 @@ export function planDomain(domain: string, input: PlanInput): DomainPlan {
     throw new Error("No usable subdomain prefixes provided (after removing reserved names)");
   if (names.length === 0) throw new Error("No names provided");
 
-  const minAllowed = input.minSubdomains ?? 1;
-  const maxAllowed = input.maxSubdomains ?? 15;
-
-  let subdomainCount = randInt(minAllowed, maxAllowed);
-  if (subdomainCount > prefixes.length) subdomainCount = prefixes.length;
-  // Ensure enough subdomains to spread the inboxes naturally (~8 each). With too few, all
-  // inboxes still get placed (naturalSplit packs more per subdomain), but we prefer a real
-  // spread when we have the prefixes for it. Bounded by available prefixes and maxAllowed.
-  const minNeededForSpread = Math.ceil(totalInboxes / 8);
-  if (subdomainCount < minNeededForSpread) {
-    subdomainCount = Math.min(minNeededForSpread, prefixes.length, maxAllowed);
-  }
-  // Never plan more subdomains than inboxes (would leave empty subdomains).
-  if (subdomainCount > totalInboxes) subdomainCount = totalInboxes;
-  if (subdomainCount < 1) subdomainCount = Math.min(1, prefixes.length);
-
-  const chosenPrefixes = usesSubdomains ? sampleUnique(prefixes, subdomainCount) : [];
-
-  // Distribution targets = the mail domains mailboxes are spread across. The root/main domain
-  // is the apex (prefix "@", fqdn = the domain itself); subdomains are prefix.domain.
-  const targets: { prefix: string; fqdn: string }[] = [];
-  if (placement === "main" || placement === "both") targets.push({ prefix: "@", fqdn: domain });
-  if (placement === "subdomain" || placement === "both")
-    for (const p of chosenPrefixes) targets.push({ prefix: p, fqdn: `${p}.${domain}` });
-  if (targets.length === 0) targets.push({ prefix: "@", fqdn: domain }); // safety net
-
-  const counts = naturalSplit(totalInboxes, targets.length);
+  // An explicit split (the wizard's preview, replayed on the server) is used exactly as given, so what
+  // was previewed is what gets created. Otherwise pick subdomains and spread the mailboxes at random.
+  const { targets, counts } = input.distribution
+    ? explicitSplit(domain, input.distribution, placement, prefixes, totalInboxes)
+    : randomSplit(domain, input, placement, prefixes, totalInboxes);
 
   const shuffledNames = shuffle(names);
   const shuffledFormats = shuffle([...FORMATS]);
@@ -409,8 +393,17 @@ export function planDomain(domain: string, input: PlanInput): DomainPlan {
       let candidate = base;
       let suffix = randInt(2, 5);
       let strategy = randInt(0, 2);
+      let attempts = 0;
+      const taken = (c: string) => subSeen.has(c) || globalSeen.has(`${c}@${fqdn}`);
 
-      while (subSeen.has(candidate) || globalSeen.has(`${candidate}@${fqdn}`)) {
+      while (taken(candidate)) {
+        // After some natural-looking tries, draw from a wide number range until the address is unique (the
+        // old fallback stopped after one draw, so a big plan with few names could repeat an address).
+        if (++attempts > 50) {
+          do candidate = `${base}${randInt(1000, 99999)}`;
+          while (taken(candidate));
+          break;
+        }
         switch (strategy % 3) {
           case 0:
             candidate = base + randInt(10, 99);
@@ -421,11 +414,6 @@ export function planDomain(domain: string, input: PlanInput): DomainPlan {
           default:
             candidate = `${base}_${suffix}`;
             suffix += randInt(1, 3);
-        }
-
-        if (suffix > 999) {
-          candidate = `${base}${randInt(1000, 9999)}`;
-          break;
         }
         strategy++;
       }
@@ -450,6 +438,85 @@ export function planDomain(domain: string, input: PlanInput): DomainPlan {
 
   // Report the number of mail domains actually used (apex counts as one).
   return { domain, totalInboxes, subdomainCount: targets.length, subdomainDistribution, inboxes };
+}
+
+type SplitTarget = { prefix: string; fqdn: string };
+
+function randomSplit(
+  domain: string,
+  input: PlanInput,
+  placement: MailboxPlacement,
+  prefixes: string[],
+  totalInboxes: number,
+): { targets: SplitTarget[]; counts: number[] } {
+  const usesSubdomains = placement !== "main";
+  const minAllowed = input.minSubdomains ?? 1;
+  const maxAllowed = input.maxSubdomains ?? 15;
+
+  let subdomainCount = randInt(minAllowed, maxAllowed);
+  if (subdomainCount > prefixes.length) subdomainCount = prefixes.length;
+  // Ensure enough subdomains to spread the inboxes naturally (~8 each). With too few, all
+  // inboxes still get placed (naturalSplit packs more per subdomain), but we prefer a real
+  // spread when we have the prefixes for it. Bounded by available prefixes and maxAllowed.
+  const minNeededForSpread = Math.ceil(totalInboxes / 8);
+  if (subdomainCount < minNeededForSpread) {
+    subdomainCount = Math.min(minNeededForSpread, prefixes.length, maxAllowed);
+  }
+  // Never plan more subdomains than inboxes (would leave empty subdomains).
+  if (subdomainCount > totalInboxes) subdomainCount = totalInboxes;
+  if (subdomainCount < 1) subdomainCount = Math.min(1, prefixes.length);
+
+  const chosenPrefixes = usesSubdomains ? sampleUnique(prefixes, subdomainCount) : [];
+
+  // Distribution targets = the mail domains mailboxes are spread across. The root/main domain
+  // is the apex (prefix "@", fqdn = the domain itself); subdomains are prefix.domain.
+  const targets: SplitTarget[] = [];
+  if (placement === "main" || placement === "both") targets.push({ prefix: "@", fqdn: domain });
+  if (placement === "subdomain" || placement === "both")
+    for (const p of chosenPrefixes) targets.push({ prefix: p, fqdn: `${p}.${domain}` });
+  if (targets.length === 0) targets.push({ prefix: "@", fqdn: domain }); // safety net
+
+  return { targets, counts: naturalSplit(totalInboxes, targets.length) };
+}
+
+// Validate and use a given split. Throws a message fit to show the user when it can't be honoured.
+function explicitSplit(
+  domain: string,
+  distribution: { prefix: string; count: number }[],
+  placement: MailboxPlacement,
+  prefixes: string[],
+  totalInboxes: number,
+): { targets: SplitTarget[]; counts: number[] } {
+  const targets: SplitTarget[] = [];
+  const counts: number[] = [];
+  const seen = new Set<string>();
+  let sum = 0;
+
+  for (const entry of distribution) {
+    const prefix = entry.prefix.trim().toLowerCase();
+    if (!Number.isInteger(entry.count) || entry.count < 0) throw new Error(`Invalid mailbox count for ${prefix}`);
+    if (seen.has(prefix.toLowerCase())) throw new Error(`${prefix} appears twice in the planned split`);
+    seen.add(prefix.toLowerCase());
+    sum += entry.count;
+    if (entry.count === 0) continue;
+
+    if (prefix === "@") {
+      if (placement === "subdomain")
+        throw new Error("The planned split uses the main domain, but placement is subdomains only");
+      targets.push({ prefix: "@", fqdn: domain });
+    } else {
+      if (placement === "main")
+        throw new Error(`The planned split uses the subdomain ${prefix}, but placement is main domain only`);
+      if (RESERVED_PREFIXES.has(prefix.toLowerCase()))
+        throw new Error(`${prefix} is a reserved name and can't hold mailboxes`);
+      if (!prefixes.includes(prefix)) throw new Error(`${prefix} is not one of this batch's subdomain prefixes`);
+      targets.push({ prefix, fqdn: `${prefix}.${domain}` });
+    }
+    counts.push(entry.count);
+  }
+
+  if (sum !== totalInboxes) throw new Error(`The planned split adds up to ${sum}, not ${totalInboxes}`);
+  return { targets, counts };
 }
 
 // Distribute `total` inboxes across `buckets` subdomains. INVARIANT: the returned counts ALWAYS
@@ -507,28 +574,31 @@ export function allocateInboxesAcrossDomains(total: number, domainCount: number)
   }
 
   const average = total / domainCount;
-  const cap = Math.max(2, Math.ceil(average * 3));
+  // Never past what the server accepts for one domain (callers validate total <= that limit x domainCount).
+  const cap = Math.min(MAX_INBOXES_PER_DOMAIN, Math.max(2, Math.ceil(average * 3)));
 
   // 1. random weights → 2. proportional raw allocation (sums to `total`)
   const weights = new Array(domainCount).fill(0).map(() => randFloat(0.4, 1.6));
   const weightSum = weights.reduce((a, b) => a + b, 0);
   const raw = weights.map((w) => (w / weightSum) * total);
 
-  // 3. floor with a floor-of-1, then fix the rounding drift so the sum is exact
-  const result = raw.map((x) => Math.max(1, Math.floor(x)));
+  // 3. floor with a floor-of-1, within the cap, then fix the drift so the sum is exact
+  const result = raw.map((x) => Math.min(cap, Math.max(1, Math.floor(x))));
   let remainder = total - result.reduce((a, b) => a + b, 0);
 
   if (remainder > 0) {
-    // hand out the surplus to the largest fractional parts, respecting the cap
+    // hand out the surplus to the largest fractional parts, respecting the cap. Usually one each; a large
+    // shortfall left by the cap goes out in bigger chunks so it's placed within a few passes.
     const order = raw
       .map((x, i) => ({ i, frac: x - Math.floor(x) }))
       .sort((a, b) => b.frac - a.frac);
     let k = 0;
     while (remainder > 0 && k < domainCount * 1000) {
       const idx = order[k % order.length].i;
-      if (result[idx] < cap) {
-        result[idx]++;
-        remainder--;
+      const add = Math.min(cap - result[idx], remainder, Math.max(1, Math.ceil(remainder / domainCount)));
+      if (add > 0) {
+        result[idx] += add;
+        remainder -= add;
       }
       k++;
     }
@@ -547,6 +617,85 @@ export function allocateInboxesAcrossDomains(total: number, domainCount: number)
   }
 
   return result;
+}
+
+// How the wizard turns the user's numbers into per-domain mailbox counts.
+export type InboxCountMode = "even" | "random" | "fixed" | "range" | "manual";
+
+export interface InboxCountSettings {
+  mode: InboxCountMode;
+  total?: number; // even, random: mailboxes for the whole batch
+  perDomain?: number; // fixed
+  min?: number; // range
+  max?: number; // range
+  manual?: number[]; // manual: one count per domain, in domain order
+}
+
+const MAX_INBOXES_PER_DOMAIN = 10000; // matches the server's limit
+
+/** `total` split as evenly as possible: floor(total / n) each, and the first `total % n` domains get one more. */
+export function splitEvenly(total: number, domainCount: number): number[] {
+  if (domainCount <= 0) return [];
+  const base = Math.floor(total / domainCount);
+  const extra = total - base * domainCount;
+  return Array.from({ length: domainCount }, (_, i) => base + (i < extra ? 1 : 0));
+}
+
+/** What's wrong with these count settings for `domainCount` domains, in words the wizard shows, or null. */
+export function inboxCountSettingsError(s: InboxCountSettings, domainCount: number): string | null {
+  const whole = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
+  const atLeast = Math.max(1, domainCount);
+  switch (s.mode) {
+    case "even":
+    case "random":
+      if (!whole(s.total)) return "Total mailboxes must be a whole number";
+      if (s.total < atLeast) return `Total mailboxes must be at least ${atLeast} so every domain gets one`;
+      if (s.total > MAX_INBOXES_PER_DOMAIN * atLeast)
+        return `That's more than ${MAX_INBOXES_PER_DOMAIN} mailboxes per domain`;
+      return null;
+    case "fixed":
+      if (!whole(s.perDomain)) return "Mailboxes per domain must be a whole number";
+      if (s.perDomain < 1) return "Mailboxes per domain must be at least 1";
+      if (s.perDomain > MAX_INBOXES_PER_DOMAIN) return `Mailboxes per domain can be at most ${MAX_INBOXES_PER_DOMAIN}`;
+      return null;
+    case "range":
+      if (!whole(s.min) || !whole(s.max)) return "Min and max mailboxes must be whole numbers";
+      if (s.min < 1) return "Min mailboxes must be at least 1";
+      if (s.max < s.min) return "Max mailboxes must be at least the min";
+      if (s.max > MAX_INBOXES_PER_DOMAIN) return `Max mailboxes can be at most ${MAX_INBOXES_PER_DOMAIN}`;
+      return null;
+    case "manual": {
+      const counts = s.manual ?? [];
+      if (counts.length !== domainCount) return "Enter a mailbox count for every domain";
+      if (counts.some((n) => !whole(n))) return "Mailbox counts must be whole numbers";
+      if (counts.some((n) => n < 1)) return "Every domain needs at least 1 mailbox";
+      if (counts.some((n) => n > MAX_INBOXES_PER_DOMAIN))
+        return `A domain can have at most ${MAX_INBOXES_PER_DOMAIN} mailboxes`;
+      return null;
+    }
+    default:
+      return "Choose how to count mailboxes";
+  }
+}
+
+/** Per-domain mailbox counts for the chosen mode. Throws inboxCountSettingsError's message when invalid. */
+export function allocateInboxes(s: InboxCountSettings, domainCount: number): number[] {
+  const error = inboxCountSettingsError(s, domainCount);
+  if (error) throw new Error(error);
+  switch (s.mode) {
+    case "even":
+      return splitEvenly(s.total!, domainCount);
+    case "random":
+      return allocateInboxesAcrossDomains(s.total!, domainCount);
+    case "fixed":
+      return new Array(domainCount).fill(s.perDomain!);
+    case "range":
+      return Array.from({ length: domainCount }, () => randInt(s.min!, s.max!));
+    case "manual":
+      return [...s.manual!];
+    default:
+      throw new Error("Choose how to count mailboxes");
+  }
 }
 
 export function parseList(value: string): string[] {

@@ -30,7 +30,8 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Mailcow Provisioner" },
+      { title: "Mail Nerd" },
+      { name: "apple-mobile-web-app-title", content: "Mail Nerd" },
       {
         name: "description",
         content: "Provision Mailcow mail servers across multiple domains and VPS hosts.",

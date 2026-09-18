@@ -117,7 +117,7 @@ function CodeBlock({ title, lines }: { title: string; lines: string[] }) {
         <span className="font-sans text-xs font-medium text-white/55">{title}</span>
         <button
           onClick={copy}
-          className="-m-1 rounded p-1 text-white/55 transition-colors duration-150 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+          className="-m-2 rounded p-3 sm:-m-1 sm:p-1 text-white/55 transition-colors duration-150 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
           title="Copy to clipboard"
           aria-label={`Copy ${title}`}
         >
@@ -136,14 +136,14 @@ function CodeBlock({ title, lines }: { title: string; lines: string[] }) {
 function GuidancePanel({ guidance, fallback }: { guidance?: FixGuidance; fallback?: string }) {
   if (!guidance) {
     return fallback ? (
-      <div className="reveal mt-3 border-t border-border bg-muted/50 px-6 py-3 text-sm text-muted-foreground">
+      <div className="reveal mt-3 border-t border-border bg-muted/50 px-4 py-3 text-sm text-muted-foreground sm:px-6">
         <span className="font-medium text-foreground">How to fix: </span>
         {fallback}
       </div>
     ) : null;
   }
   return (
-    <div className="reveal mt-3 flex flex-col gap-4 border-t border-border bg-muted/50 px-6 py-4">
+    <div className="reveal mt-3 flex flex-col gap-4 border-t border-border bg-muted/50 px-4 py-4 sm:px-6">
       {/* Body copy capped for readability; code blocks below run full width on purpose. */}
       <p className="max-w-[70ch] text-sm leading-relaxed text-muted-foreground text-pretty">
         {guidance.explanation}
@@ -246,7 +246,7 @@ function IndicatorRows({
                 }
               }}
               className={cn(
-                "flex items-center gap-3 px-6 py-3 transition-colors duration-150",
+                "flex items-center gap-3 px-4 py-3 transition-colors duration-150 sm:px-6",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
                 expandable && "cursor-pointer hover:bg-muted/40",
               )}
@@ -269,10 +269,11 @@ function IndicatorRows({
               {/* Actions stay pinned to the row at every width — a Fix button that wraps onto its
                   own line reads as belonging to the next check. */}
               <div className="flex shrink-0 items-center gap-2">
+                {/* Compact pill on phones, full size from sm up. */}
                 {sev && ind.status !== "ok" && (
                   <span
                     className={cn(
-                      "hidden rounded-full border px-2 py-0.5 text-xs font-medium sm:inline",
+                      "rounded-full border px-1.5 py-0 text-[10px] font-medium sm:px-2 sm:py-0.5 sm:text-xs",
                       sev.cls,
                     )}
                   >
@@ -283,7 +284,7 @@ function IndicatorRows({
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-7 gap-1.5 px-2.5 text-xs"
+                    className="h-9 gap-1.5 px-2.5 text-xs sm:h-7"
                     disabled={busy}
                     // Stop the click bubbling to the row toggle underneath.
                     onClick={(e) => {
@@ -649,6 +650,16 @@ function TroubleshootPage() {
     downloadText(`mailbox-passwords-${resetFormat}.csv`, buildExportCsv(resetFormat, rows));
   };
 
+  const copyResetPassword = async () => {
+    if (!resetResult) return;
+    try {
+      await navigator.clipboard.writeText(resetResult.password);
+      toast.success("Password copied");
+    } catch {
+      toast.error("Couldn't copy to clipboard");
+    }
+  };
+
   // Which of the targeted ids are STILL unhealthy in a fresh result.
   const stillBroken = (fresh: any, targeted: string[]): string[] => {
     const set = new Set(targeted);
@@ -716,7 +727,7 @@ function TroubleshootPage() {
   const overall = result ? OVERALL[result.health.status] : null;
 
   return (
-    <div className="flex flex-col gap-6 p-8">
+    <div className="flex flex-col gap-6 p-4 sm:p-8">
       <header className="flex items-start gap-3">
         <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
           <Stethoscope aria-hidden className="h-5 w-5 text-primary" />
@@ -734,7 +745,7 @@ function TroubleshootPage() {
 
       <div className="grid items-start gap-6 lg:grid-cols-[20rem_minmax(0,1fr)]">
         {/* Connection form */}
-        <div className="rounded-xl border border-border bg-card p-6 h-fit">
+        <div className="rounded-xl border border-border bg-card p-4 sm:p-6 h-fit">
           <form
             className="flex flex-col gap-4"
             onSubmit={(e) => {
@@ -864,7 +875,7 @@ function TroubleshootPage() {
                     type="button"
                     size="sm"
                     variant="outline"
-                    className="h-7 px-2.5 text-xs"
+                    className="h-9 px-2.5 text-xs sm:h-7"
                     disabled={logBusy || busy || fixing}
                     onClick={() => getLog(src)}
                     title={`Fetch the ${label} log from the server`}
@@ -892,7 +903,7 @@ function TroubleshootPage() {
               // Skeleton, not a spinner in the middle of nothing: the shape it settles into is
               // the shape it's loading, so the panel doesn't jump when results land.
               <div aria-busy="true" aria-live="polite">
-                <div className="flex items-center gap-3 border-b border-border px-6 py-4">
+                <div className="flex items-center gap-3 border-b border-border px-4 py-4 sm:px-6">
                   <Server aria-hidden className="h-5 w-5 text-muted-foreground" />
                   <div className="flex flex-col gap-1.5">
                     <span className="ident text-base font-semibold text-foreground">
@@ -905,7 +916,7 @@ function TroubleshootPage() {
                 </div>
                 <ul className="divide-y divide-border">
                   {Array.from({ length: 7 }).map((_, i) => (
-                    <li key={i} className="flex items-center gap-3 px-6 py-3">
+                    <li key={i} className="flex items-center gap-3 px-4 py-3 sm:px-6">
                       <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-muted-foreground/25" />
                       <span className="h-3.5 w-44 shrink-0 animate-pulse rounded bg-muted-foreground/15" />
                       <span
@@ -919,7 +930,7 @@ function TroubleshootPage() {
             ) : (
               // Teach the interface: name what it will check and what it needs, rather than
               // announcing emptiness.
-              <div className="flex h-full flex-col items-center justify-center gap-3 p-12 text-center">
+              <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center sm:p-12">
                 <ShieldCheck aria-hidden className="h-10 w-10 text-muted-foreground/70" />
                 <p className="text-sm font-medium text-foreground">No diagnostics yet</p>
                 <p className="max-w-sm text-sm text-muted-foreground text-pretty">
@@ -937,7 +948,7 @@ function TroubleshootPage() {
             <>
               {/* Identity + verdict + action on one line; the meta gets its own row beneath so a
                   long hostname can't crowd the score badge or the primary action. */}
-              <div className="border-b border-border px-6 py-4">
+              <div className="border-b border-border px-4 py-4 sm:px-6">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                   <Server aria-hidden className="h-5 w-5 shrink-0 text-muted-foreground" />
                   {/* An IP is technical data — the system says identifiers are always mono. */}
@@ -989,7 +1000,7 @@ function TroubleshootPage() {
               />
               {/* The key's IP allow-list can reject us even though the key itself is valid. */}
               {result.apiKeyAutodetected && result.apiKeyRestricted && (
-                <div className="border-t border-border px-6 py-3 text-xs text-warning">
+                <div className="border-t border-border px-4 py-3 text-xs text-warning sm:px-6">
                   The Mailcow API key on this server is restricted to specific IPs
                   {result.apiAllowFrom ? ` (API_ALLOW_FROM: ${result.apiAllowFrom})` : ""}, so API
                   checks may be rejected even though the key is valid. Add this app's IP to that
@@ -998,7 +1009,7 @@ function TroubleshootPage() {
               )}
               {/* Wanted a key, looked, found nothing — Quick fix can create one. */}
               {canCreateApiKey && result.mailcowHostname && (
-                <div className="border-t border-border px-6 py-3 text-xs text-muted-foreground">
+                <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground sm:px-6">
                   No Mailcow API key found on the server (checked mailcow.conf and Mailcow's
                   database), so the API/UI reachability and DKIM key-match checks were skipped.{" "}
                   <span className="text-foreground">Quick fix can create one for you</span> — or
@@ -1006,7 +1017,7 @@ function TroubleshootPage() {
                 </div>
               )}
               {!form.mailcowHostname && !result.mailcowHostname && (
-                <div className="border-t border-border px-6 py-3 text-xs text-muted-foreground">
+                <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground sm:px-6">
                   Couldn't auto-detect a Mailcow hostname, so DNS / submission / TLS checks were
                   skipped. Add it under Advanced to include them.
                 </div>
@@ -1028,7 +1039,7 @@ function TroubleshootPage() {
       {/* Bulk DNS setup — paste domains/subdomains; create the missing MX/SPF/DKIM/DMARC on
           Cloudflare, using the server connected above as the mail host + DKIM source. */}
       <div className="rounded-xl border border-border bg-card">
-        <div className="flex items-center gap-3 border-b border-border px-6 py-4">
+        <div className="flex items-center gap-3 border-b border-border px-4 py-4 sm:px-6">
           <Server className="h-5 w-5 text-muted-foreground" />
           <div className="flex-1">
             <h2 className="font-display text-base font-semibold text-foreground">Bulk DNS setup</h2>
@@ -1039,7 +1050,7 @@ function TroubleshootPage() {
             </p>
           </div>
         </div>
-        <div className="flex flex-col gap-3 p-6">
+        <div className="flex flex-col gap-3 p-4 sm:p-6">
           <textarea
             value={bulkNames}
             onChange={(e) => setBulkNames(e.target.value)}
@@ -1048,7 +1059,7 @@ function TroubleshootPage() {
             placeholder={"us1.example.com\neu1.example.com\nexample.com"}
             className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Button onClick={runBulk} disabled={bulkBusy} className="gap-1.5">
               {bulkBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               Check &amp; create records
@@ -1064,8 +1075,10 @@ function TroubleshootPage() {
             <ul className="flex flex-col divide-y divide-border rounded-lg border border-border">
               {bulkResults.map((r) => (
                 <li key={r.name} className="flex flex-col gap-1 px-4 py-2.5">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm font-medium text-foreground">{r.name}</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="break-all font-mono text-sm font-medium text-foreground">
+                      {r.name}
+                    </span>
                     {r.zoneMissing && (
                       <span className="rounded-full border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[11px] font-medium text-warning">
                         zone not in Cloudflare
@@ -1114,6 +1127,17 @@ function TroubleshootPage() {
                         )}
                     </div>
                   )}
+                  {/* Why each record failed, as readable text on phones: a title tooltip is invisible on
+                      touch. From sm up the chips' title tooltips carry it, so the list is hidden. */}
+                  {!r.zoneMissing && r.failed.length > 0 && (
+                    <ul className="flex flex-col gap-0.5 text-[11px] text-destructive sm:hidden">
+                      {r.failed.map((f) => (
+                        <li key={`fe-${f.record}`} className="break-words">
+                          <span className="font-medium">{f.record}:</span> {f.error}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </li>
               ))}
             </ul>
@@ -1121,7 +1145,7 @@ function TroubleshootPage() {
         </div>
 
         {(bulkBusy || bulkConsole.length > 0) && (
-          <div className="border-t border-border px-6 py-4">
+          <div className="border-t border-border px-4 py-4 sm:px-6">
             <LiveConsole lines={bulkConsole} running={bulkBusy} filenameBase="bulk-dns" />
           </div>
         )}
@@ -1130,7 +1154,7 @@ function TroubleshootPage() {
       {/* Reset mailbox passwords — logs into the server above, reads the Mailcow API key, and resets
           EVERY mailbox to one shared password (blank = auto-generate). */}
       <div className="rounded-xl border border-border bg-card">
-        <div className="flex items-center gap-3 border-b border-border px-6 py-4">
+        <div className="flex items-center gap-3 border-b border-border px-4 py-4 sm:px-6">
           <ShieldCheck className="h-5 w-5 text-muted-foreground" />
           <div className="flex-1">
             <h2 className="font-display text-base font-semibold text-foreground">
@@ -1143,7 +1167,7 @@ function TroubleshootPage() {
             </p>
           </div>
         </div>
-        <div className="flex flex-col gap-3 p-6">
+        <div className="flex flex-col gap-3 p-4 sm:p-6">
           <label className="text-sm font-medium text-foreground">
             New password
             <input
@@ -1183,26 +1207,46 @@ function TroubleshootPage() {
                 )}
                 {resetResult.host ? ` on ${resetResult.host}` : ""}.
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Password</span>
-                <code className="flex-1 truncate font-mono text-sm text-foreground">
-                  {resetResult.password}
-                </code>
-                <select
-                  value={resetFormat}
-                  onChange={(e) => setResetFormat(e.target.value)}
-                  className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  title="Export format"
-                >
-                  {EXPORT_FORMATS.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.label}
-                    </option>
-                  ))}
-                </select>
-                <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={downloadResetCsv}>
-                  <Download className="h-3.5 w-3.5" /> CSV
-                </Button>
+              {/* Phones: the password (which must be saved) gets its own full row with a Copy
+                  button; the export controls sit on a second row. From sm up it's one row again. */}
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="shrink-0 text-xs text-muted-foreground">Password</span>
+                  <code className="min-w-0 flex-1 break-all font-mono text-sm text-foreground">
+                    {resetResult.password}
+                  </code>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 shrink-0 gap-1.5 sm:h-8"
+                    onClick={copyResetPassword}
+                    aria-label="Copy password"
+                  >
+                    <Copy className="h-3.5 w-3.5" /> Copy
+                  </Button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={resetFormat}
+                    onChange={(e) => setResetFormat(e.target.value)}
+                    className="h-9 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-8"
+                    title="Export format"
+                  >
+                    {EXPORT_FORMATS.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 gap-1.5 sm:h-8"
+                    onClick={downloadResetCsv}
+                  >
+                    <Download className="h-3.5 w-3.5" /> CSV
+                  </Button>
+                </div>
               </div>
               <p className="text-[11px] text-muted-foreground">
                 {getExportFormat(resetFormat).label} format · IMAP 993 / SMTP 587.
@@ -1212,7 +1256,7 @@ function TroubleshootPage() {
         </div>
 
         {(resetBusy || resetConsole.length > 0) && (
-          <div className="border-t border-border px-6 py-4">
+          <div className="border-t border-border px-4 py-4 sm:px-6">
             <LiveConsole lines={resetConsole} running={resetBusy} filenameBase="password-reset" />
           </div>
         )}

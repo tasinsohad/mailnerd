@@ -19,7 +19,7 @@ export function RemediationPlanPanel({
   const hasSteps = plan.steps.length > 0;
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Wrench className="h-4 w-4 text-primary" />
         <h3 className="font-display text-sm font-semibold text-foreground">Auto-heal plan</h3>
         <span className="ml-auto text-xs text-muted-foreground">{plan.summary}</span>
@@ -34,7 +34,7 @@ export function RemediationPlanPanel({
             >
               <span className="ident text-xs text-muted-foreground">{i + 1}</span>
               <div className="min-w-0">
-                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
                   {s.label}
                   {s.disruptive && (
                     <span className="rounded-full border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[11px] font-medium text-warning">

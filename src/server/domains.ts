@@ -11,7 +11,7 @@ import {
   userSecrets,
   serverHealth,
 } from "@/lib/db/schema";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { eq, and, desc, inArray, getTableColumns } from "drizzle-orm";
 import { planDomain, randInt, DomainPlan, generateDnsRecords } from "@/lib/planning";
 import dns from "dns/promises";
 import {
@@ -31,13 +31,39 @@ export { resolveAndSaveCfZoneId };
 
 // Strip server-only secrets before a domain row is sent to the browser. mailcowApiKey is never
 // used client-side; sshPassword is replaced with a boolean so edit forms can show "set" without
-// leaking the value. (Responses are userId-scoped, but these are cacheable GETs and the app is
-// deployable, so secrets must not leave the server.)
+// leaking the value. mailcowAdminPassword is shown only on the domain page (getDomainDetails), so
+// every other response leaves it out. (Responses are userId-scoped, but these are cacheable GETs and
+// the app is deployable, so secrets must not leave the server.)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function publicDomain<T extends Record<string, any>>(d: T | null | undefined) {
+function publicDomain<T extends Record<string, any>>(
+  d: T | null | undefined,
+  { withAdminPassword = false }: { withAdminPassword?: boolean } = {},
+) {
   if (!d) return d;
-  const { mailcowApiKey: _k, sshPassword, ...rest } = d;
-  return { ...rest, hasSshPassword: Boolean(sshPassword) };
+  const { mailcowApiKey: _k, sshPassword, mailcowAdminPassword, ...rest } = d;
+  return {
+    ...rest,
+    hasSshPassword: Boolean(sshPassword),
+    ...(withAdminPassword ? { mailcowAdminPassword } : {}),
+  };
+}
+
+// For the server log, and for errors returned to the browser. Drizzle's message ends with the query's
+// parameters ("params: ..."), SSH passwords among them, and logging the error object prints them
+// too. Keep the SQL text, the Postgres error code and the underlying cause; drop the parameters.
+function describeErrorForLog(err: unknown): string {
+  const e = err as { message?: unknown; code?: unknown; cause?: { message?: unknown; code?: unknown } } | null;
+  const withoutParams = (text: string) => {
+    const at = text.search(/params:/i);
+    return (at === -1 ? text : text.slice(0, at)).trim();
+  };
+  const parts = [withoutParams(typeof e?.message === "string" ? e.message : String(err))];
+  const code = e?.code ?? e?.cause?.code;
+  if (typeof code === "string" && code) parts.push(`code ${code}`);
+  if (typeof e?.cause?.message === "string" && e.cause.message) {
+    parts.push(`cause: ${withoutParams(e.cause.message)}`);
+  }
+  return parts.join(" | ");
 }
 
 // Validation schemas
@@ -107,7 +133,10 @@ export const listDomains = createServerFn({ method: "GET" })
       const where = data?.batchId
         ? and(eq(domains.userId, userId), eq(domains.batchId, data.batchId))
         : eq(domains.userId, userId);
-      const rows = await db.select().from(domains).where(where).orderBy(desc(domains.createdAt));
+      // Everything but the setup log: it runs to hundreds of KB per domain (7.8 MB for 29 domains), no list
+      // shows it, and this list loads on the Domains page, once per job card, and in the add-domains wizard.
+      const { terminalLogs: _terminalLogs, ...listColumns } = getTableColumns(domains);
+      const rows = await db.select(listColumns).from(domains).where(where).orderBy(desc(domains.createdAt));
 
       // Attach the job (batch) name and the planned inbox count to each domain row.
       const batchList = await db.select().from(domainBatches).where(eq(domainBatches.userId, userId));
@@ -122,18 +151,24 @@ export const listDomains = createServerFn({ method: "GET" })
         plans.map((p: any) => [p.domainId, p.totalInboxes ?? 0]),
       );
 
-      // Count actually-created mailboxes (a stored password = a usable account). Used to gate
-      // CSV export so it's only offered once mailboxes exist.
+      // Count usable mailboxes: confirmed in Mailcow and with a saved password, the same rule the CSV export
+      // uses. Used to gate CSV export so it's only offered once mailboxes exist.
       const inboxRows =
         ids.length > 0
           ? await db
-              .select({ domainId: plannedInboxes.domainId, password: plannedInboxes.password })
+              .select({
+                domainId: plannedInboxes.domainId,
+                status: plannedInboxes.status,
+                password: plannedInboxes.password,
+              })
               .from(plannedInboxes)
               .where(inArray(plannedInboxes.domainId, ids))
           : [];
       const createdCount = new Map<string, number>();
       for (const ir of inboxRows) {
-        if (ir.password) createdCount.set(ir.domainId, (createdCount.get(ir.domainId) ?? 0) + 1);
+        if (ir.status === "active" && ir.password) {
+          createdCount.set(ir.domainId, (createdCount.get(ir.domainId) ?? 0) + 1);
+        }
       }
 
       return rows.map((r: any) => ({
@@ -219,7 +254,7 @@ export const updateDomain = createServerFn({ method: "POST" })
 
       return { ok: true };
     } catch (error) {
-      return { ok: false, error: String(error) };
+      return { ok: false, error: describeErrorForLog(error) };
     }
   });
 
@@ -237,7 +272,7 @@ export const deleteDomain = createServerFn({ method: "POST" })
       await db.delete(domains).where(and(eq(domains.id, data.id), eq(domains.userId, userId)));
       return { ok: true };
     } catch (error) {
-      return { ok: false, error: String(error) };
+      return { ok: false, error: describeErrorForLog(error) };
     }
   });
 
@@ -271,6 +306,17 @@ export const listDomainBatches = createServerFn({ method: "GET" })
     }
   });
 
+// Why a domain couldn't be added, in words for the wizard. Drizzle's own message includes the query's
+// parameters (SSH passwords among them), so only the database's message is passed on.
+function describeAddDomainError(err: unknown): string {
+  const e = err as { code?: string; message?: string; cause?: { code?: string; message?: string } };
+  if (e?.code === "23505" || e?.cause?.code === "23505") return "This domain is already in the app";
+  if (e?.cause?.message) return e.cause.message;
+  const message = e?.message ?? String(err);
+  if (/^Failed query/i.test(message)) return "The database rejected this domain";
+  return message.length > 200 ? `${message.slice(0, 200)}…` : message;
+}
+
 const addDomainsWizardSchema = z.object({
   batchName: z.string().min(1).max(255),
   domains: z.array(
@@ -280,8 +326,13 @@ const addDomainsWizardSchema = z.object({
       sshUser: z.string().min(1).max(50),
       sshPassword: z.string().optional().nullable(),
       plannedSubdomainCount: z.number().int().min(1).max(1000).optional(),
-      plannedInboxCount: z.number().int().min(1).max(10000).optional(),
-      plannedDistribution: z.array(z.number().int()).optional(),
+      // Required: the count comes from the wizard's chosen mode. (A missing count used to fall back to a
+      // random 8-40.)
+      plannedInboxCount: z.number().int().min(1).max(10000),
+      // The previewed split per mail domain ("@" = main domain), replayed exactly.
+      plannedDistribution: z
+        .array(z.object({ prefix: z.string().min(1).max(63), count: z.number().int().min(0).max(10000) }))
+        .optional(),
     }),
   ),
   prefixes: z.array(z.string()).optional(),
@@ -312,79 +363,96 @@ export const addDomainsWizardAction = createServerFn({ method: "POST" })
         .returning();
 
       let okCount = 0;
+      // Domains that couldn't be added, with the reason, so the wizard says so instead of quietly
+      // creating a smaller batch.
+      const failed: { domain: string; error: string }[] = [];
       for (const row of data.domains) {
         try {
-          const inboxCount = row.plannedInboxCount ?? randInt(8, 40);
+          // Without a previewed split, keep the previewed subdomain count. With "both" that count
+          // includes the main domain, which isn't a subdomain.
+          const subdomains = row.plannedSubdomainCount
+            ? Math.max(1, row.plannedSubdomainCount - (placement === "both" ? 1 : 0))
+            : undefined;
           const plan = planDomain(row.domain, {
-            totalInboxes: inboxCount,
+            totalInboxes: row.plannedInboxCount,
             prefixes,
             names,
-            // Honor the exact subdomain count previewed in the wizard (min == max). This also
-            // makes range-mode previews faithful — the count the user saw is the count persisted.
-            minSubdomains: row.plannedSubdomainCount ?? 1,
-            maxSubdomains: row.plannedSubdomainCount ?? 15,
+            minSubdomains: subdomains ?? 1,
+            maxSubdomains: subdomains ?? 15,
             placement,
+            distribution: row.plannedDistribution,
           });
 
-          const [domain] = await db
-            .insert(domains)
-            .values({
-              userId,
-              batchId: batch.id,
-              name: row.domain,
-              ipAddress: row.ipAddress,
-              sshUser: row.sshUser,
-              sshPassword: row.sshPassword,
-              status: "pending",
-            })
-            .returning();
+          // All of a domain's rows or none: a half-added domain can't be added again (its name is taken).
+          await db.transaction(async (tx: any) => {
+            const [domain] = await tx
+              .insert(domains)
+              .values({
+                userId,
+                batchId: batch.id,
+                name: row.domain,
+                ipAddress: row.ipAddress,
+                sshUser: row.sshUser,
+                sshPassword: row.sshPassword,
+                status: "pending",
+                plannedInboxCount: plan.totalInboxes,
+              })
+              .returning();
 
-          const [domainPlan] = await db
-            .insert(domainPlans)
-            .values({
+            const [domainPlan] = await tx
+              .insert(domainPlans)
+              .values({
+                userId,
+                domainId: domain.id,
+                totalInboxes: plan.totalInboxes,
+                subdomainCount: plan.subdomainCount,
+                status: "planned",
+                prefixesSnapshot: prefixes,
+                namesSnapshot: names,
+                placement,
+              })
+              .returning();
+
+            const inboxesToInsert = plan.inboxes.map((ib) => ({
               userId,
               domainId: domain.id,
-              totalInboxes: plan.totalInboxes,
-              subdomainCount: plan.subdomainCount,
-              status: "planned",
-              prefixesSnapshot: prefixes,
-              namesSnapshot: names,
-              placement,
-            })
-            .returning();
+              planId: domainPlan.id,
+              subdomainPrefix: ib.subdomainPrefix,
+              subdomainFqdn: ib.subdomainFqdn,
+              localPart: ib.localPart,
+              email: ib.email,
+              fullName: ib.fullName,
+              firstName: ib.firstName,
+              lastName: ib.lastName,
+              format: ib.format,
+              status: "planned" as const,
+            }));
+            // In chunks: Postgres takes at most 65535 parameters per statement, which one insert of a
+            // 10000-mailbox plan (12 columns each) would pass.
+            for (let i = 0; i < inboxesToInsert.length; i += 500) {
+              await tx.insert(plannedInboxes).values(inboxesToInsert.slice(i, i + 500));
+            }
 
-          const inboxesToInsert = plan.inboxes.map((ib) => ({
-            userId,
-            domainId: domain.id,
-            planId: domainPlan.id,
-            subdomainPrefix: ib.subdomainPrefix,
-            subdomainFqdn: ib.subdomainFqdn,
-            localPart: ib.localPart,
-            email: ib.email,
-            fullName: ib.fullName,
-            firstName: ib.firstName,
-            lastName: ib.lastName,
-            format: ib.format,
-            status: "planned" as const,
-          }));
-
-          await db.insert(plannedInboxes).values(inboxesToInsert);
-
-          const dnsRecordsToInsert = generateDnsRecords(row.domain, row.ipAddress, plan).map((rec) => ({
-            userId,
-            domainId: domain.id,
-            ...rec,
-          }));
-          await db.insert(dnsRecords).values(dnsRecordsToInsert);
+            const dnsRecordsToInsert = generateDnsRecords(row.domain, row.ipAddress, plan).map((rec) => ({
+              userId,
+              domainId: domain.id,
+              ...rec,
+            }));
+            await tx.insert(dnsRecords).values(dnsRecordsToInsert);
+          });
           okCount++;
         } catch (err) {
-          console.error(`Failed to process domain ${row.domain}:`, err);
+          console.error(`Failed to add domain ${row.domain}: ${describeErrorForLog(err)}`);
+          failed.push({ domain: row.domain, error: describeAddDomainError(err) });
         }
       }
 
-      return { ok: true, okCount };
+      if (okCount === 0) {
+        await db.delete(domainBatches).where(eq(domainBatches.id, batch.id)).catch(() => {});
+      }
+      return { ok: true, okCount, failed };
     } catch (error) {
-      return { ok: false, error: String(error) };
+      return { ok: false, error: describeErrorForLog(error) };
     }
   });
 
@@ -437,7 +505,14 @@ export const getDomainDetails = createServerFn({ method: "GET" })
         }
       }
 
-      return { domain: publicDomain(domain), records, inboxes, plan, serverHealth: serverHealthRow };
+      return {
+        // The domain page shows the current Mailcow admin password (MailcowAdminReset).
+        domain: publicDomain(domain, { withAdminPassword: true }),
+        records,
+        inboxes,
+        plan,
+        serverHealth: serverHealthRow,
+      };
     } catch {
       return null;
     }
@@ -463,7 +538,7 @@ export const pushDnsToCloudflare = createServerFn({ method: "POST" })
       const { results } = await pushDnsForDomain(db, domain, userId);
       return { results };
     } catch (err) {
-      return { error: String(err) };
+      return { error: describeErrorForLog(err) };
     }
   });
 
@@ -486,7 +561,7 @@ export const repairDomainDns = createServerFn({ method: "POST" })
       const r = await unproxyDns(db, domain, userId);
       return { success: true, ...r };
     } catch (err) {
-      return { error: String(err) };
+      return { error: describeErrorForLog(err) };
     }
   });
 
@@ -678,6 +753,6 @@ export const deleteDomainBatch = createServerFn({ method: "POST" })
       await db.delete(domainBatches).where(eq(domainBatches.id, batch.id));
       return { ok: true };
     } catch (error) {
-      return { ok: false, error: String(error) };
+      return { ok: false, error: describeErrorForLog(error) };
     }
   });

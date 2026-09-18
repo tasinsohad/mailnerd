@@ -101,10 +101,21 @@ function DomainDetailsPage() {
     return acc;
   }, {});
 
+  // Mailboxes not usable yet once the server is set up and idle: failed, never created, or created
+  // without a saved password (e.g. an interrupted run). Listed with a retry. Status must be "ready":
+  // mailcowHostname is saved halfway through a Mailcow install, so it alone would show this mid-setup.
+  const unfinishedInboxes =
+    domain?.status === "ready" && domain?.mailcowHostname
+      ? inboxes.filter((ib: any) => ib.status !== "active" || !ib.password)
+      : [];
+  // Mailcow's reason per mailbox from the last run, keyed by lower-cased address.
+  const [mailboxErrors, setMailboxErrors] = useState<Record<string, string>>({});
+
   const [logs, setLogs] = useState<string[]>([]);
   const [terminalStatus, setTerminalStatus] = useState<string>("");
   const [subOpen, setSubOpen] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  // The scrollable log pane itself — auto-scroll moves only this box, never the page.
+  const logPaneRef = useRef<HTMLDivElement>(null);
 
   // Unique subdomains (apex excluded) for this domain — available as soon as inboxes are planned.
   const subRows = subdomainExportRows(
@@ -170,7 +181,8 @@ function DomainDetailsPage() {
     // Only auto-scroll to the live log while actively provisioning — not when opening a
     // ready domain (which would yank the page down to its historical logs on load).
     if (domain?.status === "configuring" || domain?.status === "provisioning") {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      const el = logPaneRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
     }
   }, [logs, domain?.status]);
 
@@ -234,12 +246,16 @@ function DomainDetailsPage() {
       toast.error(res.error, { id: "mailcow" });
       return;
     }
+    setMailboxErrors(
+      Object.fromEntries((res?.failed ?? []).map((f: any) => [String(f.email).toLowerCase(), String(f.error)])),
+    );
     const s = res?.summary;
     if (s && s.failed > 0) {
       const firstErr = res.results?.find((r: any) => r.type === "mailbox" && !r.success)?.error;
       toast.error(
-        `${s.created}/${s.total} mailboxes created. ${s.failed} failed${firstErr ? ` — ${firstErr}` : ""}`,
-        { id: "mailcow", duration: 10000 },
+        `${s.created}/${s.total} mailboxes ready. ${s.failed} still failing after 3 retries` +
+          `${firstErr ? ` (${firstErr})` : ""}. They're listed on this page to retry.`,
+        { id: "mailcow", duration: 12000 },
       );
     } else if (s) {
       toast.success(`Verified ${s.created}/${s.total} mailboxes in Mailcow`, { id: "mailcow" });
@@ -282,47 +298,90 @@ function DomainDetailsPage() {
     }
   };
 
-  // Regenerate the inbox plan from the saved prefixes/names snapshot. Used to fix domains that
-  // were planned before the planner count fix (e.g. 28 requested but only 8 generated). Replaces
-  // the planned inboxes only — Mailcow is untouched until "Recreate mailboxes" runs.
+  // Change the mailbox count: regenerate the inbox plan from the saved prefixes/names snapshot with a new
+  // total. handleRegeneratePlan then replaces the mailboxes in Mailcow too when the server is set up.
+  // Toasts for the outcome are shown by the handler.
   const regeneratePlanMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (count: number) => {
       toast.loading("Regenerating inbox plan...", { id: "replan" });
       return regeneratePlan({
         data: {
           domainId: id,
-          totalInboxes: plan?.totalInboxes ?? 0,
+          totalInboxes: count,
           prefixes: plan?.prefixesSnapshot ?? [],
           names: plan?.namesSnapshot ?? [],
         },
       });
     },
-    onSuccess: (res: any) => {
-      if (res?.error) toast.error(res.error, { id: "replan" });
-      else
-        toast.success(
-          `Plan regenerated to ${plan?.totalInboxes ?? 0} inboxes. Run "Recreate mailboxes" to create them.`,
-          { id: "replan", duration: 9000 },
-        );
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["domain", id] });
     },
     onError: (err: any) => toast.error(err.message, { id: "replan" }),
   });
 
-  const handleRegeneratePlan = () => {
+  const handleRegeneratePlan = async () => {
     if (!plan?.prefixesSnapshot?.length || !plan?.namesSnapshot?.length) {
       toast.error("No saved prefixes/names to regenerate from — re-add the domain instead.");
       return;
     }
+    const domainName = domain?.name ?? "this domain";
+    const currentTotal = plan?.totalInboxes ?? inboxes.length;
+    const serverSetUp = Boolean(domain?.mailcowHostname);
+    const answer = window.prompt(
+      `How many mailboxes should ${domainName} have?\n\n` +
+        (serverSetUp
+          ? `The ${inboxes.length} current mailboxes are replaced with a new set (new addresses and passwords).`
+          : `This replaces the ${inboxes.length} planned mailboxes with a new set (new addresses).`),
+      String(currentTotal),
+    );
+    if (answer === null) return;
+    const count = Number(answer.trim());
+    if (!Number.isInteger(count) || count < 1 || count > 10000) {
+      toast.error("Enter a whole number from 1 to 10000.");
+      return;
+    }
+    if (count === currentTotal) {
+      toast.info("That's the current count — nothing changed.");
+      return;
+    }
+
+    // Mailboxes that may already exist in Mailcow get deleted by the recreate below: say so first.
+    const hasLiveMailboxes = inboxes.some((ib: any) => ib.status === "active" || ib.password);
     if (
-      confirm(
-        `Regenerate the inbox plan for ${plan?.totalInboxes ?? 0} inboxes?\n\n` +
-          `This REPLACES the current ${inboxes.length} planned inboxes with a freshly generated set ` +
-          `(new email addresses). Mailcow is not changed yet — afterward run "Recreate mailboxes" to ` +
-          `create the full set with fresh passwords.\n\nContinue?`,
+      serverSetUp &&
+      hasLiveMailboxes &&
+      !confirm(
+        `Replace the ${inboxes.length} mailboxes on ${domainName} with ${count} new ones?\n\n` +
+          `The existing mailboxes are deleted in Mailcow (their passwords stop working), then ${count} new ` +
+          `addresses are created with new passwords.`,
       )
     ) {
-      regeneratePlanMutation.mutate();
+      return;
+    }
+
+    let res: any;
+    try {
+      res = await regeneratePlanMutation.mutateAsync(count);
+    } catch {
+      return; // onError already replaced the loading toast with the error.
+    }
+    if (res?.error) {
+      toast.error(res.error, { id: "replan" });
+      return;
+    }
+
+    if (!serverSetUp) {
+      toast.success(`The plan for ${domainName} now has ${count} mailboxes.`, { id: "replan" });
+      return;
+    }
+
+    // Server is set up: make Mailcow match the new plan exactly (delete, then create the new set).
+    // The recreate shows its own progress and result toasts, so drop the plan's loading toast.
+    toast.dismiss("replan");
+    try {
+      await recreateMailboxesMutation.mutateAsync();
+    } catch {
+      // onError already replaced the loading toast with the error.
     }
   };
 
@@ -433,9 +492,9 @@ function DomainDetailsPage() {
   const exportCsv = (formatId: string) => {
     // Mail server clients connect to (mailcow host), e.g. mail.example.com
     const mailServer = domain.mailcowHostname || `mail.${domain.name}`;
-    // Only export mailboxes that were actually created (have a password) — these are the
+    // Only export mailboxes that were actually created (active, with a saved password) — these are the
     // usable sending accounts. Keeps "downloadable only when mailboxes are ready" true.
-    const usable = inboxes.filter((ib: any) => ib.password);
+    const usable = inboxes.filter((ib: any) => ib.status === "active" && ib.password);
     if (!usable.length) {
       toast.error("No created mailboxes to export yet. Create the mailboxes first.");
       return;
@@ -452,7 +511,7 @@ function DomainDetailsPage() {
     toast.success(`Exported ${rows.length} mailbox${rows.length === 1 ? "" : "es"}`);
   };
 
-  const canExportCsv = inboxes.some((ib: any) => ib.password);
+  const canExportCsv = inboxes.some((ib: any) => ib.status === "active" && ib.password);
 
   if (isLoading) {
     return (
@@ -481,16 +540,16 @@ function DomainDetailsPage() {
     syncDkimMutation.isPending;
 
   return (
-    <div className="flex flex-col gap-6 p-8">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link to="/domains">
+    <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-4">
+          <Link to="/domains" className="shrink-0" aria-label="Back to Domains">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-card shadow-sm ring-1 ring-border hover:bg-muted transition-colors">
               <ArrowLeft className="h-5 w-5 text-muted-foreground" />
             </div>
           </Link>
-          <div>
-            <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground">
+          <div className="min-w-0">
+            <h1 className="font-display text-xl font-semibold tracking-tight text-foreground break-all sm:text-2xl">
               <span className="ident">{domain.name}</span>
             </h1>
             <div className="mt-1.5">
@@ -499,7 +558,7 @@ function DomainDetailsPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <TroubleshootButton
             domainId={id}
             className="h-10 gap-2 px-4 border-primary/40 text-primary hover:bg-primary/10"
@@ -515,7 +574,13 @@ function DomainDetailsPage() {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon" className="h-10 w-10" title="More actions">
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-10 w-10"
+                title="More actions"
+                aria-label="More actions"
+              >
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -541,8 +606,11 @@ function DomainDetailsPage() {
               <DropdownMenuItem onClick={handleRecreateMailboxes} disabled={recreateMailboxesMutation.isPending}>
                 <RefreshCw className="h-4 w-4" /> Recreate mailboxes
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleRegeneratePlan} disabled={regeneratePlanMutation.isPending}>
-                <ListPlus className="h-4 w-4" /> Regenerate inbox plan
+              <DropdownMenuItem
+                onClick={handleRegeneratePlan}
+                disabled={regeneratePlanMutation.isPending || recreateMailboxesMutation.isPending}
+              >
+                <ListPlus className="h-4 w-4" /> Change mailbox count…
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -565,27 +633,28 @@ function DomainDetailsPage() {
         initialCheckedAt={domain.healthCheckedAt ?? null}
       />
 
-      <div className="grid gap-6 md:grid-cols-3">
-        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
-          <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+      {/* Phones: three compact tiles in one row (value aligned to the bottom, helper text hidden). */}
+      <div className="grid grid-cols-3 gap-2 sm:gap-6">
+        <div className="rounded-xl bg-card p-3 shadow-sm ring-1 ring-border flex flex-col justify-between gap-1 sm:justify-start sm:gap-2 sm:p-6">
+          <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider sm:text-xs">
             Total Inboxes
           </div>
-          <div className="text-3xl font-black text-primary">{plan?.totalInboxes || 0}</div>
-          <div className="text-[10px] text-muted-foreground">Planned across all subdomains</div>
+          <div className="text-2xl font-black text-primary sm:text-3xl">{plan?.totalInboxes || 0}</div>
+          <div className="hidden text-[10px] text-muted-foreground sm:block">Planned across all subdomains</div>
         </div>
-        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
-          <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Subdomains</div>
-          <div className="text-3xl font-black text-primary">{plan?.subdomainCount || 0}</div>
-          <div className="text-[10px] text-muted-foreground">Unique routing prefixes</div>
+        <div className="rounded-xl bg-card p-3 shadow-sm ring-1 ring-border flex flex-col justify-between gap-1 sm:justify-start sm:gap-2 sm:p-6">
+          <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider sm:text-xs">Subdomains</div>
+          <div className="text-2xl font-black text-primary sm:text-3xl">{plan?.subdomainCount || 0}</div>
+          <div className="hidden text-[10px] text-muted-foreground sm:block">Unique routing prefixes</div>
         </div>
-        <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-2">
-          <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+        <div className="rounded-xl bg-card p-3 shadow-sm ring-1 ring-border flex flex-col justify-between gap-1 sm:justify-start sm:gap-2 sm:p-6">
+          <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider sm:text-xs">
             Avg Per Subdomain
           </div>
-          <div className="text-3xl font-black text-primary">
+          <div className="text-2xl font-black text-primary sm:text-3xl">
             {plan?.subdomainCount ? (plan.totalInboxes / plan.subdomainCount).toFixed(1) : 0}
           </div>
-          <div className="text-[10px] text-muted-foreground">Balanced distribution</div>
+          <div className="hidden text-[10px] text-muted-foreground sm:block">Balanced distribution</div>
         </div>
       </div>
 
@@ -640,7 +709,7 @@ function DomainDetailsPage() {
 
           {isEditingServer ? (
             <div className="flex flex-col gap-3">
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-bold text-muted-foreground uppercase">IP Address</label>
                   <Input
@@ -707,14 +776,14 @@ function DomainDetailsPage() {
             </div>
           ) : (
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
                 <Server className="h-5 w-5 text-primary" />
               </div>
-              <div>
-                <div className="font-medium">{domain.name}</div>
-                <div className="text-sm text-muted-foreground flex items-center gap-3 mt-0.5">
-                  <span className="flex items-center gap-1">
-                    <Network className="h-3 w-3" />
+              <div className="min-w-0">
+                <div className="font-medium break-all">{domain.name}</div>
+                <div className="text-sm text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">
+                  <span className="flex min-w-0 items-center gap-1 break-all">
+                    <Network className="h-3 w-3 shrink-0" />
                     {domain.ipAddress || "No IP configured"}
                   </span>
                   <span className="flex items-center gap-1">
@@ -729,12 +798,12 @@ function DomainDetailsPage() {
           {domain.ipAddress && (
             <div className="mt-2 rounded-lg bg-warning/10 border border-warning/30 px-4 py-3 text-sm">
               <div className="font-semibold text-warning flex items-center gap-1.5">
-                <Network className="h-4 w-4" /> Set Reverse DNS (PTR) — required for deliverability
+                <Network className="h-4 w-4 shrink-0" /> Set Reverse DNS (PTR) — required for deliverability
               </div>
               <div className="mt-1 text-warning">
                 In your VPS provider's control panel, set the PTR record for{" "}
-                <span className="font-mono font-bold">{domain.ipAddress}</span> →{" "}
-                <span className="font-mono font-bold">
+                <span className="font-mono font-bold break-all">{domain.ipAddress}</span> →{" "}
+                <span className="font-mono font-bold break-all">
                   {domain.mailcowHostname || `mail.${domain.name}`}
                 </span>
                 . This can't be set via API and must match the mail hostname, or major
@@ -798,15 +867,19 @@ function DomainDetailsPage() {
               {records.map((record: any) => (
                 <div
                   key={record.id}
-                  className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2"
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-border bg-muted/40 px-3 py-2 sm:flex-nowrap sm:gap-y-0"
                 >
                   <span className="ident w-12 shrink-0 rounded bg-secondary px-1.5 py-0.5 text-center text-[10px] font-semibold uppercase text-muted-foreground">
                     {record.type}
                   </span>
-                  <span className="ident flex-1 truncate text-[11px] text-foreground">
+                  <span className="ident min-w-0 flex-1 break-all text-[11px] text-foreground sm:truncate">
                     {record.name === "@" ? domain.name : `${record.name}.${domain.name}`}
                   </span>
-                  <span className="ident max-w-[90px] truncate text-[10px] text-muted-foreground" title={record.content}>
+                  {/* Phones: the full value wraps onto its own line (no hover tooltip on touch). */}
+                  <span
+                    className="ident basis-full break-all text-[10px] text-muted-foreground sm:max-w-[90px] sm:basis-auto sm:truncate"
+                    title={record.content}
+                  >
                     {record.content}
                   </span>
                 </div>
@@ -821,9 +894,9 @@ function DomainDetailsPage() {
 
       {(domain.status === "configuring" || domain.status === "provisioning" || domain.status === "failed" || domain.status === "error" || logs.length > 0) && (
         <div className="rounded-xl bg-black overflow-hidden shadow-xl border border-gray-800 flex flex-col">
-          <div className="bg-gray-900 px-6 py-4 flex justify-between items-center border-b border-gray-800">
+          <div className="bg-gray-900 px-4 py-3 sm:px-6 sm:py-4 flex flex-wrap justify-between items-center gap-2 border-b border-gray-800">
             <div className="flex items-center gap-3">
-              <Terminal className="w-5 h-5 text-muted-foreground" />
+              <Terminal className="w-5 h-5 shrink-0 text-muted-foreground" />
               <span className="text-gray-200 font-mono text-sm font-semibold">VPS Setup Terminal Logs</span>
             </div>
             <div className="flex items-center gap-2">
@@ -839,23 +912,25 @@ function DomainDetailsPage() {
               />
             </div>
           </div>
-          <div className="p-6 h-96 overflow-y-auto font-mono text-xs text-green-400 leading-relaxed custom-scrollbar bg-black/95">
+          <div
+            ref={logPaneRef}
+            className="p-3 sm:p-6 h-[60dvh] sm:h-96 overflow-y-auto font-mono text-xs text-green-400 leading-relaxed custom-scrollbar bg-black/95"
+          >
             {logs.length > 0 ? (
               <pre className="whitespace-pre-wrap font-inherit break-all">{logs.join("")}</pre>
             ) : (
               <div className="text-muted-foreground italic">Waiting for setup logs stream...</div>
             )}
-            <div ref={bottomRef} />
           </div>
         </div>
       )}
 
-      <div className="rounded-xl bg-card p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
-        <div className="flex items-center justify-between">
+      <div className="rounded-xl bg-card p-4 sm:p-6 shadow-sm ring-1 ring-border flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Mail className="h-5 w-5 text-muted-foreground" /> Planned Inboxes by Subdomain
+            <Mail className="h-5 w-5 shrink-0 text-muted-foreground" /> Planned Inboxes by Subdomain
           </h2>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
               onClick={() => setSubOpen(true)}
@@ -880,6 +955,65 @@ function DomainDetailsPage() {
           rows={subRows}
           filenameBase={domain?.name ?? "domain"}
         />
+
+        {unfinishedInboxes.length > 0 && (
+          <div className="rounded-lg border border-warning/40 bg-warning/10 p-4 flex flex-col gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
+                  {unfinishedInboxes.length} of {inboxes.length} mailboxes aren't ready
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Retry creates the missing ones and gives any mailbox without a saved password a new one.
+                  Each is retried 3 times before it's listed as failed.
+                </p>
+              </div>
+              <Button
+                onClick={() => setupMailcowMutation.mutate()}
+                disabled={
+                  isAnyPending ||
+                  recreateMailboxesMutation.isPending ||
+                  regeneratePlanMutation.isPending
+                }
+                className="h-9 w-full shrink-0 gap-2 rounded-xl sm:w-auto"
+              >
+                {setupMailcowMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                Retry {unfinishedInboxes.length} mailbox{unfinishedInboxes.length === 1 ? "" : "es"}
+              </Button>
+            </div>
+            <ul className="max-h-56 divide-y divide-border/60 overflow-y-auto text-xs">
+              {unfinishedInboxes.map((ib: any) => {
+                const reason = mailboxErrors[String(ib.email).toLowerCase()];
+                return (
+                  <li
+                    key={ib.id}
+                    className="flex flex-col gap-0.5 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
+                  >
+                    <span className="break-all font-mono text-foreground">{ib.email}</span>
+                    <span
+                      className={cn(
+                        "shrink-0",
+                        ib.status === "failed" ? "text-destructive" : "text-muted-foreground",
+                      )}
+                    >
+                      {reason ??
+                        (ib.status === "failed"
+                          ? "Failed"
+                          : ib.status === "active"
+                            ? "No saved password"
+                            : "Not created yet")}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
 
         {inboxes.length > 0 ? (
           <div className="flex flex-col gap-2">
@@ -921,27 +1055,52 @@ function SubdomainInboxSection({
     setShowPasswords((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  // Password + show/hide toggle. The toggle's p-2 tap area is cancelled out by negative margins
+  // so the row keeps its original size and spacing.
+  const renderPassword = (ib: any) =>
+    ib.password ? (
+      <div className="flex items-center">
+        <span>{showPasswords[ib.id] ? ib.password : "••••••••••••"}</span>
+        <button
+          type="button"
+          onClick={() => togglePassword(ib.id)}
+          aria-label={showPasswords[ib.id] ? "Hide password" : "Show password"}
+          className="-my-2 shrink-0 p-2 text-muted-foreground hover:text-muted-foreground focus:outline-none"
+        >
+          {showPasswords[ib.id] ? (
+            <EyeOff className="h-3.5 w-3.5" />
+          ) : (
+            <Eye className="h-3.5 w-3.5" />
+          )}
+        </button>
+      </div>
+    ) : ib.status === "failed" ? (
+      <span className="text-destructive">Failed</span>
+    ) : (
+      <span className="text-muted-foreground italic">Not created yet</span>
+    );
+
   return (
     <div className="rounded-xl border border-border overflow-hidden bg-card">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between p-4 hover:bg-muted transition-colors text-left"
+        className="w-full flex items-center justify-between gap-3 p-4 hover:bg-muted transition-colors text-left"
       >
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           {expanded ? (
-            <ChevronDown className="h-5 w-5 text-muted-foreground" />
+            <ChevronDown className="h-5 w-5 shrink-0 text-muted-foreground" />
           ) : (
-            <ChevronRight className="h-5 w-5 text-muted-foreground" />
+            <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
           )}
-          <Network className="h-5 w-5 text-primary" />
-          <div>
-            <div className="font-semibold text-foreground">
+          <Network className="h-5 w-5 shrink-0 text-primary" />
+          <div className="min-w-0">
+            <div className="font-semibold text-foreground break-all">
               {prefix}.{domain}
             </div>
             <div className="text-xs text-muted-foreground">{inboxes.length} mailboxes</div>
           </div>
         </div>
-        <div className="flex -space-x-2">
+        <div className="hidden shrink-0 -space-x-2 sm:flex">
           {inboxes.slice(0, 4).map((ib: any, i: number) => (
             <div
               key={ib.id}
@@ -961,45 +1120,33 @@ function SubdomainInboxSection({
       </button>
 
       {expanded && (
-        <div className="border-t border-border bg-muted/30">
+        <div className="overflow-x-auto border-t border-border bg-muted/30">
           <table className="w-full text-left text-sm">
             <thead className="bg-muted text-muted-foreground uppercase text-[10px] font-bold tracking-wider">
               <tr>
                 <th className="px-4 py-2">Email Address</th>
-                <th className="px-4 py-2">Display Name</th>
-                <th className="px-4 py-2">Format</th>
-                <th className="px-4 py-2">Password</th>
+                <th className="hidden px-4 py-2 sm:table-cell">Display Name</th>
+                <th className="hidden px-4 py-2 sm:table-cell">Format</th>
+                <th className="hidden px-4 py-2 sm:table-cell">Password</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {inboxes.map((ib: any) => (
                 <tr key={ib.id} className="hover:bg-muted/50 transition-colors">
-                  <td className="px-4 py-3 font-medium text-foreground">{ib.email}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{ib.fullName}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 font-medium text-foreground">
+                    <div className="break-all sm:break-normal">{ib.email}</div>
+                    {/* Phones: the password stacks under the address (its column is hidden below sm). */}
+                    <div className="mt-1 break-all font-mono text-xs font-normal sm:hidden">
+                      {renderPassword(ib)}
+                    </div>
+                  </td>
+                  <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{ib.fullName}</td>
+                  <td className="hidden px-4 py-3 sm:table-cell">
                     <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-md text-[10px] font-bold uppercase">
                       {ib.format}
                     </span>
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs">
-                    {ib.password ? (
-                      <div className="flex items-center gap-2">
-                        <span>{showPasswords[ib.id] ? ib.password : "••••••••••••"}</span>
-                        <button
-                          onClick={() => togglePassword(ib.id)}
-                          className="text-muted-foreground hover:text-muted-foreground focus:outline-none"
-                        >
-                          {showPasswords[ib.id] ? (
-                            <EyeOff className="h-3.5 w-3.5" />
-                          ) : (
-                            <Eye className="h-3.5 w-3.5" />
-                          )}
-                        </button>
-                      </div>
-                    ) : (
-                      <span className="text-muted-foreground italic">Not created yet</span>
-                    )}
-                  </td>
+                  <td className="hidden px-4 py-3 font-mono text-xs sm:table-cell">{renderPassword(ib)}</td>
                 </tr>
               ))}
             </tbody>

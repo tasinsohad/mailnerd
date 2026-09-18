@@ -20,9 +20,9 @@ function JobsPage() {
   });
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6 p-8">
-      <div className="flex items-center justify-between">
-        <div>
+    <div className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <div className="ident text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
             Control console
           </div>
@@ -84,7 +84,7 @@ function JobRow({ batch }: { batch: any }) {
   const domainIds = domains.map((d: any) => d.id);
 
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-4 transition-colors hover:border-primary/40">
+    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card px-4 py-4 transition-colors hover:border-primary/40 sm:flex-row sm:items-center">
       {/* Click the job to see its domains (filtered Domains view). */}
       <Link
         to="/domains"
@@ -95,7 +95,7 @@ function JobRow({ batch }: { batch: any }) {
           <FolderGit2 className="h-5 w-5 text-primary" />
         </div>
         <div className="min-w-0">
-          <div className="font-display text-sm font-semibold text-foreground">{batch.name}</div>
+          <div className="truncate font-display text-sm font-semibold text-foreground">{batch.name}</div>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Globe className="h-3 w-3" />
             {domains.length} domain{domains.length !== 1 ? "s" : ""}
@@ -105,24 +105,28 @@ function JobRow({ batch }: { batch: any }) {
         </div>
       </Link>
 
-      <JobActionsMenu domainIds={domainIds} batchId={batch.id} jobName={batch.name} onChanged={refresh} />
-      <Link to="/jobs/$id" params={{ id: batch.id }}>
-        <Button variant="outline" size="sm" className="h-10 gap-1.5" title="Open provisioning pipeline">
-          Pipeline <ArrowUpRight className="h-3.5 w-3.5" />
+      {/* On phones the actions sit on their own row under the job name. */}
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        <JobActionsMenu domainIds={domainIds} batchId={batch.id} jobName={batch.name} onChanged={refresh} />
+        <Link to="/jobs/$id" params={{ id: batch.id }}>
+          <Button variant="outline" size="sm" className="h-10 gap-1.5" title="Open provisioning pipeline">
+            Pipeline <ArrowUpRight className="h-3.5 w-3.5" />
+          </Button>
+        </Link>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-10 w-10 text-muted-foreground hover:bg-destructive/10 hover:text-destructive sm:h-9 sm:w-9"
+          onClick={() => {
+            if (confirm("Delete this job and all its domains?")) deleteMutation.mutate();
+          }}
+          disabled={deleteMutation.isPending}
+          title="Delete job"
+          aria-label="Delete job"
+        >
+          {deleteMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
         </Button>
-      </Link>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-9 w-9 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-        onClick={() => {
-          if (confirm("Delete this job and all its domains?")) deleteMutation.mutate();
-        }}
-        disabled={deleteMutation.isPending}
-        title="Delete job"
-      >
-        {deleteMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-      </Button>
+      </div>
     </div>
   );
 }

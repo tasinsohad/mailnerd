@@ -11,8 +11,10 @@ import {
   mailcowCreateDbApiKey,
   parseMailcowResult,
   generateMailboxPassword,
+  mailboxesOnDomain,
   type MailcowSshTarget,
 } from "./mailcow-helpers";
+import { claimDomain, releaseDomain, busyMessage } from "./domain-locks";
 
 // Bulk mailbox password reset for INTERNAL (system-created) and EXTERNAL (user's own) Mailcow
 // servers. One shared password per run: a blank input auto-generates one and applies it to every
@@ -122,15 +124,6 @@ async function resetEach(
   return rows;
 }
 
-// Mailboxes on `list` that belong to this registrable domain (any of its subdomains).
-function mailboxesForDomain(usernames: string[], domainName: string): string[] {
-  const n = domainName.toLowerCase();
-  return usernames.filter((u) => {
-    const d = u.split("@")[1]?.toLowerCase();
-    return d === n || (d ? d.endsWith(`.${n}`) : false);
-  });
-}
-
 const domainInput = (d: unknown) =>
   z.object({ domainId: z.string(), password: z.string().optional(), runId: z.string().trim().optional() }).parse(d);
 
@@ -149,37 +142,45 @@ export const resetDomainMailboxPasswords = createServerFn({ method: "POST" })
     if (!domain?.mailcowHostname || !domain?.mailcowApiKey)
       return { error: "Mailcow isn't set up for this domain yet.", transcript: log.transcript() };
 
-    const resolved = await resolveMailboxes(
-      domain.mailcowHostname,
-      domain.mailcowApiKey,
-      sshTargetFor(domain),
-    );
-    if ("error" in resolved) return { error: resolved.error, transcript: log.transcript() };
+    // Not while a setup or mailbox run is changing this domain's mailboxes and saved passwords.
+    const claim = claimDomain(domain.id, "password reset");
+    if (!claim.ok) return { error: busyMessage(claim.running), transcript: log.transcript() };
 
-    const emails = mailboxesForDomain(resolved.usernames, domain.name);
-    if (emails.length === 0)
-      return { error: `No mailboxes found for ${domain.name}.`, transcript: log.transcript() };
+    try {
+      const resolved = await resolveMailboxes(
+        domain.mailcowHostname,
+        domain.mailcowApiKey,
+        sshTargetFor(domain),
+      );
+      if ("error" in resolved) return { error: resolved.error, transcript: log.transcript() };
 
-    const password = data.password?.trim() || generateMailboxPassword();
-    log.info(`Resetting ${emails.length} mailbox password(s) for ${domain.name}.`);
-    const results = await resetEach(
-      domain.mailcowHostname,
-      domain.mailcowApiKey,
-      resolved.ssh,
-      emails,
-      password,
-      log,
-    );
+      const emails = mailboxesOnDomain(resolved.usernames, domain.name);
+      if (emails.length === 0)
+        return { error: `No mailboxes found for ${domain.name}.`, transcript: log.transcript() };
 
-    // Persist the new password on the planned inboxes we successfully reset, so exports match.
-    const okEmails = results.filter((r) => r.ok).map((r) => r.email.toLowerCase());
-    for (const email of okEmails) {
-      await db
-        .update(plannedInboxes)
-        .set({ password })
-        .where(and(eq(plannedInboxes.domainId, domain.id), eq(plannedInboxes.email, email)));
+      const password = data.password?.trim() || generateMailboxPassword();
+      log.info(`Resetting ${emails.length} mailbox password(s) for ${domain.name}.`);
+      const results = await resetEach(
+        domain.mailcowHostname,
+        domain.mailcowApiKey,
+        resolved.ssh,
+        emails,
+        password,
+        log,
+      );
+
+      // Persist the new password on the planned inboxes we successfully reset, so exports match.
+      const okEmails = results.filter((r) => r.ok).map((r) => r.email.toLowerCase());
+      for (const email of okEmails) {
+        await db
+          .update(plannedInboxes)
+          .set({ password })
+          .where(and(eq(plannedInboxes.domainId, domain.id), eq(plannedInboxes.email, email)));
+      }
+      return { password, results, transcript: log.transcript() };
+    } finally {
+      releaseDomain(domain.id, claim.owner);
     }
-    return { password, results, transcript: log.transcript() };
   });
 
 const batchInput = (d: unknown) =>
@@ -204,33 +205,42 @@ export const resetJobMailboxPasswords = createServerFn({ method: "POST" })
     const results: ResetRow[] = [];
     for (const domain of rows) {
       if (!domain.mailcowHostname || !domain.mailcowApiKey) continue;
-      const resolved = await resolveMailboxes(
-        domain.mailcowHostname,
-        domain.mailcowApiKey,
-        sshTargetFor(domain),
-      );
-      if ("error" in resolved) {
-        log.error(`${domain.name}: ${resolved.error}`);
+      const claim = claimDomain(domain.id, "password reset");
+      if (!claim.ok) {
+        log.error(`${domain.name}: skipped. ${busyMessage(claim.running)}`);
         continue;
       }
-      const emails = mailboxesForDomain(resolved.usernames, domain.name);
-      if (!emails.length) continue;
-      log.info(`Resetting ${emails.length} mailbox(es) for ${domain.name}.`);
-      const r = await resetEach(
-        domain.mailcowHostname,
-        domain.mailcowApiKey,
-        resolved.ssh,
-        emails,
-        password,
-        log,
-      );
-      results.push(...r);
-      const okEmails = r.filter((x) => x.ok).map((x) => x.email.toLowerCase());
-      for (const email of okEmails) {
-        await db
-          .update(plannedInboxes)
-          .set({ password })
-          .where(and(eq(plannedInboxes.domainId, domain.id), eq(plannedInboxes.email, email)));
+      try {
+        const resolved = await resolveMailboxes(
+          domain.mailcowHostname,
+          domain.mailcowApiKey,
+          sshTargetFor(domain),
+        );
+        if ("error" in resolved) {
+          log.error(`${domain.name}: ${resolved.error}`);
+          continue;
+        }
+        const emails = mailboxesOnDomain(resolved.usernames, domain.name);
+        if (!emails.length) continue;
+        log.info(`Resetting ${emails.length} mailbox(es) for ${domain.name}.`);
+        const r = await resetEach(
+          domain.mailcowHostname,
+          domain.mailcowApiKey,
+          resolved.ssh,
+          emails,
+          password,
+          log,
+        );
+        results.push(...r);
+        const okEmails = r.filter((x) => x.ok).map((x) => x.email.toLowerCase());
+        for (const email of okEmails) {
+          await db
+            .update(plannedInboxes)
+            .set({ password })
+            .where(and(eq(plannedInboxes.domainId, domain.id), eq(plannedInboxes.email, email)));
+        }
+      } finally {
+        releaseDomain(domain.id, claim.owner);
       }
     }
     return { password, results, transcript: log.transcript() };

@@ -49,9 +49,9 @@ function ServersPage() {
   });
 
   return (
-    <div className="flex flex-col gap-6 p-8">
-      <div className="flex items-center justify-between">
-        <div>
+    <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-foreground">Servers</h1>
           <p className="text-sm text-muted-foreground mt-1">Manage your VPS / Mailcow hosts</p>
         </div>
@@ -142,30 +142,31 @@ function ServersPage() {
           {serverList.map((s: any) => (
             <div
               key={s.id}
-              className="rounded-xl bg-card p-6 ring-1 ring-border shadow-sm flex flex-col gap-3"
+              className="rounded-xl bg-card p-4 sm:p-6 ring-1 ring-border shadow-sm flex flex-col gap-3"
             >
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
                     <Server className="h-5 w-5 text-primary" />
                   </div>
-                  <div>
-                    <div className="font-semibold text-foreground">{s.label}</div>
-                    <div className="text-xs text-muted-foreground">{s.hostname}</div>
+                  <div className="min-w-0">
+                    <div className="truncate font-semibold text-foreground">{s.label}</div>
+                    <div className="truncate text-xs text-muted-foreground">{s.hostname}</div>
                   </div>
                 </div>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="text-red-400 hover:text-destructive hover:bg-destructive/10 rounded-xl"
+                  className="h-10 w-10 shrink-0 text-red-400 hover:text-destructive hover:bg-destructive/10 rounded-xl sm:h-9 sm:w-9"
                   onClick={() => deleteMutation.mutate(s.id)}
                   disabled={deleteMutation.isPending}
+                  aria-label={`Delete server ${s.label}`}
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>
               </div>
-              <div className="flex gap-2 text-xs text-muted-foreground">
-                <span className="rounded-lg bg-muted px-2 py-1">{s.ipAddress}</span>
+              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                <span className="max-w-full break-all rounded-lg bg-muted px-2 py-1">{s.ipAddress}</span>
                 <span className="rounded-lg bg-muted px-2 py-1">{s.sshUser}</span>
               </div>
             </div>

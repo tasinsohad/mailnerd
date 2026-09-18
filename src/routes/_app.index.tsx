@@ -13,12 +13,12 @@ export const Route = createFileRoute("/_app/")({
 
 function StatCard({ label, value, icon: Icon }: { label: string; value: number; icon: any }) {
   return (
-    <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/40">
-      <div className="flex items-center justify-between">
-        <span className="ident text-[11px] uppercase tracking-[0.15em] text-muted-foreground">{label}</span>
-        <Icon className="h-4 w-4 text-muted-foreground" />
+    <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/40 sm:p-5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="ident truncate text-[11px] uppercase tracking-[0.15em] text-muted-foreground">{label}</span>
+        <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
       </div>
-      <div className="font-display text-4xl font-semibold tabular-nums text-foreground">
+      <div className="font-display text-3xl font-semibold tabular-nums text-foreground sm:text-4xl">
         {value.toLocaleString()}
       </div>
     </div>
@@ -59,11 +59,12 @@ function HealthPanel() {
 
   return (
     <div className="rounded-xl border border-border bg-card">
-      <div className="flex items-center gap-3 border-b border-border px-6 py-4">
-        <ShieldCheck className="h-5 w-5 text-muted-foreground" />
-        <div className="flex-1">
+      {/* Wraps on phones: the text block keeps at least 12rem, so the button drops to its own line. */}
+      <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-4 sm:px-6">
+        <ShieldCheck className="h-5 w-5 shrink-0 text-muted-foreground" />
+        <div className="min-w-48 flex-1">
           <h2 className="font-display text-base font-semibold text-foreground">Deliverability health</h2>
-          <div className="text-xs text-muted-foreground">
+          <div className="break-words text-xs text-muted-foreground">
             {data?.lastCheckedAt ? `Last checked ${new Date(data.lastCheckedAt).toLocaleString()}` : "Not checked yet"}
           </div>
         </div>
@@ -72,7 +73,7 @@ function HealthPanel() {
           Re-check all
         </Button>
       </div>
-      <div className="grid grid-cols-2 gap-3 p-6 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-4 sm:p-6">
         {cells.map((c) => (
           <div key={c.key} className="rounded-lg border border-border bg-muted/30 p-4">
             <div className="flex items-center gap-2">
@@ -86,7 +87,7 @@ function HealthPanel() {
         ))}
       </div>
       {data?.topIssues && data.topIssues.length > 0 && (
-        <div className="border-t border-border px-6 py-4">
+        <div className="border-t border-border px-4 py-4 sm:px-6">
           <div className="ident mb-2 text-[11px] uppercase tracking-[0.15em] text-muted-foreground">Top issues</div>
           <div className="flex flex-wrap gap-2">
             {data.topIssues.map((iss: any) => (
@@ -110,20 +111,20 @@ function IndexPage() {
   const hasDomains = (stats?.totalDomains ?? 0) > 0;
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6 p-8">
+    <div className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <div>
         <div className="ident text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Control console</div>
         <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground">Overview</h1>
       </div>
 
       {isLoading ? (
-        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {[...Array(4)].map((_, i) => (
             <div key={i} className="h-32 animate-pulse rounded-xl border border-border bg-card" />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           <StatCard label="Domains" value={stats?.totalDomains ?? 0} icon={Globe} />
           <StatCard label="Mailboxes" value={stats?.totalInboxes ?? 0} icon={Mail} />
           <StatCard label="Servers" value={stats?.totalServers ?? 0} icon={Server} />

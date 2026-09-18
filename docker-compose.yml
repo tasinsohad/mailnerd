@@ -1,5 +1,7 @@
 # Production stack for a VPS: the app, a private Redis for the server-setup queue, and Caddy for
 # HTTPS. Start it with `docker compose up -d --build` — see DEPLOY.md.
+#
+# Every service rotates its logs (10 MB × 5 files), so months of setup output can't fill the disk.
 services:
   app:
     build: .
@@ -15,6 +17,11 @@ services:
     # Not published to the internet: only Caddy talks to the app, so every visitor gets HTTPS.
     expose:
       - "3000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   redis:
     image: redis:7-alpine
@@ -23,6 +30,11 @@ services:
       - redis_data:/data
     restart: unless-stopped
     # No published port on purpose: a password-less Redis open to the internet gets taken over.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   caddy:
     image: caddy:2-alpine
@@ -39,6 +51,11 @@ services:
     depends_on:
       - app
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 volumes:
   redis_data:

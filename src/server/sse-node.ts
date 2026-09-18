@@ -101,6 +101,13 @@ export default async function sseHandler(req: IncomingMessage, res: ServerRespon
     }
   } catch (dbErr) {
     console.error("Database check failed in SSE handler:", dbErr);
+    // Without the lookup there's no telling whether this domain belongs to the app's account, so
+    // don't stream its logs.
+    if (!res.headersSent && !res.destroyed) {
+      res.statusCode = 503;
+      res.end("Database unavailable");
+    }
+    return;
   }
 
   // This domain's live logs arrive over Redis pub/sub only when its setup runs on the BullMQ queue,
@@ -108,6 +115,10 @@ export default async function sseHandler(req: IncomingMessage, res: ServerRespon
   // emits on jobEvents instead, so subscribing to Redis then would leave the terminal silent.
   const useRedis =
     !!redis && !inProcessProvisions.has(domainId) && (await waitForRedis(redis.client, 1000));
+
+  // The browser may have closed the stream during the lookups above (page left, tab closed). Writing
+  // headers to that response would throw ERR_HTTP_HEADERS_SENT.
+  if (res.destroyed || res.headersSent || res.writableEnded) return;
 
   // Set up SSE headers
   res.writeHead(200, {

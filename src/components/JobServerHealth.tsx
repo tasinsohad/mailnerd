@@ -32,8 +32,8 @@ export function JobServerHealth({ batchId }: { batchId: string }) {
 
   return (
     <div className="rounded-xl border border-border bg-card">
-      <div className="flex items-center gap-2 border-b border-border px-5 py-3">
-        <Server className="h-4 w-4 text-muted-foreground" />
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3 sm:px-5">
+        <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h3 className="font-display text-sm font-semibold text-foreground">Servers</h3>
         <span className="text-xs text-muted-foreground">{servers.length} in this job</span>
       </div>
@@ -43,19 +43,25 @@ export function JobServerHealth({ batchId }: { batchId: string }) {
           const indicators = s.health?.indicators ?? [];
           const top = sortByPriority(indicators).find((i) => i.status === "fail" || i.status === "warn");
           return (
-            <li key={s.id} className="flex items-center gap-3 px-5 py-3">
+            <li key={s.id} className="flex items-center gap-3 px-4 py-3 sm:px-5">
               <span className={cn("status-dot shrink-0", TONE[status], status === "critical" && "status-dot--pulse")} />
-              <span className="w-36 shrink-0 font-mono text-sm text-foreground">{s.ipAddress}</span>
-              <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" title={top ? `${top.label}: ${top.detail}` : "All checks passing"}>
-                {top ? (
-                  <>
-                    <span className={cn("font-medium", TONE[top.status === "fail" ? "critical" : "warning"])}>{top.label}</span>
-                    <span className="text-muted-foreground"> — {top.detail}</span>
-                  </>
-                ) : (
-                  <span className="text-success">All server checks passing</span>
-                )}
-              </span>
+              {/* Phones: IP above a two-line issue summary; sm+: IP column + one truncated line. */}
+              <div className="flex min-w-0 flex-1 flex-col gap-x-3 gap-y-0.5 sm:flex-row sm:items-center">
+                <span className="shrink-0 break-all font-mono text-sm text-foreground sm:w-36">{s.ipAddress}</span>
+                <span
+                  className="line-clamp-2 min-w-0 text-sm text-muted-foreground sm:block sm:flex-1 sm:truncate"
+                  title={top ? `${top.label}: ${top.detail}` : "All checks passing"}
+                >
+                  {top ? (
+                    <>
+                      <span className={cn("font-medium", TONE[top.status === "fail" ? "critical" : "warning"])}>{top.label}</span>
+                      <span className="text-muted-foreground"> — {top.detail}</span>
+                    </>
+                  ) : (
+                    <span className="text-success">All server checks passing</span>
+                  )}
+                </span>
+              </div>
               {s.health && (
                 <span className="ident shrink-0 text-xs text-muted-foreground">{s.health.score}%</span>
               )}

@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 
 // Validation schemas
 const saveSecretsSchema = z.object({
+  // The browser never receives the saved token, so the settings form starts empty: an empty or
+  // missing value keeps the saved token. Only a new value replaces it.
   cfApiToken: z
     .string()
     .trim()
@@ -13,6 +15,8 @@ const saveSecretsSchema = z.object({
     .optional()
     .nullable()
     .or(z.literal("")),
+  // Removing the saved token has to be asked for explicitly.
+  clearCfApiToken: z.boolean().optional(),
   cfAccountId: z
     .string()
     .trim()
@@ -23,8 +27,15 @@ const saveSecretsSchema = z.object({
 });
 
 const verifyCfTokenSchema = z.object({
-  token: z.string().trim().min(1, "Token cannot be empty").max(255, "Token too long"),
+  // Leave it out to check the saved token, which the browser doesn't have.
+  token: z.string().trim().max(255, "Token too long").optional(),
 });
+
+// Enough of a saved token to recognise it (its last 4 characters). A very short value would be
+// mostly given away by that, so it gets no hint.
+function tokenHint(token: string): string | null {
+  return token.length >= 12 ? token.slice(-4) : null;
+}
 
 export const getSecrets = createServerFn({ method: "GET" })
   .middleware([requireAuth])
@@ -37,7 +48,13 @@ export const getSecrets = createServerFn({ method: "GET" })
       const row = await db.query.userSecrets.findFirst({
         where: eq(userSecrets.userId, userId),
       });
-      return row ?? {};
+      // Never the token itself: server code that calls Cloudflare reads it from the database.
+      const token: string | null = row?.cfApiToken || null;
+      return {
+        cfAccountId: (row?.cfAccountId as string | null | undefined) ?? null,
+        hasCfApiToken: token !== null,
+        cfApiTokenHint: token ? tokenHint(token) : null,
+      };
     } catch (error: any) {
       if (error.message?.includes("does not exist")) {
         return { __error: "The database connected successfully, but the tables are missing. Please run `npm run db:push` to create your database schema." } as any;
@@ -54,13 +71,21 @@ export const saveSecrets = createServerFn({ method: "POST" })
     if (!db) {
       throw new Error("Database not connected. Please check your connection.");
     }
+    const changes: { cfApiToken?: string | null; cfAccountId?: string | null } = {};
+    if (data.clearCfApiToken) changes.cfApiToken = null;
+    else if (data.cfApiToken) changes.cfApiToken = data.cfApiToken;
+    // The account ID isn't secret: the form always shows and sends it, so "" clears it as before.
+    if (data.cfAccountId !== undefined) changes.cfAccountId = data.cfAccountId;
+
     const existing = await db.query.userSecrets.findFirst({
       where: eq(userSecrets.userId, userId),
     });
     if (existing) {
-      await db.update(userSecrets).set(data as any).where(eq(userSecrets.userId, userId));
+      if (Object.keys(changes).length > 0) {
+        await db.update(userSecrets).set(changes).where(eq(userSecrets.userId, userId));
+      }
     } else {
-      await db.insert(userSecrets).values({ userId, ...(data as any) });
+      await db.insert(userSecrets).values({ userId, ...changes });
     }
     return { ok: true };
   });
@@ -68,12 +93,23 @@ export const saveSecrets = createServerFn({ method: "POST" })
 export const verifyCfToken = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator((d: unknown) => verifyCfTokenSchema.parse(d))
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     try {
+      let token = data.token;
+      if (!token) {
+        const { db, userId } = (context as any) as { db: any; userId: string };
+        if (!db) return { valid: false, error: "Database not connected" };
+        const saved = await db.query.userSecrets.findFirst({
+          where: eq(userSecrets.userId, userId),
+        });
+        token = saved?.cfApiToken || undefined;
+        if (!token) return { valid: false, error: "No Cloudflare API token is saved yet" };
+      }
+
       // 1. Try standard user tokens verify
       const res = await fetch("https://api.cloudflare.com/client/v4/user/tokens/verify", {
         headers: {
-          Authorization: `Bearer ${data.token}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
       });
@@ -85,7 +121,7 @@ export const verifyCfToken = createServerFn({ method: "POST" })
       // 2. Fallback: Test if token can list zones (which is the actual capability required by the app)
       const zonesRes = await fetch("https://api.cloudflare.com/client/v4/zones?per_page=1", {
         headers: {
-          Authorization: `Bearer ${data.token}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
       });

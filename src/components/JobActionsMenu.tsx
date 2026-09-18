@@ -64,9 +64,10 @@ export function JobActionsMenu({
     <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" disabled={busy || !n} className="h-10 gap-2">
+        <Button variant="outline" disabled={busy || !n} className="h-10 gap-2" aria-label="Run for all domains">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
-          Run for all domains
+          {/* Label hidden on phones so the trigger doesn't crowd job rows; icons + aria-label remain. */}
+          <span className="hidden sm:inline">Run for all domains</span>
           <ChevronDown className="h-4 w-4 opacity-60" />
         </Button>
       </DropdownMenuTrigger>

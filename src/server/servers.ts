@@ -29,6 +29,18 @@ const serverInputSchema = z.object({
     .regex(/^[a-zA-Z0-9_-]+$/, "Invalid SSH username"),
 });
 
+// What the browser gets for a server: the Servers page and the Add Domain wizard show these. The SSH
+// password and key (ssh_password, ssh_key) never leave the server.
+const publicServerColumns = {
+  id: servers.id,
+  label: servers.label,
+  hostname: servers.hostname,
+  ipAddress: servers.ipAddress,
+  sshUser: servers.sshUser,
+  status: servers.status,
+  createdAt: servers.createdAt,
+};
+
 export const listServers = createServerFn({ method: "GET" })
   .middleware([requireAuth])
   .handler(async ({ context }) => {
@@ -40,7 +52,10 @@ export const listServers = createServerFn({ method: "GET" })
     }
 
     try {
-      const rows = await db.select().from(servers).where(eq(servers.userId, userId));
+      const rows = await db
+        .select(publicServerColumns)
+        .from(servers)
+        .where(eq(servers.userId, userId));
       return rows;
     } catch {
       return [];
@@ -66,7 +81,7 @@ export const createServer = createServerFn({ method: "POST" })
           sshUser: data.sshUser,
           status: "configuring",
         })
-        .returning();
+        .returning(publicServerColumns);
       return row;
     } catch (error) {
       return { error: String(error) };
