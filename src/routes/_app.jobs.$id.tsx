@@ -208,7 +208,11 @@ function JobPipelinePage() {
         <JobIssuesPanel
           batchId={id}
           domains={domains}
-          onChanged={() => qc.invalidateQueries({ queryKey: ["batch", id] })}
+          onChanged={() => {
+            qc.invalidateQueries({ queryKey: ["batch", id] });
+            // Issue fixes can start setup runs (e.g. retrying a failed step), which the board shows.
+            qc.invalidateQueries({ queryKey: ["setup-board", id] });
+          }}
         />
         <ViewStep domains={domains} inboxes={inboxes} records={records} />
       </div>
@@ -260,7 +264,11 @@ function EditableDomainRow({ domain }: { domain: any }) {
         <DomainActionsMenu
           domainId={domain.id}
           domainName={domain.name}
-          onChanged={() => qc.invalidateQueries({ queryKey: ["batch"] })}
+          onChanged={() => {
+            qc.invalidateQueries({ queryKey: ["batch"] });
+            // Some menu actions (e.g. retry) start setup runs, which the board shows.
+            qc.invalidateQueries({ queryKey: ["setup-board", domain.batchId] });
+          }}
         />
       </>
     );
