@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { serverDecision, runDomainSetup, type ServerInspection, type SetupDeps } from "../domain-setup-core";
+import {
+  FOREIGN_MAIL_DOMAIN,
+  OTHER_ACCOUNT_DOMAIN,
+  foreignMailDomains,
+  isOwnUnfinishedInstall,
+  otherDomainsOnServer,
+  serverDecision,
+  runDomainSetup,
+  type ServerInspection,
+  type SetupDeps,
+} from "../domain-setup-core";
 import { newSetupState, mergeSetupState, type SetupState, type SetupStep } from "../../lib/setup-state";
 
 // The rule for what to do with a server that already runs Mailcow: wiping it deletes every mailbox on
@@ -48,6 +58,91 @@ describe("serverDecision", () => {
 
   it("asks about a foreign Mailcow that isn't this domain's own install", () => {
     expect(serverDecision(inspection(), null)).toBe("ask");
+  });
+
+  it("never reinstalls without asking while the domain has live mailboxes", () => {
+    expect(
+      serverDecision(inspection({ ownUnfinishedInstall: true, activeMailboxes: 3 }), null),
+    ).toBe("ask");
+    // The user's explicit choice still wins.
+    expect(
+      serverDecision(inspection({ ownUnfinishedInstall: true, activeMailboxes: 3 }), "reinstall"),
+    ).toBe("install");
+  });
+
+  it("asks when the server's Mailcow serves mail domains no app domain accounts for", () => {
+    const sharing = otherDomainsOnServer({
+      userId: "u1",
+      domainName: "example.com",
+      others: [],
+      mailDomains: ["example.com", "sales.example.com", "someone-else.net"],
+    });
+    expect(sharing).toEqual([FOREIGN_MAIL_DOMAIN]);
+    expect(
+      serverDecision(inspection({ ownUnfinishedInstall: true, otherDomainsOnServer: sharing }), null),
+    ).toBe("ask");
+  });
+});
+
+describe("isOwnUnfinishedInstall", () => {
+  it("is this domain's unfinished install when it isn't ready, the host matches and no mailbox is live", () => {
+    expect(isOwnUnfinishedInstall({ domainReady: false, hostMatches: true, activeMailboxes: 0 })).toBe(true);
+  });
+
+  it("isn't when the domain has live mailboxes (a failed or provisioning legacy domain with a working Mailcow)", () => {
+    expect(isOwnUnfinishedInstall({ domainReady: false, hostMatches: true, activeMailboxes: 1 })).toBe(false);
+  });
+
+  it("isn't when the domain is ready or the server's host name isn't this domain's", () => {
+    expect(isOwnUnfinishedInstall({ domainReady: true, hostMatches: true, activeMailboxes: 0 })).toBe(false);
+    expect(isOwnUnfinishedInstall({ domainReady: false, hostMatches: false, activeMailboxes: 0 })).toBe(false);
+  });
+});
+
+describe("foreignMailDomains", () => {
+  it("ignores the domain itself and its subdomains, in any case and with a trailing dot", () => {
+    expect(foreignMailDomains(["Example.com", "a.example.com.", "b.a.EXAMPLE.com"], "example.com")).toEqual([]);
+  });
+
+  it("returns mail domains that belong to neither this domain nor a known one", () => {
+    expect(
+      foreignMailDomains(["x.example.com", "notexample.com", "mail.other.io", "third.org"], "example.com", [
+        "other.io",
+      ]),
+    ).toEqual(["notexample.com", "third.org"]);
+  });
+});
+
+describe("otherDomainsOnServer", () => {
+  it("names the owner's other domains, hides other accounts' names, and skips the Mailcow check when unread", () => {
+    expect(
+      otherDomainsOnServer({
+        userId: "u1",
+        domainName: "example.com",
+        others: [
+          { name: "mine.com", userId: "u1" },
+          { name: "theirs.com", userId: "u2" },
+        ],
+        mailDomains: null,
+      }),
+    ).toEqual(["mine.com", OTHER_ACCOUNT_DOMAIN]);
+  });
+
+  it("doesn't flag mail domains that belong to the other app domains on the server", () => {
+    expect(
+      otherDomainsOnServer({
+        userId: "u1",
+        domainName: "example.com",
+        others: [{ name: "mine.com", userId: "u1" }],
+        mailDomains: ["a.example.com", "b.mine.com"],
+      }),
+    ).toEqual(["mine.com"]);
+  });
+
+  it("is empty for a server with only this domain's mail domains", () => {
+    expect(
+      otherDomainsOnServer({ userId: "u1", domainName: "example.com", others: [], mailDomains: ["a.example.com"] }),
+    ).toEqual([]);
   });
 });
 

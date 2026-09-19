@@ -19,7 +19,12 @@ import {
   type SetupState,
   type SetupStep,
 } from "../lib/setup-state";
-import { runDomainSetup, type SetupDeps } from "./domain-setup-core";
+import {
+  isOwnUnfinishedInstall,
+  otherDomainsOnServer,
+  runDomainSetup,
+  type SetupDeps,
+} from "./domain-setup-core";
 import {
   DomainBusyError,
   RunSupersededError,
@@ -56,6 +61,7 @@ import {
 import { resolveAndSaveCfZoneId } from "./cloudflare";
 import { pushDns, unproxyDns, ensureMailDomains, createMailboxes, syncDkim } from "./pipeline";
 import { readMailcowConfigOverSsh, ensureWorkingApiKey } from "./mailcow-key";
+import { mailcowListAll } from "./mailcow-helpers";
 import { createMailboxProgressWriter } from "./mailbox-progress-store";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -441,6 +447,8 @@ export async function executeDomainSetupJob(
       holdServer(target.ipAddress);
       log(`Checking whether ${target.ipAddress} already runs Mailcow...`);
       const { hasMailcow, hostname } = await readServerMailcow(target);
+      // Read-only, and optional: when they can't be read the check is skipped, the step goes on.
+      const mailDomains = hasMailcow ? await readServerMailDomains(target) : null;
 
       // Other app domains on the same IP, across all accounts. Names only for this domain's owner. The IP
       // is compared the way the server lock compares it, so " 1.2.3.4" or a differently-cased host matches.
@@ -453,33 +461,53 @@ export async function executeDomainSetupJob(
             ne(domains.id, domainId),
           ),
         );
-      const otherDomainsOnServer = others
-        .filter((o) => o.userId === domain.userId)
-        .map((o) => o.name);
-      if (others.some((o) => o.userId !== domain.userId))
-        otherDomainsOnServer.push("another account's domain");
+      const sharing = otherDomainsOnServer({
+        userId: domain.userId,
+        domainName: domain.name,
+        others,
+        mailDomains,
+      });
+
+      // Live mailboxes: a domain marked failed, error or provisioning can still have a working Mailcow with
+      // mailboxes in use, and those must never be wiped without asking.
+      const [{ n: activeMailboxes }] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(plannedInboxes)
+        .where(and(eq(plannedInboxes.domainId, domainId), eq(plannedInboxes.status, "active")));
 
       const host = hostname?.toLowerCase() ?? null;
       const savedHost = domain.mailcowHostname
         ? String(domain.mailcowHostname).toLowerCase()
         : null;
       const ready = domain.status === "ready";
+      const hostMatches =
+        !!host && (host === `mail.${domain.name}`.toLowerCase() || host === savedHost);
       const inspection = {
         ip: target.ipAddress,
         hasMailcow,
         hostname,
-        otherDomainsOnServer,
+        otherDomainsOnServer: sharing,
         ownInstallComplete: ready && !!host && host === savedHost,
-        ownUnfinishedInstall:
-          !ready && !!host && (host === `mail.${domain.name}`.toLowerCase() || host === savedHost),
+        ownUnfinishedInstall: isOwnUnfinishedInstall({
+          domainReady: ready,
+          hostMatches,
+          activeMailboxes,
+        }),
+        activeMailboxes,
+        mailDomains,
       };
       log(
         hasMailcow
           ? `Mailcow is installed there (host name ${hostname ?? "unknown"}).`
           : "No Mailcow on the server yet.",
       );
-      if (otherDomainsOnServer.length)
-        log(`Other domains on this server: ${otherDomainsOnServer.join(", ")}.`);
+      if (hasMailcow && !mailDomains)
+        log("Couldn't list the mail domains on that Mailcow, so that check was skipped.");
+      if (sharing.length) log(`Other domains on this server: ${sharing.join(", ")}.`);
+      if (hasMailcow && !ready && hostMatches && activeMailboxes > 0)
+        log(
+          `${domain.name} has ${activeMailboxes} live mailbox(es) there, so the server isn't reinstalled without asking.`,
+        );
       return inspection;
     },
 
@@ -668,6 +696,36 @@ async function readServerMailcow(target: {
     return { hasMailcow: true, hostname: /\./.test(host) ? host : null };
   } finally {
     await ssh.dispose().catch(() => {});
+  }
+}
+
+// The mail domains the server's Mailcow serves, read through its API over SSH (get/domain/all, read-only).
+// Null when they can't be read (no host name or API key found, the API not answering): the caller then skips
+// the check instead of failing the step.
+async function readServerMailDomains(target: {
+  ipAddress: string;
+  sshUser: string;
+  sshPassword: string | null;
+}): Promise<string[] | null> {
+  try {
+    const ssh = {
+      ipAddress: target.ipAddress,
+      sshUser: target.sshUser,
+      sshPassword: tryDecrypt(target.sshPassword) ?? "",
+    };
+    const config = await readMailcowConfigOverSsh(ssh, { wantApiKey: true });
+    if (!config.hostname || !config.apiKey) return null;
+    const rows = await mailcowListAll(config.hostname, config.apiKey, "get/domain/all", {
+      attempts: 1,
+      timeoutMs: 20000,
+      ssh,
+    });
+    if (!rows) return null;
+    return rows
+      .map((row) => (row && typeof row === "object" ? row.domain_name : undefined))
+      .filter((name): name is string => typeof name === "string" && name.trim() !== "");
+  } catch {
+    return null;
   }
 }
 
