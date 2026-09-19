@@ -9,6 +9,7 @@ import {
   isStuckSetupRun,
   reconcileDue,
   resumeStep,
+  reuseMustWait,
   takesOverStuckRuns,
 } from "../setup-recovery";
 
@@ -138,6 +139,54 @@ describe("interruptedRunError", () => {
     expect(interruptedRunError("connect ECONNREFUSED")).toBe(
       "The setup stopped: connect ECONNREFUSED. Retry to continue.",
     );
+  });
+});
+
+describe("reuseMustWait", () => {
+  it("waits for a queued or running reinstall whose server step isn't done", () => {
+    expect(
+      reuseMustWait([{ serverChoice: "reinstall", status: "queued", serverStepDone: false }]),
+    ).toBe(true);
+    expect(
+      reuseMustWait([{ serverChoice: "reinstall", status: "running", serverStepDone: false }]),
+    ).toBe(true);
+  });
+
+  it("doesn't wait once the reinstall's server step is done", () => {
+    expect(
+      reuseMustWait([{ serverChoice: "reinstall", status: "running", serverStepDone: true }]),
+    ).toBe(false);
+  });
+
+  it("doesn't wait for a reinstall that's done, failed or waiting", () => {
+    for (const status of ["done", "failed", "waiting"] as const) {
+      expect(reuseMustWait([{ serverChoice: "reinstall", status, serverStepDone: false }])).toBe(
+        false,
+      );
+    }
+  });
+
+  it("doesn't wait for a domain that chose reuse itself, or has no choice yet", () => {
+    expect(
+      reuseMustWait([{ serverChoice: "reuse", status: "queued", serverStepDone: false }]),
+    ).toBe(false);
+    expect(
+      reuseMustWait([{ serverChoice: null, status: "queued", serverStepDone: false }]),
+    ).toBe(false);
+  });
+
+  it("waits when any one of several others is a pending reinstall", () => {
+    expect(
+      reuseMustWait([
+        { serverChoice: "reuse", status: "running", serverStepDone: true },
+        { serverChoice: "reinstall", status: "done", serverStepDone: true },
+        { serverChoice: "reinstall", status: "queued", serverStepDone: false },
+      ]),
+    ).toBe(true);
+  });
+
+  it("doesn't wait when there's nothing else on the server", () => {
+    expect(reuseMustWait([])).toBe(false);
   });
 });
 

@@ -7,7 +7,13 @@
 // taken over only when no process has shown it's alive for RUN_STALE_AFTER_MS: every process's check
 // refreshes the updatedAt of the runs it holds (a domain claim, or a job in its queue), about once a minute.
 
-import { SETUP_STEPS, type SetupState, type SetupStep } from "../lib/setup-state";
+import {
+  SETUP_STEPS,
+  type ServerChoice,
+  type SetupState,
+  type SetupStatus,
+  type SetupStep,
+} from "../lib/setup-state";
 
 /** First check after the app starts: the queue is up, and BullMQ has put back jobs that stalled in the restart. */
 export const RECONCILE_BOOT_DELAY_MS = 30_000;
@@ -65,6 +71,33 @@ export function isStuckSetupRun(
 /** Where a stuck run picks up: its first step not done yet, or null when every step is done. */
 export function resumeStep(state: SetupState): SetupStep | null {
   return SETUP_STEPS.find((step) => state.steps[step] !== "done") ?? null;
+}
+
+/**
+ * "Wipe & re-provision ALL" sends "reinstall" to one domain per shared server and "reuse" to the rest
+ * (wipe-plan.ts). The per-server lock (domain-locks.ts claimServer) serializes their server steps, but a
+ * "reuse" run can still slip in first: a queued "reinstall" run hasn't taken that lock until its server step
+ * actually starts, so a "reuse" run that reaches the server step first would add mailboxes to the very
+ * Mailcow the "reinstall" run is about to wipe.
+ *
+ * True when `others` (every other domain on the same server IP) includes one whose own setup run has chosen
+ * "reinstall", is still queued or running, and hasn't finished its server step yet: the reuse must wait for
+ * it. A done, failed or waiting run, one that chose "reuse" itself, or one whose server step already finished
+ * (it already decided install vs. reuse) never blocks.
+ */
+export function reuseMustWait(
+  others: {
+    serverChoice: ServerChoice | null | undefined;
+    status: SetupStatus | null | undefined;
+    serverStepDone: boolean;
+  }[],
+): boolean {
+  return others.some(
+    (o) =>
+      o.serverChoice === "reinstall" &&
+      (o.status === "queued" || o.status === "running") &&
+      !o.serverStepDone,
+  );
 }
 
 /** The error shown for a run whose queue job failed for good without the run recording why. */

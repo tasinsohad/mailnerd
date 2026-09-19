@@ -48,6 +48,7 @@ import {
   isStuckSetupRun,
   reconcileDue,
   resumeStep,
+  reuseMustWait,
   takesOverStuckRuns,
 } from "./setup-recovery";
 import {
@@ -558,6 +559,16 @@ export async function executeDomainSetupJob(
       const domain = await loadDomain(db, domainId);
       const target = serverTarget(domain);
       assertServerNotProtected(target.ipAddress);
+      const reinstalling = await pendingReinstallOwner(db, domain, target.ipAddress);
+      if (reinstalling) {
+        // Same "busy, wait and re-check later without using an attempt" path as a claimed server lock
+        // (holdServer below): don't log it as a failed step too.
+        serverBusy = true;
+        log(
+          `Waiting for the reinstall of server ${target.ipAddress} (started for ${reinstalling}) to finish before reusing it.\n`,
+        );
+        throw new ServerBusyError(target.ipAddress);
+      }
       holdServer(target.ipAddress);
       try {
         log(
@@ -664,6 +675,46 @@ export async function executeDomainSetupJob(
     letGoOfServer();
     await logger.flush();
   }
+}
+
+/**
+ * Before a "reuse" server step runs (whichever decided it: the user's explicit choice, or serverDecision
+ * finding this domain's own finished install), check for another domain on the same server IP that's mid
+ * "Wipe & re-provision ALL": one whose setup run chose "reinstall", is still queued or running, and hasn't
+ * finished its server step yet (reuseMustWait). If that run reinstalls after this one reuses, it wipes the
+ * mailboxes this run just added, so the caller must wait for it instead. Returns who to blame in the log line
+ * (the other domain's name when it's this domain's own owner, "another domain" otherwise), or null when
+ * reusing is safe.
+ */
+async function pendingReinstallOwner(
+  db: Db,
+  domain: Domain,
+  ipAddress: string,
+): Promise<string | null> {
+  const others: { id: string; name: string; userId: string; setupState: SetupState | null }[] = await db
+    .select({
+      id: domains.id,
+      name: domains.name,
+      userId: domains.userId,
+      setupState: domains.setupState,
+    })
+    .from(domains)
+    .where(
+      and(
+        sql`lower(trim(${domains.ipAddress})) = ${serverIpKey(ipAddress)}`,
+        ne(domains.id, domain.id),
+      ),
+    );
+  const shaped = others.map((o) => ({
+    name: o.name,
+    userId: o.userId,
+    serverChoice: o.setupState?.serverChoice,
+    status: o.setupState?.status,
+    serverStepDone: o.setupState?.steps?.server === "done",
+  }));
+  const blocker = shaped.find((o) => reuseMustWait([o]));
+  if (!blocker) return null;
+  return blocker.userId === domain.userId ? blocker.name : "another domain";
 }
 
 async function loadDomain(db: Db, domainId: string): Promise<Domain> {
