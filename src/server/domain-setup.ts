@@ -4,9 +4,10 @@
 //
 // Plain server-only module (no createServerFn). Server-function modules such as provisioning.ts import it;
 // browser code must not. It imports queue.ts statically (the install, the log, the queue). queue.ts loads
-// this module only through a dynamic import inside its worker, so there is no static import cycle.
+// this module only through dynamic imports (in its worker, its failed-job handler and its stuck-run timer),
+// so there is no static import cycle.
 
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { getDb } from "../lib/db";
 import { domains, plannedInboxes } from "../lib/db/schema";
 import { SSHManager } from "../lib/ssh";
@@ -27,6 +28,7 @@ import {
   isRunSupersededError,
 } from "./setup-attempts";
 import {
+  activeRun,
   claimDomain,
   releaseDomain,
   busyMessage,
@@ -34,8 +36,16 @@ import {
   releaseServer,
 } from "./domain-locks";
 import {
+  interruptedRunPatch,
+  isInFlight,
+  isStuckSetupRun,
+  reconcileDue,
+  resumeStep,
+} from "./setup-recovery";
+import {
   checkedServerTarget,
   createDomainLogger,
+  domainIdsInSetupQueue,
   installMailcowOnServer,
   startDomainSetupJob,
   tryDecrypt,
@@ -89,10 +99,11 @@ export async function saveSetupState(
  * Start a setup run for a domain: on the queue, or in-process when Redis isn't answering.
  *
  * Refused while another run holds the domain (a setup, or a manual mailbox run), while a job for it is still
- * in the queue, and while the run waits for the user's server choice (unless `allowWaiting`: the answer to
- * that choice starts the next pass). A state still saying "queued" or "running" with none of those behind
- * it belonged to a run that died with an earlier app process (an in-process run, or a crash before the
- * run's final state was saved), so a new run replaces it instead of the domain staying blocked forever.
+ * in the queue, while its last run is still queued or running, and while that run waits for the user's server
+ * choice (unless `allowWaiting`: the answer to that choice starts the next pass).
+ *
+ * `replaceStaleRunId` is for reconcileStuckSetupRuns only: it lets a new run replace that run's state, which
+ * still says queued or running although nothing is behind it any more.
  */
 export async function enqueueDomainSetup(opts: {
   domainId: string;
@@ -100,6 +111,7 @@ export async function enqueueDomainSetup(opts: {
   fromStep?: SetupStep;
   serverChoice?: ServerChoice | null;
   allowWaiting?: boolean;
+  replaceStaleRunId?: string;
 }): Promise<{ runId: string }> {
   const { domainId } = opts;
   const db = getDb();
@@ -117,15 +129,28 @@ export async function enqueueDomainSetup(opts: {
     });
     if (!domain) throw new Error("Domain not found");
     const current = domain.setupState as SetupState | null;
-    if (current?.status === "waiting" && !opts.allowWaiting)
+    if (opts.replaceStaleRunId) {
+      if (current?.runId !== opts.replaceStaleRunId || !isInFlight(current))
+        throw new Error("The setup run changed since it was found stuck, so it wasn't resumed.");
+    } else if (current?.status === "waiting") {
+      if (!opts.allowWaiting) throw new Error(busyMessage("server setup"));
+    } else if (isInFlight(current)) {
       throw new Error(busyMessage("server setup"));
+    }
 
     await startDomainSetupJob({ domainId, runId, lockOwner: claim.owner }, async () => {
       const state = newSetupState(runId, new Date().toISOString(), {
         fromStep: opts.fromStep,
         serverChoice: opts.serverChoice ?? null,
       });
-      await db.update(domains).set({ setupState: state }).where(eq(domains.id, domainId));
+      // Only over the state checked above: if another process started a run in between, this one stops.
+      const unchanged = sql`coalesce(${domains.setupState}->>'runId', '') = ${current?.runId ?? ""}`;
+      const written: unknown[] = await db
+        .update(domains)
+        .set({ setupState: state })
+        .where(and(eq(domains.id, domainId), unchanged))
+        .returning({ id: domains.id });
+      if (!written.length) throw new Error(busyMessage("server setup"));
       stateSaved = true;
     });
     return { runId };
@@ -143,6 +168,149 @@ export async function enqueueDomainSetup(opts: {
     }
     throw err;
   }
+}
+
+export interface ReconcileResult {
+  /** False when skipped: another check ran less than a minute ago, or one is still running. */
+  ran: boolean;
+  /** Runs this process holds, whose updatedAt it refreshed. */
+  refreshed: number;
+  /** Domains whose stuck run was queued again. */
+  resumed: string[];
+}
+
+/**
+ * Find setup runs left "queued" or "running" with nothing behind them (see setup-recovery.ts isStuckSetupRun)
+ * and queue each again from its first unfinished step, keeping its server choice. Also refreshes the runs
+ * this process holds, which is how other processes on the same database know they're alive.
+ *
+ * Runs 30 s after the app starts and then about once a minute (queue.ts), and the job board may call it too:
+ * at most one check per minute per process, whoever asks. Cheap when nothing is in flight (one query).
+ * Never throws.
+ */
+export async function reconcileStuckSetupRuns(): Promise<ReconcileResult> {
+  const g = globalThis as unknown as {
+    __setupReconcile?: { lastStartedMs: number | null; running: boolean };
+  };
+  const r = g.__setupReconcile ?? (g.__setupReconcile = { lastStartedMs: null, running: false });
+  const now = Date.now();
+  if (r.running || !reconcileDue(r.lastStartedMs, now))
+    return { ran: false, refreshed: 0, resumed: [] };
+  r.lastStartedMs = now;
+  r.running = true;
+  try {
+    return await reconcileNow(now);
+  } catch (err) {
+    console.error("[setup] Checking for interrupted setup runs failed:", err);
+    return { ran: true, refreshed: 0, resumed: [] };
+  } finally {
+    r.running = false;
+  }
+}
+
+async function reconcileNow(now: number): Promise<ReconcileResult> {
+  const result: ReconcileResult = { ran: true, refreshed: 0, resumed: [] };
+  const db = getDb();
+  const rows: { id: string; userId: string; setupState: SetupState | null }[] = await db
+    .select({ id: domains.id, userId: domains.userId, setupState: domains.setupState })
+    .from(domains)
+    .where(sql`${domains.setupState}->>'status' in ('queued', 'running')`);
+  if (!rows.length) return result;
+
+  // Which of them this process holds: a domain claim, or a job in its queue. Redis not answering: no job can
+  // be seen, so only the claims count. Redis failing mid-lookup: nothing is taken over this time.
+  let queued: Set<string> | null = null;
+  let queueKnown = true;
+  try {
+    queued = await domainIdsInSetupQueue();
+  } catch (err) {
+    queueKnown = false;
+    console.error(
+      "[setup] Couldn't read the setup queue while checking for interrupted runs:",
+      err,
+    );
+  }
+  const live = (id: string) => ({
+    claimed: activeRun(id) !== undefined,
+    queued: queued?.has(id) ?? false,
+  });
+
+  // Show other processes on this database that these runs are alive.
+  const held = rows
+    .filter((row) => {
+      const l = live(row.id);
+      return l.claimed || l.queued;
+    })
+    .map((row) => row.id);
+  if (held.length) {
+    await db
+      .update(domains)
+      .set({
+        setupState: sql`jsonb_set(${domains.setupState}, '{updatedAt}', to_jsonb(${new Date(now).toISOString()}::text))`,
+      })
+      .where(
+        and(
+          inArray(domains.id, held),
+          sql`${domains.setupState}->>'status' in ('queued', 'running')`,
+        ),
+      );
+    result.refreshed = held.length;
+  }
+  if (!queueKnown) return result;
+
+  for (const row of rows) {
+    const state = row.setupState;
+    if (!isStuckSetupRun(state, live(row.id), now)) continue;
+    const from = resumeStep(state);
+    try {
+      if (!from) {
+        // Every step finished: only the run's final save was lost.
+        await saveSetupState(db, row.id, state.runId, {
+          status: "done",
+          step: null,
+          error: null,
+          finishedAt: new Date().toISOString(),
+        });
+        continue;
+      }
+      await enqueueDomainSetup({
+        domainId: row.id,
+        userId: row.userId,
+        fromStep: from,
+        serverChoice: state.serverChoice,
+        replaceStaleRunId: state.runId,
+      });
+      result.resumed.push(row.id);
+      console.log(
+        `[setup] Resumed the interrupted setup run of domain ${row.id} from its ${from} step.`,
+      );
+    } catch (err) {
+      console.error(`[setup] Couldn't resume the interrupted setup run of domain ${row.id}:`, err);
+    }
+  }
+  return result;
+}
+
+/**
+ * End run `runId` as failed with `error`, if its state still belongs to it and says queued or running: the
+ * queue failed its job for good without the run recording it (queue.ts endFailedDomainSetupJob). Returns
+ * whether it was ended.
+ */
+export async function endInterruptedSetupRun(
+  domainId: string,
+  runId: string,
+  error: string,
+): Promise<boolean> {
+  const db = getDb();
+  const patch = interruptedRunPatch(
+    await loadSetupState(db, domainId),
+    runId,
+    error,
+    new Date().toISOString(),
+  );
+  if (!patch) return false;
+  const saved = await saveSetupState(db, domainId, runId, patch);
+  return saved?.runId === runId && saved.status === "failed";
 }
 
 /**

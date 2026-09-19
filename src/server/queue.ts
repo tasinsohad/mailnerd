@@ -9,6 +9,7 @@ import { jobEvents, inProcessProvisions } from "./events";
 import { createRedis, waitForRedis } from "./redis";
 import { createSlotLimiter } from "./slot-limiter";
 import { claimDomain, releaseDomain, busyMessage } from "./domain-locks";
+import { interruptedRunError, RECONCILE_BOOT_DELAY_MS, RECONCILE_TICK_MS } from "./setup-recovery";
 import { ensureMailDomains, createMailboxes, syncDkim, unproxyDns } from "./pipeline";
 import { ensureWorkingApiKey } from "./mailcow-key";
 import {
@@ -58,8 +59,12 @@ let redisConnection: Redis | null = null;
 
 // Setups that run at once (PROVISION_CONCURRENCY), kept to a sane whole number: NaN or 0 would stall the queue.
 const PROVISION_CONCURRENCY = clampConcurrency(process.env.PROVISION_CONCURRENCY);
-// In-process setups get the same cap the BullMQ worker enforces.
-const inProcessSlots = createSlotLimiter(PROVISION_CONCURRENCY);
+// In-process setups get the same cap the BullMQ worker enforces. Pinned to globalThis: production loads this
+// module twice (the SSR bundle and the Nitro plugin chunk), and both can start in-process runs (a user's
+// start, or the stuck-run check), so they must share one cap.
+const globalForSlots = globalThis as unknown as { __inProcessSlots?: ReturnType<typeof createSlotLimiter> };
+const inProcessSlots =
+  globalForSlots.__inProcessSlots ?? (globalForSlots.__inProcessSlots = createSlotLimiter(PROVISION_CONCURRENCY));
 // A Redis call still unanswered after this counts as failed: Redis can die right after the reachability check.
 const REDIS_CALL_TIMEOUT_MS = 10_000;
 // How long a queued setup waits before checking again when another run holds its domain.
@@ -130,6 +135,11 @@ if (process.env.REDIS_URL) {
         { connection: connection as any, concurrency: PROVISION_CONCURRENCY }
       );
       globalForWorker.worker.on("error", redis.report);
+      // A setup run's job BullMQ failed for good without our processor finishing it (see
+      // endFailedDomainSetupJob). Runs that failed through the processor already ended themselves.
+      globalForWorker.worker.on("failed", (job: Job | undefined, err: Error) => {
+        if (job?.name === "domain-setup") void endFailedDomainSetupJob(job, err);
+      });
       worker = globalForWorker.worker;
     } else {
       worker = globalForWorker.worker;
@@ -328,11 +338,7 @@ export async function startDomainSetupJob(
   if (serverSetupQueue && redisConnection && (await waitForRedis(redisConnection))) {
     // After an app restart the in-process claim is gone, but a job for this domain (either kind) can still
     // be sitting in Redis.
-    const queued = await withTimeout<Job[]>(
-      serverSetupQueue.getJobs(["active", "waiting", "delayed", "prioritized", "paused"]),
-      REDIS_CALL_TIMEOUT_MS,
-      "Redis stopped answering while checking the setup queue. Try again in a minute.",
-    );
+    const queued = await unfinishedSetupJobs();
     if (queued.some((j: any) => j?.data?.domainId === data.domainId)) throw new Error(busyMessage("server setup"));
     await prepare();
     // Only ids in the job: the worker reads credentials from the database (Redis writes job data to disk).
@@ -432,6 +438,68 @@ async function runDomainSetupInProcess(data: DomainSetupJobData, notice?: string
     inProcessProvisions.delete(domainId);
     releaseDomain(domainId, lockOwner);
   }
+}
+
+// Every setup job (either kind) the queue hasn't finished: running, waiting, or delayed for a retry or a wait.
+function unfinishedSetupJobs(): Promise<Job[]> {
+  return withTimeout<Job[]>(
+    serverSetupQueue.getJobs(["active", "waiting", "delayed", "prioritized", "paused"]),
+    REDIS_CALL_TIMEOUT_MS,
+    "Redis stopped answering while checking the setup queue. Try again in a minute.",
+  );
+}
+
+/**
+ * The domains with a setup job (either kind) still in the queue, or null when there is no queue or Redis
+ * isn't answering, so no job can be seen. Throws if Redis stops answering during the lookup.
+ */
+export async function domainIdsInSetupQueue(): Promise<Set<string> | null> {
+  if (!serverSetupQueue || !redisConnection || !(await waitForRedis(redisConnection))) return null;
+  const jobs = await unfinishedSetupJobs();
+  return new Set(jobs.map((j: any) => j?.data?.domainId).filter((id: unknown): id is string => typeof id === "string"));
+}
+
+// BullMQ failed a setup run's job for good without our processor finishing it. Usually a job that stalled more
+// than allowed (the app restarted during it twice): BullMQ fails it on its next hand-out without running it,
+// so the run's setup_state would say "running" forever. End the run (only if its state still belongs to this
+// job's run and says queued or running) and free the domain. After a normal last attempt the run has already
+// ended itself, and a job BullMQ will retry isn't finished: both change nothing here.
+async function endFailedDomainSetupJob(job: Job, err: Error | undefined): Promise<void> {
+  if (!job.finishedOn) return;
+  const { domainId, runId } = job.data as DomainSetupJobData;
+  if (!domainId || !runId) return;
+  const owner: string = job.data.lockOwner ?? `job:${job.id}`;
+  try {
+    // A pass of this job still running here (it lost its lock, then BullMQ failed the job) records its own
+    // outcome first.
+    await setupPasses.get(String(job.id))?.catch(() => {});
+    const { endInterruptedSetupRun } = await import("./domain-setup");
+    const ended = await endInterruptedSetupRun(domainId, runId, interruptedRunError(err?.message ?? job.failedReason));
+    if (ended) console.warn(`[queue] Ended the setup run of domain ${domainId}: its job failed (${err?.message}).`);
+  } catch (e) {
+    console.error(`[queue] Couldn't end the interrupted setup run of domain ${domainId}:`, e);
+  } finally {
+    releaseDomain(domainId, owner);
+  }
+}
+
+// Setup runs left "queued" or "running" by a process that went away (domain-setup.ts reconcileStuckSetupRuns;
+// it also refreshes the runs this process holds). First 30 s after the app starts, once the queue is up and
+// BullMQ has put back jobs that stalled in the restart; then on a timer (the check spaces itself to one a
+// minute). Once per process: production loads this module twice.
+const globalForReconcile = globalThis as unknown as { __setupReconcileTimer?: NodeJS.Timeout };
+if (!globalForReconcile.__setupReconcileTimer) {
+  const check = () => {
+    // Loaded here, not at the top: domain-setup.ts imports this module (see its header).
+    import("./domain-setup")
+      .then(({ reconcileStuckSetupRuns }) => reconcileStuckSetupRuns())
+      .catch((err) => console.error("[queue] Couldn't check for interrupted setup runs:", err));
+  };
+  globalForReconcile.__setupReconcileTimer = setTimeout(() => {
+    check();
+    setInterval(check, RECONCILE_TICK_MS).unref();
+  }, RECONCILE_BOOT_DELAY_MS);
+  globalForReconcile.__setupReconcileTimer.unref();
 }
 
 // The same credentials provisionServer passes: the domain's own SSH password, else its server's.

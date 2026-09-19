@@ -64,7 +64,9 @@ export class RunSupersededError extends Error {
 }
 
 export function isRunSupersededError(err: unknown): err is RunSupersededError {
-  return err instanceof RunSupersededError || (err instanceof Error && err.name === "RunSupersededError");
+  return (
+    err instanceof RunSupersededError || (err instanceof Error && err.name === "RunSupersededError")
+  );
 }
 
 /**
