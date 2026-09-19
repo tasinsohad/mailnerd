@@ -2,11 +2,12 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
 import { getSecrets, saveSecrets, verifyCfToken, syncCfZones } from "@/server/secrets";
+import { getKeepAliveStatus } from "@/server/system-status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ChangePasswordCard } from "@/components/ChangePasswordCard";
-import { KeyRound, Cloud, Loader2 } from "lucide-react";
+import { KeyRound, Cloud, Database, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_app/settings")({
@@ -14,6 +15,52 @@ export const Route = createFileRoute("/_app/settings")({
 });
 
 type SecretsForm = { cfApiToken?: string; clearCfApiToken?: boolean; cfAccountId?: string };
+
+// "3 h ago", "12 min ago", "2 d ago". Null/unparseable input falls back to "just now" territory (0 min) so
+// the card never shows garbage.
+function relativeTime(iso: string, nowMs: number = Date.now()): string {
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return "just now";
+  const minutes = Math.floor(Math.max(0, nowMs - then) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} d ago`;
+}
+
+// Admin-only: shows whether the Supabase keep-alive ping (src/server/keep-alive.ts) is running and when it
+// last ran, so a paused-project surprise shows up here instead of as a mysteriously slow page load.
+function KeepAliveCard({ isAdmin }: { isAdmin: boolean }) {
+  const { data } = useQuery({
+    queryKey: ["keep-alive"],
+    queryFn: () => getKeepAliveStatus(),
+    enabled: isAdmin,
+  });
+
+  if (!isAdmin) return null;
+
+  return (
+    <div className="rounded-xl bg-card p-4 sm:p-8 shadow-sm ring-1 ring-border flex flex-col gap-4">
+      <div className="flex items-center gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+          <Database className="h-5 w-5 text-primary" />
+        </div>
+        <div>
+          <h2 className="text-lg font-semibold text-foreground">Database keep-alive</h2>
+          <p className="text-xs text-muted-foreground">Pings Supabase so the free project never pauses</p>
+        </div>
+      </div>
+      <p className="text-sm text-foreground">
+        {data?.lastAttemptAt
+          ? `Last ping: ${relativeTime(data.lastAttemptAt)} · every ${data.intervalHours} h`
+          : "Not pinged yet — the first ping runs 30 s after the app starts"}
+      </p>
+      {data?.lastError && <p className="text-sm text-destructive">{data.lastError}</p>}
+    </div>
+  );
+}
 
 function SettingsPage() {
   const { account } = Route.useRouteContext();
@@ -105,6 +152,7 @@ function SettingsPage() {
       </div>
 
       {account.role !== "admin" && <ChangePasswordCard />}
+      {account.role === "admin" && <KeepAliveCard isAdmin />}
 
       {isLoading ? (
         <div className="flex justify-center py-20">
