@@ -1,31 +1,11 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  getBatchDetails,
-  batchPushDnsToCloudflare,
-  checkDnsPropagation,
-  deleteDomainBatch,
-  updateDomain,
-} from "@/server/domains";
-import { testSshConnection, provisionServer } from "@/server/provisioning";
-import {
-  Globe,
-  FolderGit2,
-  ArrowLeft,
-  Loader2,
-  Mail,
-  Send,
-  Server,
-  CheckCircle2,
-  XCircle,
-  Terminal,
-  Trash2,
-} from "lucide-react";
+import { getBatchDetails, deleteDomainBatch, updateDomain } from "@/server/domains";
+import { Globe, FolderGit2, ArrowLeft, Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { JobActionsMenu } from "@/components/JobActionsMenu";
 import { DomainActionsMenu } from "@/components/DomainActionsMenu";
 import { ExportButton } from "@/components/ExportButton";
@@ -38,20 +18,14 @@ import { JobHealthSummary } from "@/components/JobHealthSummary";
 import { JobIssuesPanel } from "@/components/JobIssuesPanel";
 import { JobServerHealth } from "@/components/JobServerHealth";
 import { TroubleshootButton } from "@/components/TroubleshootButton";
+import { SetupBoard } from "@/components/setup/SetupBoard";
 
 export const Route = createFileRoute("/_app/jobs/$id")({
   component: JobPipelinePage,
 });
 
-type Step = "VIEW" | "PRE_FLIGHT" | "DNS_PUSH" | "SERVER_SETUP";
-
 function JobPipelinePage() {
   const { id } = Route.useParams();
-  const [step, setStep] = useState<Step>("VIEW");
-  const [autoStepped, setAutoStepped] = useState(false);
-  // Server setup starts by itself only when the user runs the pipeline through to it. Opening the step to
-  // watch (or the jump below) must never start a full Mailcow install on a pending domain.
-  const [autoStartSetup, setAutoStartSetup] = useState(false);
   const [subOpen, setSubOpen] = useState(false);
 
   const qc = useQueryClient();
@@ -140,18 +114,6 @@ function JobPipelinePage() {
     })),
   );
 
-  // Auto-jump to SERVER_SETUP if any domain is already in provisioning or failed state
-  useEffect(() => {
-    if (autoStepped || !domains.length) return;
-    const needsSetup = domains.some((d: any) =>
-      d.status === "failed" || d.status === "provisioning" || d.status === "configuring"
-    );
-    if (needsSetup) {
-      setStep("SERVER_SETUP");
-      setAutoStepped(true);
-    }
-  }, [domains, autoStepped]);
-
   if (isLoading) {
     return (
       <div className="flex justify-center py-20">
@@ -176,98 +138,59 @@ function JobPipelinePage() {
     <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-4">
-          {step === "VIEW" ? (
-            <Link to="/jobs" className="shrink-0" aria-label="Back to Jobs">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-card shadow-sm ring-1 ring-border hover:bg-muted transition-colors">
-                <ArrowLeft className="h-5 w-5 text-muted-foreground" />
-              </div>
-            </Link>
-          ) : (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setStep("VIEW")}
-              aria-label="Back"
-              className="h-10 w-10 shrink-0 sm:h-9 sm:w-9"
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-          )}
+          <Link to="/jobs" className="shrink-0" aria-label="Back to Jobs">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-card shadow-sm ring-1 ring-border hover:bg-muted transition-colors">
+              <ArrowLeft className="h-5 w-5 text-muted-foreground" />
+            </div>
+          </Link>
           <div className="min-w-0">
             <h1 className="break-words text-xl font-bold text-foreground sm:text-2xl">{batch.name}</h1>
-            <div className="flex flex-wrap gap-x-2 gap-y-0.5 items-center text-sm text-muted-foreground mt-1">
-              <span>Step:</span>
-              <span className={`font-bold ${step === "VIEW" ? "text-primary" : ""}`}>Plan</span>
-              <span>→</span>
-              <span className={`font-bold ${step === "PRE_FLIGHT" ? "text-primary" : ""}`}>
-                Pre-Flight
-              </span>
-              <span>→</span>
-              <span className={`font-bold ${step === "DNS_PUSH" ? "text-primary" : ""}`}>
-                DNS Push
-              </span>
-              <span>→</span>
-              <span className={`font-bold ${step === "SERVER_SETUP" ? "text-primary" : ""}`}>
-                Server Setup
-              </span>
+            <div className="mt-1 text-sm text-muted-foreground">
+              {domains.length} domain{domains.length === 1 ? "" : "s"}
             </div>
           </div>
         </div>
-        {step === "VIEW" && (
-          <div className="flex flex-wrap items-center gap-2 sm:justify-end sm:gap-3">
-            <Button
-              variant="outline"
-              onClick={() => setSubOpen(true)}
-              disabled={subRows.length === 0}
-              title={subRows.length === 0 ? "Available once inboxes are planned" : undefined}
-              className="h-11 px-4 rounded-lg border-border text-muted-foreground hover:bg-muted gap-2"
-            >
-              <Globe className="h-4 w-4" /> Subdomains
-            </Button>
-            <TroubleshootButton
-              batchId={id}
-              className="h-11 px-4 rounded-lg border-primary/40 text-primary hover:bg-primary/10 gap-2"
-            />
-            <ExportButton
-              onExport={handleExportCsv}
-              className="h-11 px-4 rounded-lg border-border text-muted-foreground hover:bg-muted gap-2"
-            />
-            <JobActionsMenu
-              domainIds={domains.map((d: any) => d.id)}
-              batchId={id}
-              onChanged={() => qc.invalidateQueries({ queryKey: ["batch", id] })}
-            />
-            <Button
-              variant="outline"
-              onClick={handleDelete}
-              disabled={deleteMutation.isPending}
-              className="h-11 px-4 rounded-lg border-destructive/30 text-destructive hover:bg-destructive/10"
-            >
-              {deleteMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="h-4 w-4 mr-2" />
-              )}
-              Delete Job
-            </Button>
-            {domains.some((d: any) => d.status === "failed" || d.status === "provisioning" || d.status === "configuring") && (
-              <Button
-                variant="outline"
-                onClick={() => setStep("SERVER_SETUP")}
-                className="h-11 px-4 rounded-lg border-warning/30 text-warning hover:bg-warning/10"
-              >
-                <Server className="h-4 w-4 mr-2" />
-                Go to Server Setup
-              </Button>
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end sm:gap-3">
+          <Button
+            variant="outline"
+            onClick={() => setSubOpen(true)}
+            disabled={subRows.length === 0}
+            title={subRows.length === 0 ? "Available once inboxes are planned" : undefined}
+            className="h-11 px-4 rounded-lg border-border text-muted-foreground hover:bg-muted gap-2"
+          >
+            <Globe className="h-4 w-4" /> Subdomains
+          </Button>
+          <TroubleshootButton
+            batchId={id}
+            className="h-11 px-4 rounded-lg border-primary/40 text-primary hover:bg-primary/10 gap-2"
+          />
+          <ExportButton
+            onExport={handleExportCsv}
+            className="h-11 px-4 rounded-lg border-border text-muted-foreground hover:bg-muted gap-2"
+          />
+          <JobActionsMenu
+            domainIds={domains.map((d: any) => d.id)}
+            batchId={id}
+            onChanged={() => {
+              qc.invalidateQueries({ queryKey: ["batch", id] });
+              // "Provision servers" starts setup runs, which the board shows.
+              qc.invalidateQueries({ queryKey: ["setup-board", id] });
+            }}
+          />
+          <Button
+            variant="outline"
+            onClick={handleDelete}
+            disabled={deleteMutation.isPending}
+            className="h-11 px-4 rounded-lg border-destructive/30 text-destructive hover:bg-destructive/10"
+          >
+            {deleteMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4 mr-2" />
             )}
-            <Button
-              onClick={() => setStep("PRE_FLIGHT")}
-              className="h-11 w-full px-8 rounded-lg bg-primary hover:bg-primary/90 text-white shadow-lg sm:w-auto"
-            >
-              Start Provisioning Pipeline
-            </Button>
-          </div>
-        )}
+            Delete Job
+          </Button>
+        </div>
       </div>
 
       <ExportSubdomainsDialog
@@ -278,42 +201,22 @@ function JobPipelinePage() {
         title="Export job subdomains"
       />
 
-      {step === "VIEW" && (
-        <div className="flex flex-col gap-6">
-          <JobHealthSummary batchId={id} domains={domains} />
-          <JobServerHealth batchId={id} />
-          <JobIssuesPanel
-            batchId={id}
-            domains={domains}
-            onChanged={() => qc.invalidateQueries({ queryKey: ["batch", id] })}
-          />
-          <ViewStep domains={domains} inboxes={inboxes} records={records} />
-        </div>
-      )}
-      {step === "PRE_FLIGHT" && (
-        <PreFlightStep
+      <div className="flex flex-col gap-6">
+        <SetupBoard batchId={id} />
+        <JobHealthSummary batchId={id} domains={domains} />
+        <JobServerHealth batchId={id} />
+        <JobIssuesPanel
+          batchId={id}
           domains={domains}
-          inboxes={inboxes}
-          records={records}
-          onNext={() => setStep("DNS_PUSH")}
+          onChanged={() => qc.invalidateQueries({ queryKey: ["batch", id] })}
         />
-      )}
-      {step === "DNS_PUSH" && (
-        <DnsPushStep
-          domains={domains}
-          records={records}
-          onNext={() => {
-            setAutoStartSetup(true);
-            setStep("SERVER_SETUP");
-          }}
-        />
-      )}
-      {step === "SERVER_SETUP" && <ServerSetupStep domains={domains} autoStart={autoStartSetup} />}
+        <ViewStep domains={domains} inboxes={inboxes} records={records} />
+      </div>
     </div>
   );
 }
 
-// --- STEP 1: VIEW (Original Read-Only View) ---
+// --- The domains in the job: editable connection details ---
 function EditableDomainRow({ domain }: { domain: any }) {
   const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState(domain.name);
@@ -518,514 +421,6 @@ function ViewStep({
           </table>
         </div>
       </div>
-    </div>
-  );
-}
-
-// --- STEP 2: PRE_FLIGHT ---
-function PreFlightStep({
-  domains,
-  inboxes,
-  records,
-  onNext,
-}: {
-  domains: any[];
-  inboxes: any[];
-  records: any[];
-  onNext: () => void;
-}) {
-  const [sshStatuses, setSshStatuses] = useState<Record<string, "testing" | "ok" | "fail">>({});
-
-  const testSsh = useMutation({
-    mutationFn: (args: { data: { domainId: string } }) => testSshConnection(args),
-    onSuccess: (res: any, variables: { data: { domainId: string } }) => {
-      setSshStatuses((prev) => ({
-        ...prev,
-        [variables.data.domainId]: res.success ? "ok" : "fail",
-      }));
-    },
-  });
-
-  const runSshTests = () => {
-    domains.forEach((d) => {
-      setSshStatuses((prev) => ({ ...prev, [d.id]: "testing" }));
-      testSsh.mutate({ data: { domainId: d.id } });
-    });
-  };
-
-  return (
-    <div className="flex flex-col gap-4 bg-card rounded-xl p-4 sm:p-6 shadow-sm ring-1 ring-border">
-      <Tabs
-        defaultValue="dns"
-        onValueChange={(v) => {
-          if (v === "server") runSshTests();
-        }}
-      >
-        <TabsList className="mb-4 grid w-full grid-cols-3 sm:inline-flex sm:w-auto">
-          <TabsTrigger value="dns" className="px-2 sm:px-3">DNS Preview</TabsTrigger>
-          <TabsTrigger value="mailboxes" className="px-2 sm:px-3">Mailbox Plan</TabsTrigger>
-          <TabsTrigger value="server" className="px-2 sm:px-3">Server Check</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="dns" className="flex flex-col gap-4">
-          {domains.map((d) => {
-            const dRecords = records.filter((r) => r.domainId === d.id);
-            return (
-              <div key={d.id} className="border rounded-xl p-4">
-                <h3 className="font-bold mb-2 flex items-center gap-2">
-                  <Globe className="w-4 h-4" />
-                  {d.name}
-                </h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm text-left">
-                    <thead>
-                      <tr className="bg-muted">
-                        <th className="p-2">Name</th>
-                        <th className="p-2">Type</th>
-                        <th className="p-2">Content</th>
-                        <th className="p-2">TTL</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dRecords.map((r) => (
-                        <tr key={r.id} className="border-b last:border-0">
-                          <td className="p-2">{r.name}</td>
-                          <td className="p-2">
-                            <span className="bg-secondary px-1 rounded text-xs">{r.type}</span>
-                          </td>
-                          {/* Phones: the full value wraps (no hover tooltip on touch). */}
-                          <td className="p-2 break-all sm:max-w-[200px] sm:truncate" title={r.content}>
-                            {r.content}
-                          </td>
-                          <td className="p-2">{r.ttl}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            );
-          })}
-        </TabsContent>
-
-        <TabsContent value="mailboxes">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {domains.map((d) => {
-              const dInboxes = inboxes.filter((i) => i.domainId === d.id);
-              return (
-                <div key={d.id} className="border rounded-xl p-4">
-                  <h3 className="font-bold mb-2">{d.name}</h3>
-                  <div className="text-sm text-muted-foreground">{dInboxes.length} inboxes planned</div>
-                </div>
-              );
-            })}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="server" className="flex flex-col gap-4">
-          {domains.map((d) => (
-            <div key={d.id} className="border rounded-xl p-4 flex items-center justify-between gap-3">
-              <div className="flex min-w-0 flex-col">
-                <span className="font-bold break-all">{d.name}</span>
-                <span className="text-xs text-muted-foreground break-all">
-                  {d.ipAddress} | {d.sshUser}
-                </span>
-              </div>
-              <div className="shrink-0">
-                {sshStatuses[d.id] === "testing" && (
-                  <Loader2 className="animate-spin text-primary" />
-                )}
-                {sshStatuses[d.id] === "ok" && <CheckCircle2 className="text-green-500" />}
-                {sshStatuses[d.id] === "fail" && <XCircle className="text-red-500" />}
-              </div>
-            </div>
-          ))}
-          {Object.values(sshStatuses).includes("fail") && (
-            <div className="p-4 bg-destructive/10 text-destructive rounded-xl text-sm flex items-center gap-2">
-              <XCircle className="w-4 h-4" /> Warning: Some servers are unreachable. You may
-              proceed, but server setup will fail.
-            </div>
-          )}
-        </TabsContent>
-      </Tabs>
-      <div className="pt-4 border-t flex justify-end">
-        <Button onClick={onNext} className="bg-primary hover:bg-primary/90 text-white rounded-xl">
-          Confirm & Start
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// --- STEP 3: DNS PUSH ---
-function DnsPushStep({
-  domains,
-  records,
-  onNext,
-}: {
-  domains: any[];
-  records: any[];
-  onNext: () => void;
-}) {
-  const [progress, setProgress] = useState<
-    Record<
-      string,
-      { current: number; total: number; status: "pending" | "pushing" | "done" | "error" }
-    >
-  >({});
-  const [logs, setLogs] = useState<Record<string, any[]>>({});
-  const [propagation, setPropagation] = useState<Record<string, "pending" | "ok" | "fail">>({});
-  const [isRunning, setIsRunning] = useState(false);
-
-  const pushMutation = useMutation({
-    mutationFn: (args: { data: { domainId: string } }) => batchPushDnsToCloudflare(args),
-  });
-  const propMutation = useMutation({
-    mutationFn: (args: { data: { domainName: string } }) => checkDnsPropagation(args),
-  });
-
-  const startPush = async () => {
-    setIsRunning(true);
-    for (const d of domains) {
-      const dRecords = records.filter((r) => r.domainId === d.id);
-      setProgress((p) => ({
-        ...p,
-        [d.id]: { current: 0, total: dRecords.length, status: "pushing" },
-      }));
-
-      const res = await pushMutation.mutateAsync({ data: { domainId: d.id } });
-
-      setLogs((l) => ({ ...l, [d.id]: res.results }));
-      const hasError = res.results?.some((r: any) => !r.success) || false;
-      setProgress((p) => ({
-        ...p,
-        [d.id]: {
-          current: dRecords.length,
-          total: dRecords.length,
-          status: hasError ? "error" : "done",
-        },
-      }));
-
-      // Propagation check
-      if (!hasError) {
-        const propRes = await propMutation.mutateAsync({ data: { domainName: d.name } });
-        setPropagation((p) => ({ ...p, [d.id]: propRes.success ? "ok" : "fail" }));
-      }
-    }
-    setIsRunning(false);
-  };
-
-  useEffect(() => {
-    startPush();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const totalDone = Object.values(progress).filter(
-    (p) => p.status === "done" || p.status === "error",
-  ).length;
-
-  return (
-    <div className="flex flex-col gap-6 bg-card rounded-xl p-4 sm:p-6 shadow-sm ring-1 ring-border">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-xl font-bold">Cloudflare DNS Push</h2>
-        <div className="text-sm text-muted-foreground">
-          {totalDone} / {domains.length} domains processed
-        </div>
-      </div>
-
-      {domains.map((d) => {
-        const p = progress[d.id];
-        const l = logs[d.id] || [];
-        if (!p) return null;
-        return (
-          <div key={d.id} className="border rounded-xl p-4 flex flex-col gap-3">
-            <div className="flex flex-wrap justify-between items-center gap-x-3 gap-y-1">
-              <span className="font-bold flex min-w-0 items-center gap-2 break-all">
-                <Globe className="w-4 h-4 shrink-0" /> {d.name}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {p.status === "pushing" && <Loader2 className="w-3 h-3 animate-spin inline mr-1" />}
-                {p.current} / {p.total} records
-              </span>
-            </div>
-            <div className="w-full bg-muted h-2 rounded-full overflow-hidden">
-              <div
-                className={`h-full ${p.status === "error" ? "bg-red-500" : "bg-primary"} transition-all`}
-                style={{ width: `${(p.current / (p.total || 1)) * 100}%` }}
-              />
-            </div>
-            {l.length > 0 && (
-              <div className="max-h-32 overflow-y-auto text-xs font-mono bg-muted p-2 rounded border break-words">
-                {l.map((res: any, i) => (
-                  <div key={i} className={res.success ? "text-success" : "text-destructive"}>
-                    {res.success ? "✅" : "❌"} {res.name} {res.error ? `- ${res.error}` : ""}
-                  </div>
-                ))}
-              </div>
-            )}
-            {p.status === "done" && (
-              <div className="text-xs flex flex-wrap items-center gap-2 mt-2">
-                Propagation Check:
-                {propagation[d.id] === "pending" && (
-                  <Loader2 className="w-3 h-3 animate-spin text-primary" />
-                )}
-                {propagation[d.id] === "ok" && (
-                  <span className="text-success font-bold">Passed</span>
-                )}
-                {propagation[d.id] === "fail" && (
-                  <span className="text-warning font-bold">Awaiting Global Propagation</span>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
-
-      <div className="pt-4 border-t flex justify-end">
-        <Button
-          onClick={onNext}
-          disabled={isRunning}
-          className="bg-primary hover:bg-primary/90 text-white rounded-xl"
-        >
-          Proceed to Server Setup
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// --- STEP 4: SERVER SETUP ---
-function ServerSetupStep({ domains, autoStart }: { domains: any[]; autoStart: boolean }) {
-  return (
-    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-      {domains.map((d) => (
-        <TerminalWindow key={d.id} domain={d} autoStart={autoStart} />
-      ))}
-    </div>
-  );
-}
-
-function TerminalWindow({ domain, autoStart }: { domain: any; autoStart: boolean }) {
-  const [logs, setLogs] = useState<string[]>(domain.terminalLogs && domain.status !== "failed" ? [domain.terminalLogs] : []);
-  const [status, setStatus] = useState(
-    domain.status === "ready" ? "Ready" :
-    domain.status === "failed" ? "Failed" :
-    domain.status === "provisioning" ? "Provisioning" :
-    domain.status === "configuring" ? "Configuring" :
-    "Queued"
-  );
-  // The scrollable log pane itself — auto-scroll moves only this box, never the page.
-  const logPaneRef = useRef<HTMLDivElement>(null);
-  const provMutation = useMutation({
-    mutationFn: (args: { data: { domainId: string } }) => provisionServer(args),
-  });
-  const [startTrigger, setStartTrigger] = useState<number>(0);
-
-  const sseRef = useRef<(() => void) | null>(null);
-
-  const connectSse = () => {
-    if (sseRef.current) {
-      sseRef.current();
-    }
-    const eventSource = new EventSource(`/api/sse?domainId=${domain.id}`);
-    eventSource.onmessage = (event) => {
-      const parsed = JSON.parse(event.data);
-      if (parsed.status) setStatus(parsed.status);
-      if (parsed.chunk) {
-        setLogs((prev) => {
-          if (prev.length > 0 && parsed.chunk.startsWith(prev.join(""))) {
-            return [parsed.chunk];
-          }
-          if (prev.includes(parsed.chunk)) return prev;
-          return [...prev, parsed.chunk];
-        });
-      } else if (parsed.msg) {
-        setLogs((prev) => {
-          const systemMsg = `[System] ${parsed.msg}\n`;
-          if (prev.includes(systemMsg)) return prev;
-          return [...prev, systemMsg];
-        });
-      }
-    };
-    eventSource.onerror = () => eventSource.close();
-    sseRef.current = () => eventSource.close();
-    return sseRef.current;
-  };
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (sseRef.current) sseRef.current();
-    };
-  }, []);
-
-  // Auto-connect SSE for in-progress domains on first mount (no new job needed).
-  // Auto-start pending domains only when the user ran the pipeline to this step; otherwise they get a button.
-  useEffect(() => {
-    if (domain.status === "provisioning" || domain.status === "configuring") {
-      return connectSse();
-    } else if ((domain.status === "pending" || !domain.status) && autoStart) {
-      setStartTrigger(1);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Trigger provisioning when startTrigger increments (0 = skip initial)
-  useEffect(() => {
-    if (startTrigger === 0) return;
-
-    setStatus("Connecting");
-    provMutation.mutateAsync({ data: { domainId: domain.id } }).then((res) => {
-      if (res.jobId) {
-        connectSse();
-      } else {
-        setStatus("Failed");
-        setLogs([`Error starting job: ${res.error}`]);
-      }
-    }).catch((err) => {
-      setStatus("Failed");
-      setLogs([`Error starting job: ${err.message}`]);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startTrigger]);
-
-  useEffect(() => {
-    const el = logPaneRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [logs]);
-
-  let statusColor = "bg-gray-500";
-  if (
-    status === "Connecting" ||
-    status === "Updating System" ||
-    status === "Pulling Images" ||
-    status.includes("Docker") ||
-    status === "Configuring" ||
-    status === "Cloning Mailcow" ||
-    status === "Starting Containers" ||
-    status === "Provisioning"
-  )
-    statusColor = "bg-primary";
-  if (status === "Failed") statusColor = "bg-red-500";
-  if (status === "Ready") statusColor = "bg-green-500";
-
-  return (
-    <div className="flex flex-col bg-black rounded-lg overflow-hidden shadow-lg border border-gray-800">
-      <div className="bg-gray-900 px-4 py-2 flex justify-between items-center border-b border-gray-800">
-        <div className="flex items-center gap-3">
-          <Terminal className="w-4 h-4 text-muted-foreground" />
-          <span className="text-gray-200 font-mono text-sm">{domain.ipAddress}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div
-            className={`w-2 h-2 rounded-full ${statusColor} ${statusColor === "bg-primary" ? "animate-pulse" : ""}`}
-          />
-          <span className="text-muted-foreground text-xs font-mono">{status}</span>
-        </div>
-      </div>
-      <div
-        ref={logPaneRef}
-        className="p-4 h-80 overflow-y-auto font-mono text-xs text-green-400 leading-relaxed custom-scrollbar"
-      >
-        <pre className="whitespace-pre-wrap font-inherit break-all">{logs.join("")}</pre>
-      </div>
-      {status === "Queued" && startTrigger === 0 && (
-        <div className="bg-gray-900 p-3 flex flex-wrap items-center justify-between gap-2 border-t border-gray-800">
-          <span className="text-xs text-muted-foreground">Server setup hasn't started for this domain.</span>
-          <Button
-            size="sm"
-            onClick={() => setStartTrigger((n) => n + 1)}
-            className="h-9 text-xs rounded-xl bg-primary hover:bg-primary/90 text-white"
-          >
-            Start setup
-          </Button>
-        </div>
-      )}
-      {status === "Failed" && (
-        <TerminalWindowFailedFooter
-          domain={domain}
-          onRetry={() => {
-            setLogs([]);
-            setStartTrigger((n) => n + 1);
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-function TerminalWindowFailedFooter({ domain, onRetry }: { domain: any; onRetry: () => void }) {
-  const [editPassword, setEditPassword] = useState(domain.sshPassword || "");
-  const [showEdit, setShowEdit] = useState(false);
-  const updatePasswordMutation = useMutation({
-    mutationFn: (newPassword: string) =>
-      updateDomain({ data: { id: domain.id, sshPassword: newPassword } }),
-    onSuccess: (res: any) => {
-      if (res.ok) {
-        toast.success("SSH Password updated successfully");
-        setShowEdit(false);
-      } else {
-        toast.error(res.error || "Failed to update SSH Password");
-      }
-    },
-  });
-
-  return (
-    <div className="bg-gray-900 p-3 flex flex-col gap-3 border-t border-gray-800">
-      {showEdit ? (
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Input
-            type="password"
-            placeholder="Enter correct SSH Password"
-            value={editPassword}
-            onChange={(e) => setEditPassword(e.target.value)}
-            className="h-9 text-xs font-mono bg-black border-gray-800 text-gray-200 placeholder-gray-500 rounded-xl"
-          />
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              onClick={async () => {
-                await updatePasswordMutation.mutateAsync(editPassword);
-              }}
-              disabled={updatePasswordMutation.isPending}
-              className="h-9 flex-1 text-xs rounded-xl bg-primary hover:bg-primary/90 text-white sm:flex-none"
-            >
-              {updatePasswordMutation.isPending ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                "Save"
-              )}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setShowEdit(false)}
-              className="h-9 flex-1 text-xs rounded-xl text-muted-foreground hover:text-gray-200 sm:flex-none"
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex justify-between items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setShowEdit(true)}
-            className="h-9 text-xs rounded-xl border-gray-800 bg-gray-950 text-muted-foreground hover:bg-gray-800 hover:text-white"
-          >
-            Change SSH Password
-          </Button>
-          <Button
-            size="sm"
-            variant="destructive"
-            onClick={onRetry}
-            className="h-9 text-xs rounded-xl"
-          >
-            Retry Setup
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

@@ -166,6 +166,33 @@
     }
   }
 
+  /* Progress with no known end (a Mailcow install): a segment sliding along its track. Its color is
+     currentColor, so the bar's text color sets it. */
+  .progress-indeterminate {
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    width: 40%;
+    border-radius: inherit;
+    background: currentColor;
+    animation: relay-indeterminate 1.6s ease-in-out infinite;
+  }
+  @keyframes relay-indeterminate {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .progress-indeterminate {
+      width: 100%;
+      opacity: 0.5;
+      animation: none;
+    }
+  }
+
   /* The live provisioning log — the dark "instrument" centerpiece. Also used for any literal
      machine text (commands, DNS records, log excerpts) so one material means "the machine". */
   .console {
