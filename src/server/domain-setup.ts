@@ -63,6 +63,7 @@ import { resolveAndSaveCfZoneId } from "./cloudflare";
 import { pushDns, unproxyDns, ensureMailDomains, createMailboxes, syncDkim } from "./pipeline";
 import { readMailcowConfigOverSsh, ensureWorkingApiKey } from "./mailcow-key";
 import { mailcowListAll } from "./mailcow-helpers";
+import { assertServerNotProtected } from "./protected-servers";
 import { createMailboxProgressWriter } from "./mailbox-progress-store";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -451,6 +452,8 @@ export async function executeDomainSetupJob(
     inspectServer: async () => {
       const domain = await loadDomain(db, domainId);
       const target = serverTarget(domain);
+      // A protected server can be neither installed nor reused: say so now rather than after a choice.
+      assertServerNotProtected(target.ipAddress);
       holdServer(target.ipAddress);
       log(`Checking whether ${target.ipAddress} already runs Mailcow...`);
       const { hasMailcow, hostname } = await readServerMailcow(target);
@@ -522,6 +525,8 @@ export async function executeDomainSetupJob(
       const domain = await loadDomain(db, domainId);
       const raw = serverTarget(domain);
       const target = checkedServerTarget(raw.ipAddress, raw.sshUser, domain.name);
+      // Before the domain is marked provisioning (installMailcowOnServer checks again).
+      assertServerNotProtected(raw.ipAddress);
       holdServer(raw.ipAddress);
       try {
         log("Installing Mailcow. This takes 20–40 minutes.");
@@ -543,6 +548,7 @@ export async function executeDomainSetupJob(
     reuse: async () => {
       const domain = await loadDomain(db, domainId);
       const target = serverTarget(domain);
+      assertServerNotProtected(target.ipAddress);
       holdServer(target.ipAddress);
       try {
         log(

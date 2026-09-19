@@ -9,6 +9,7 @@ import { jobEvents, inProcessProvisions } from "./events";
 import { createRedis, waitForRedis } from "./redis";
 import { createSlotLimiter } from "./slot-limiter";
 import { claimDomain, releaseDomain, busyMessage } from "./domain-locks";
+import { isProtectedServer, PROTECTED_SERVER_MESSAGE } from "./protected-servers";
 import { interruptedRunError, RECONCILE_BOOT_DELAY_MS, RECONCILE_TICK_MS } from "./setup-recovery";
 import { ensureMailDomains, createMailboxes, syncDkim, unproxyDns } from "./pipeline";
 import { ensureWorkingApiKey } from "./mailcow-key";
@@ -590,7 +591,8 @@ export async function createDomainLogger(domainId: string, logFn?: LogFn, notice
 // The server part of a setup: SSH in, un-proxy the mail host in Cloudflare, keep an existing Mailcow's
 // hostname, then run the deploy script, which WIPES and reinstalls Mailcow on the server. Saves the API key
 // the moment the script prints it, then marks the domain "ready". On failure it marks the domain "failed"
-// and rethrows. The caller owns the log (createDomainLogger) and persists it when the run ends.
+// and rethrows. The caller owns the log (createDomainLogger) and persists it when the run ends. Refuses a
+// server in PROTECTED_SERVER_IPS before connecting, and leaves the domain as it is then.
 export async function installMailcowOnServer({
   domainId,
   ipAddress,
@@ -606,6 +608,12 @@ export async function installMailcowOnServer({
   domainName?: string;
   log: LogFn;
 }): Promise<void> {
+  // PROTECTED_SERVER_IPS: refused before anything touches the server (or the domain's status).
+  if (isProtectedServer(ipAddress)) {
+    log(`${PROTECTED_SERVER_MESSAGE}
+`, "Failed");
+    throw new Error(PROTECTED_SERVER_MESSAGE);
+  }
   const db = getDb();
   log(`Connecting to ${ipAddress} via SSH...`, "Connecting");
 

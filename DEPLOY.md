@@ -85,6 +85,12 @@ chmod 600 .env
 restart interrupted. Set it only on the production server. A local dev server that uses the same database
 must not have it: it can't see this server's queue, so it would resume runs that are still going here.
 
+`PROTECTED_SERVER_IPS` (optional) lists servers the app must never set up, comma-separated, for example
+`PROTECTED_SERVER_IPS=203.0.113.10,203.0.113.11`: say a mail server with live mailboxes that you manage by
+hand. A setup run for a domain on one of them stops at its Server step with "This server is protected
+(PROTECTED_SERVER_IPS) — the app won't install on it." before anything on that server changes. After
+editing it, run `docker compose up -d --force-recreate app` (check the **Jobs** board first).
+
 **Stored credentials are plain text.** SSH passwords, Mailcow API keys and admin passwords, and the
 Cloudflare API token are saved in the database unencrypted; nothing in the app encrypts them with
 `ENCRYPTION_KEY` today. Anyone who can read the database can read them, so:
