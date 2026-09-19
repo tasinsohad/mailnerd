@@ -155,10 +155,16 @@ export const provisionServer = createServerFn({ method: "POST" })
     const running = activeRun(domain.id);
     if (running) return { success: false, error: busyMessage(running) };
 
+    // The checks the install applies before anything reaches the server's shell: fail now, not after
+    // three attempts. Nothing is queued, so no setup run records this: flag it on the domain as before.
     try {
-      // The checks the install applies before anything reaches the server's shell: fail now, not after
-      // three attempts.
       checkedServerTarget(ipAddress, sshUser, domain.name);
+    } catch (error) {
+      await db.update(domains).set({ status: "error" }).where(eq(domains.id, domain.id));
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+
+    try {
       console.log(`[provisionServer] Starting a setup run from the server step for ${ipAddress}`);
       // The run (domain-setup.ts) reads the SSH password from the database, sets the domain to
       // "provisioning" once the install starts, and never wipes a server other domains use without
@@ -172,11 +178,9 @@ export const provisionServer = createServerFn({ method: "POST" })
       console.log(`[provisionServer] Setup run queued: ${runId}`);
       return { success: true, jobId: runId };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      // A refused duplicate isn't a failure of the setup that's already running.
-      if (!/is already running for this domain/.test(message)) {
-        await db.update(domains).set({ status: "error" }).where(eq(domains.id, domain.id));
-      }
-      return { success: false, error: message };
+      // The domain's status stays as it is. A refusal (a run already going: "... is already running for
+      // this domain", or one waiting for the user's server choice) isn't a failure, and a run that couldn't
+      // be queued after its state was saved records why in setup_state.
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   });

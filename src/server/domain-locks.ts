@@ -60,9 +60,15 @@ export function releaseDomain(domainId: string, owner: string): void {
   if (claims.get(domainId)?.owner === owner) claims.delete(domainId);
 }
 
+// Every refusal because a run is going says "... is already running for this domain" (provisionServer and
+// the UI read it as "busy", not "failed"); keep that wording.
 export function busyMessage(running: DomainRunKind): string {
   return `A ${running} is already running for this domain. Wait for it to finish, then try again.`;
 }
+
+/** The refusal while a domain's setup run waits for the user to choose what to do with its server. */
+export const WAITING_FOR_CHOICE_MESSAGE =
+  "This domain is waiting for your choice about its server. Answer it on the job page.";
 
 const g2 = globalThis as unknown as { __serverClaims?: Map<string, { owner: string; since: number }> };
 const serverClaims = g2.__serverClaims ?? (g2.__serverClaims = new Map());

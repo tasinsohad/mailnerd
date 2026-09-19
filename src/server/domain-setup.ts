@@ -34,6 +34,7 @@ import {
   busyMessage,
   claimServer,
   releaseServer,
+  WAITING_FOR_CHOICE_MESSAGE,
 } from "./domain-locks";
 import {
   interruptedRunPatch,
@@ -133,7 +134,7 @@ export async function enqueueDomainSetup(opts: {
       if (current?.runId !== opts.replaceStaleRunId || !isInFlight(current))
         throw new Error("The setup run changed since it was found stuck, so it wasn't resumed.");
     } else if (current?.status === "waiting") {
-      if (!opts.allowWaiting) throw new Error(busyMessage("server setup"));
+      if (!opts.allowWaiting) throw new Error(WAITING_FOR_CHOICE_MESSAGE);
     } else if (isInFlight(current)) {
       throw new Error(busyMessage("server setup"));
     }

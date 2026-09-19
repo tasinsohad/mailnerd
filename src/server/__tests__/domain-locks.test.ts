@@ -4,6 +4,7 @@ import {
   releaseDomain,
   activeRun,
   busyMessage,
+  WAITING_FOR_CHOICE_MESSAGE,
   newClaimOwner,
   claimServer,
   releaseServer,
@@ -75,6 +76,13 @@ describe("domain run locks", () => {
   it("says what's already running", () => {
     expect(busyMessage("server setup")).toMatch(/server setup is already running/i);
     expect(busyMessage("mailbox setup")).toMatch(/mailbox setup is already running/i);
+  });
+
+  it("keeps the busy wording for every run kind, and a distinct message for a run waiting for the user", () => {
+    const kinds = ["server setup", "mailbox setup", "mailbox count change", "password reset"] as const;
+    for (const kind of kinds) expect(busyMessage(kind)).toMatch(/is already running for this domain/);
+    expect(WAITING_FOR_CHOICE_MESSAGE).not.toMatch(/is already running for this domain/);
+    expect(WAITING_FOR_CHOICE_MESSAGE).toMatch(/waiting for your choice about its server/);
   });
 });
 
