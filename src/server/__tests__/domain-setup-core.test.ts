@@ -120,12 +120,46 @@ describe("otherDomainsOnServer", () => {
         userId: "u1",
         domainName: "example.com",
         others: [
-          { name: "mine.com", userId: "u1" },
-          { name: "theirs.com", userId: "u2" },
+          { name: "mine.com", userId: "u1", installed: true },
+          { name: "theirs.com", userId: "u2", installed: true },
         ],
         mailDomains: null,
       }),
     ).toEqual(["mine.com", OTHER_ACCOUNT_DOMAIN]);
+  });
+
+  it("counts only other domains that were installed (a new job's domains on the same fresh server don't)", () => {
+    expect(
+      otherDomainsOnServer({
+        userId: "u1",
+        domainName: "example.com",
+        others: [
+          { name: "new1.com", userId: "u1", installed: false },
+          { name: "new2.com", userId: "u2", installed: false },
+          { name: "live.com", userId: "u1", installed: true },
+        ],
+        mailDomains: null,
+      }),
+    ).toEqual(["live.com"]);
+    expect(
+      otherDomainsOnServer({
+        userId: "u1",
+        domainName: "example.com",
+        others: [{ name: "new1.com", userId: "u1", installed: false }],
+        mailDomains: [],
+      }),
+    ).toEqual([]);
+  });
+
+  it("still flags an uninstalled domain's mail domains that are on the server's Mailcow", () => {
+    expect(
+      otherDomainsOnServer({
+        userId: "u1",
+        domainName: "example.com",
+        others: [{ name: "legacy.com", userId: "u1", installed: false }],
+        mailDomains: ["a.legacy.com"],
+      }),
+    ).toEqual([FOREIGN_MAIL_DOMAIN]);
   });
 
   it("doesn't flag mail domains that belong to the other app domains on the server", () => {
@@ -133,7 +167,7 @@ describe("otherDomainsOnServer", () => {
       otherDomainsOnServer({
         userId: "u1",
         domainName: "example.com",
-        others: [{ name: "mine.com", userId: "u1" }],
+        others: [{ name: "mine.com", userId: "u1", installed: true }],
         mailDomains: ["a.example.com", "b.mine.com"],
       }),
     ).toEqual(["mine.com"]);

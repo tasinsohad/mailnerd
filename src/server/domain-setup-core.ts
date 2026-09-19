@@ -57,20 +57,22 @@ export function foreignMailDomains(
 /**
  * The inspection's otherDomainsOnServer: the owner's other app domains on the same IP by name, one generic
  * entry for any other account's (their names stay private), and one for mail domains the server's Mailcow
- * serves that none of these domains accounts for. `mailDomains` null: they couldn't be read, so that last
- * check is skipped.
+ * serves that none of these domains accounts for. Only domains that were installed (have a Mailcow host name)
+ * count: a new job's other domains on the same fresh server have nothing on it yet. `mailDomains` null: they
+ * couldn't be read, so that last check is skipped.
  */
 export function otherDomainsOnServer(opts: {
   userId: string;
   domainName: string;
-  others: { name: string; userId: string }[];
+  others: { name: string; userId: string; installed: boolean }[];
   mailDomains: string[] | null;
 }): string[] {
-  const list = opts.others.filter((o) => o.userId === opts.userId).map((o) => o.name);
-  if (opts.others.some((o) => o.userId !== opts.userId)) list.push(OTHER_ACCOUNT_DOMAIN);
+  const installed = opts.others.filter((o) => o.installed);
+  const list = installed.filter((o) => o.userId === opts.userId).map((o) => o.name);
+  if (installed.some((o) => o.userId !== opts.userId)) list.push(OTHER_ACCOUNT_DOMAIN);
   if (
     opts.mailDomains &&
-    foreignMailDomains(opts.mailDomains, opts.domainName, opts.others.map((o) => o.name)).length
+    foreignMailDomains(opts.mailDomains, opts.domainName, installed.map((o) => o.name)).length
   )
     list.push(FOREIGN_MAIL_DOMAIN);
   return list;

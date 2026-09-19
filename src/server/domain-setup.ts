@@ -462,8 +462,13 @@ export async function executeDomainSetupJob(
 
       // Other app domains on the same IP, across all accounts. Names only for this domain's owner. The IP
       // is compared the way the server lock compares it, so " 1.2.3.4" or a differently-cased host matches.
-      const others: { name: string; userId: string }[] = await db
-        .select({ name: domains.name, userId: domains.userId })
+      // Only installed ones (with a Mailcow host name) count as sharing the server.
+      const otherRows: { name: string; userId: string; mailcowHostname: string | null }[] = await db
+        .select({
+          name: domains.name,
+          userId: domains.userId,
+          mailcowHostname: domains.mailcowHostname,
+        })
         .from(domains)
         .where(
           and(
@@ -474,7 +479,11 @@ export async function executeDomainSetupJob(
       const sharing = otherDomainsOnServer({
         userId: domain.userId,
         domainName: domain.name,
-        others,
+        others: otherRows.map((o) => ({
+          name: o.name,
+          userId: o.userId,
+          installed: !!o.mailcowHostname?.trim(),
+        })),
         mailDomains,
       });
 
