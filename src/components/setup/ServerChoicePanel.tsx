@@ -14,7 +14,9 @@ export function ServerChoicePanel({
 }: {
   domainId: string;
   waiting: NonNullable<SetupState["waiting"]>;
-  onChanged: () => void;
+  /** May return a promise (e.g. the board's invalidate/refetch): awaited before the busy state clears, so
+   * the choice buttons stay disabled until the fresh row lands instead of flashing back to their old state. */
+  onChanged: () => void | Promise<unknown>;
 }) {
   const decide = useMutation({
     mutationFn: (choice: ServerChoice) => decideServerChoice({ data: { domainId, choice } }),
@@ -28,11 +30,11 @@ export function ServerChoicePanel({
       } else {
         toast.error(res.error ?? "Couldn't save your choice");
       }
-      onChanged();
+      return onChanged();
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : String(err));
-      onChanged();
+      return onChanged();
     },
   });
 

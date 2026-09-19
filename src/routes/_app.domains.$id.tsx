@@ -231,11 +231,13 @@ function DomainDetailsPage() {
     },
   });
 
-  // After starting (or answering) a setup run: refetch the setup row and the domain's details.
-  const refreshSetup = () => {
-    qc.invalidateQueries({ queryKey: ["domain-setup", id] });
-    qc.invalidateQueries({ queryKey: ["domain", id] });
-  };
+  // After starting (or answering) a setup run: refetch the setup row and the domain's details. Returns the
+  // invalidate/refetch promise so SetupRow/ServerChoicePanel can await it before clearing their busy state.
+  const refreshSetup = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: ["domain-setup", id] }),
+      qc.invalidateQueries({ queryKey: ["domain", id] }),
+    ]);
 
   // provisionServer starts a setup run from the server step (the run itself asks before wiping a server
   // other domains use).

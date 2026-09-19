@@ -138,7 +138,9 @@ export function SetupRow({
   className,
 }: {
   row: SetupRowData;
-  onChanged: () => void;
+  /** May return a promise (e.g. the board's invalidate/refetch): awaited before the busy state clears, so
+   * Start/Retry stay disabled until the fresh row lands instead of flashing back to their old state. */
+  onChanged: () => void | Promise<unknown>;
   className?: string;
 }) {
   const [logOpen, setLogOpen] = useState(false);
@@ -166,11 +168,11 @@ export function SetupRow({
       } else {
         toast.error(res.error ?? "Couldn't start setup");
       }
-      onChanged();
+      return onChanged();
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : String(err));
-      onChanged();
+      return onChanged();
     },
   });
 

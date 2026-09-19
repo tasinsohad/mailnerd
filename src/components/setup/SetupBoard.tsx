@@ -30,10 +30,13 @@ export function SetupBoard({ batchId }: { batchId: string }) {
   const summary = summaryText(jobBoardSummary(rows));
   const canStart = canStartJobSetup(rows);
 
-  const refresh = () => {
-    qc.invalidateQueries({ queryKey: ["setup-board", batchId] });
-    qc.invalidateQueries({ queryKey: ["batch", batchId] });
-  };
+  // Returns the board's own invalidate/refetch promise so a row can await it before clearing its busy
+  // state (Start/Retry/choice buttons stay disabled until the fresh row lands).
+  const refresh = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: ["setup-board", batchId] }),
+      qc.invalidateQueries({ queryKey: ["batch", batchId] }),
+    ]);
 
   // When a run moves on (a step finishes, a run ends), the rest of the job page changes with it: domain
   // statuses, and the mailboxes the export lists. Refetch the job's details then.
@@ -102,7 +105,7 @@ export function SetupBoard({ batchId }: { batchId: string }) {
         <div className="flex items-center gap-2 px-4 py-6 text-sm text-muted-foreground sm:px-5">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading setup…
         </div>
-      ) : board.isError ? (
+      ) : board.isError && !board.data ? (
         <div className="flex flex-wrap items-center gap-3 px-4 py-4 text-sm sm:px-5">
           <span className="min-w-0 break-words text-destructive">
             Couldn't load the setup board:{" "}
@@ -115,13 +118,20 @@ export function SetupBoard({ batchId }: { batchId: string }) {
       ) : rows.length === 0 ? (
         <p className="px-4 py-6 text-sm text-muted-foreground sm:px-5">This job has no domains.</p>
       ) : (
-        <ul className="divide-y divide-border">
-          {rows.map((row) => (
-            <li key={row.id}>
-              <SetupRow row={row} onChanged={refresh} />
-            </li>
-          ))}
-        </ul>
+        <>
+          {board.isError && (
+            <p className="px-4 pt-3 text-xs text-muted-foreground sm:px-5">
+              Couldn't refresh — retrying…
+            </p>
+          )}
+          <ul className="divide-y divide-border">
+            {rows.map((row) => (
+              <li key={row.id}>
+                <SetupRow row={row} onChanged={refresh} />
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </section>
   );
