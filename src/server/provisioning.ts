@@ -119,7 +119,14 @@ export const resetMailcowAdminPassword = createServerFn({ method: "POST" })
 
 export const provisionServer = createServerFn({ method: "POST" })
   .middleware([requireAuth])
-  .inputValidator((d: unknown) => z.object({ domainId: z.string() }).parse(d))
+  .inputValidator((d: unknown) =>
+    // `serverChoice: "reinstall"` = Wipe & re-provision (the caller confirms first): the run reinstalls
+    // Mailcow even where the server already runs one. Without it, the run asks before wiping a server that
+    // other domains use.
+    z
+      .object({ domainId: z.string(), serverChoice: z.enum(["reuse", "reinstall"]).optional() })
+      .parse(d),
+  )
   .handler(async ({ data, context }) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { db, userId } = context as any;
@@ -160,6 +167,7 @@ export const provisionServer = createServerFn({ method: "POST" })
         domainId: domain.id,
         userId: domain.userId,
         fromStep: "server",
+        serverChoice: data.serverChoice,
       });
       console.log(`[provisionServer] Setup run queued: ${runId}`);
       return { success: true, jobId: runId };

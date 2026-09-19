@@ -112,7 +112,7 @@ export function JobActionsMenu({
           onClick={() =>
             runAll(
               "Wiping & re-provisioning",
-              (id) => provisionServer({ data: { domainId: id } }),
+              (id) => provisionServer({ data: { domainId: id, serverChoice: "reinstall" } }),
               `Wipe & re-provision ALL ${n} servers from scratch? Each takes 20–40 min.`,
             )
           }

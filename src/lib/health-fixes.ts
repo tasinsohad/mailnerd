@@ -78,6 +78,7 @@ export function runHealthFix(action: HealthAction, domainId: string): Promise<an
     case "recreate":
       return setupMailcowDomain({ data: { domainId, recreate: true } });
     case "provision":
-      return provisionServer({ data: { domainId } });
+      // "Re-provision" is destructive and confirmed first (DESTRUCTIVE_ACTIONS): wipe and reinstall.
+      return provisionServer({ data: { domainId, serverChoice: "reinstall" } });
   }
 }
