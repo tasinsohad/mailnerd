@@ -243,6 +243,7 @@ export function SetupRow({
         domainId={row.id}
         domainName={row.name}
         ipAddress={row.ipAddress}
+        setupState={state}
         open={logOpen}
         onOpenChange={setLogOpen}
       />

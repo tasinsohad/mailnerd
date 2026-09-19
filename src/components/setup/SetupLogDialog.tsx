@@ -9,13 +9,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import type { SetupState } from "@/lib/setup-state";
 
 type Connection = "connecting" | "live" | "ended";
+type FinishedKind = "done" | "failed" | null;
 
-// The dot's color: red or green once the stream reports the end, grey when disconnected, amber while live.
-function statusTone(status: string | null, connection: Connection): string {
-  if (status === "Failed") return "text-destructive";
-  if (status === "Ready") return "text-success";
+// The dot's color: red or green once the run is finished, grey when disconnected, amber while live.
+function statusTone(finished: FinishedKind, connection: Connection): string {
+  if (finished === "failed") return "text-destructive";
+  if (finished === "done") return "text-success";
   if (connection === "ended") return "text-muted-foreground";
   return "text-warning";
 }
@@ -26,12 +28,17 @@ export function SetupLogDialog({
   domainId,
   domainName,
   ipAddress,
+  setupState,
   open,
   onOpenChange,
 }: {
   domainId: string;
   domainName: string;
   ipAddress: string | null;
+  /** The row's own setup run, when there is one: the authoritative source for whether the run is finished
+   * (done/failed), since the SSE stream's own "status" text (a per-step label) doesn't reliably say so —
+   * e.g. reopening the log for an already-finished run replays no fresh "Ready"/"Failed" event. */
+  setupState?: SetupState | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -66,9 +73,10 @@ export function SetupLogDialog({
       const chunk = parsed.chunk;
       if (chunk) {
         setLogs((prev) => {
-          // The saved log is resent in full on connect: replace what we have when it extends it.
+          // The saved log is resent in full on connect: replace what we have when it extends it. Otherwise
+          // append as-is — a genuinely repeated line (e.g. the same log text on two different attempts)
+          // must not be dropped just because it matches something already shown.
           if (prev.length > 0 && chunk.startsWith(prev.join(""))) return [chunk];
-          if (prev.includes(chunk)) return prev;
           return [...prev, chunk];
         });
       } else if (parsed.msg) {
@@ -94,17 +102,34 @@ export function SetupLogDialog({
     if (el) followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 24;
   };
 
-  // The stream sends "provisioning"/"configuring" on connect, then labels like "Pulling Images", and ends on
-  // "Ready" or "Failed".
-  const finished = status === "Ready" || status === "Failed";
+  // Whether the run is actually finished comes from the row's own setup state when there is one — the SSE
+  // stream's "status" text is just the current step's label (e.g. "Pulling Images") and, for a run that
+  // finished before this dialog (re)connected, no fresh "Ready"/"Failed" event necessarily arrives to say so.
+  // Only a domain with no setup run at all (the legacy single-shot pipeline) falls back to the SSE text.
+  const finishedKind: FinishedKind = setupState
+    ? setupState.status === "done"
+      ? "done"
+      : setupState.status === "failed"
+        ? "failed"
+        : null
+    : status === "Ready"
+      ? "done"
+      : status === "Failed"
+        ? "failed"
+        : null;
+  const finished = finishedKind !== null;
   const statusLabel =
     connection === "ended" && !finished
       ? "Disconnected"
-      : status
-        ? status.charAt(0).toUpperCase() + status.slice(1)
-        : connection === "connecting"
-          ? "Connecting…"
-          : "Live";
+      : finishedKind === "done"
+        ? "Ready"
+        : finishedKind === "failed"
+          ? "Failed"
+          : status
+            ? status.charAt(0).toUpperCase() + status.slice(1)
+            : connection === "connecting"
+              ? "Connecting…"
+              : "Live";
   const pulsing = connection === "live" && !finished;
 
   return (
@@ -121,7 +146,7 @@ export function SetupLogDialog({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
           <span className="inline-flex items-center gap-2 text-foreground" aria-live="polite">
             <span
-              className={cn("status-dot", statusTone(status, connection), pulsing && "status-dot--pulse")}
+              className={cn("status-dot", statusTone(finishedKind, connection), pulsing && "status-dot--pulse")}
             />
             {statusLabel}
           </span>
