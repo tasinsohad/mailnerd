@@ -33,7 +33,7 @@ function relativeTime(iso: string, nowMs: number = Date.now()): string {
 // Admin-only: shows whether the Supabase keep-alive ping (src/server/keep-alive.ts) is running and when it
 // last ran, so a paused-project surprise shows up here instead of as a mysteriously slow page load.
 function KeepAliveCard({ isAdmin }: { isAdmin: boolean }) {
-  const { data } = useQuery({
+  const { data, isError } = useQuery({
     queryKey: ["keep-alive"],
     queryFn: () => getKeepAliveStatus(),
     enabled: isAdmin,
@@ -52,12 +52,22 @@ function KeepAliveCard({ isAdmin }: { isAdmin: boolean }) {
           <p className="text-xs text-muted-foreground">Pings Supabase so the free project never pauses</p>
         </div>
       </div>
-      <p className="text-sm text-foreground">
-        {data?.lastAttemptAt
-          ? `Last ping: ${relativeTime(data.lastAttemptAt)} · every ${data.intervalHours} h`
-          : "Not pinged yet — the first ping runs 30 s after the app starts"}
-      </p>
-      {data?.lastError && <p className="text-sm text-destructive">{data.lastError}</p>}
+      {isError ? (
+        <p className="text-sm text-destructive">Couldn't load the keep-alive status</p>
+      ) : (
+        <>
+          <p className="text-sm text-foreground">
+            Last successful ping: {data?.lastOkAt ? relativeTime(data.lastOkAt) : "none yet"}
+            {data ? ` · every ${data.intervalHours} h` : ""}
+          </p>
+          {data?.lastError && (
+            <p className="text-sm text-destructive">
+              Last attempt failed: {data.lastError}
+              {data.lastAttemptAt ? ` (${relativeTime(data.lastAttemptAt)})` : ""}
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }

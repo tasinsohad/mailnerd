@@ -8,6 +8,6 @@ import { requireAdmin } from "@/lib/auth";
 export const getKeepAliveStatus = createServerFn({ method: "GET" })
   .middleware([requireAdmin])
   .handler(async () => {
-    const { getKeepAliveState } = await import("./keep-alive-core");
-    return { ...getKeepAliveState(), intervalHours: 12 };
+    const { getKeepAliveState, KEEP_ALIVE_INTERVAL_MS } = await import("./keep-alive-core");
+    return { ...getKeepAliveState(), intervalHours: KEEP_ALIVE_INTERVAL_MS / (60 * 60 * 1000) };
   });

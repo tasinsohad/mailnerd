@@ -17,7 +17,8 @@ const BOOT_DELAY_MS = 30_000;
 async function ping(): Promise<void> {
   const [{ getDb }, { sql }] = await Promise.all([import("../lib/db"), import("drizzle-orm")]);
 
-  const url = process.env.SUPABASE_URL;
+  // Trailing slash(es) would otherwise double up before /rest/v1/ (e.g. "https://x.supabase.co//rest/v1/").
+  const url = process.env.SUPABASE_URL?.replace(/\/+$/, "");
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const rest =
     url && key
