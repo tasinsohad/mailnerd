@@ -48,6 +48,7 @@ import {
   isStuckSetupRun,
   reconcileDue,
   resumeStep,
+  takesOverStuckRuns,
 } from "./setup-recovery";
 import {
   checkedServerTarget,
@@ -192,6 +193,11 @@ export interface ReconcileResult {
  * and queue each again from its first unfinished step, keeping its server choice. Also refreshes the runs
  * this process holds, which is how other processes on the same database know they're alive.
  *
+ * Only the production server takes runs over (SETUP_RECONCILE=1, set in docker-compose.yml): any other
+ * process on the same database can't see the production queue, so it would resume runs still going there.
+ * Without the flag a process only refreshes the runs it holds, so the production server doesn't take those
+ * over either.
+ *
  * Runs 30 s after the app starts and then about once a minute (queue.ts), and the job board may call it too:
  * at most one check per minute per process, whoever asks. Cheap when nothing is in flight (one query).
  * Never throws.
@@ -207,7 +213,7 @@ export async function reconcileStuckSetupRuns(): Promise<ReconcileResult> {
   r.lastStartedMs = now;
   r.running = true;
   try {
-    return await reconcileNow(now);
+    return await reconcileNow(now, takesOverStuckRuns(process.env));
   } catch (err) {
     console.error("[setup] Checking for interrupted setup runs failed:", err);
     return { ran: true, refreshed: 0, resumed: [] };
@@ -216,7 +222,7 @@ export async function reconcileStuckSetupRuns(): Promise<ReconcileResult> {
   }
 }
 
-async function reconcileNow(now: number): Promise<ReconcileResult> {
+async function reconcileNow(now: number, takeOver: boolean): Promise<ReconcileResult> {
   const result: ReconcileResult = { ran: true, refreshed: 0, resumed: [] };
   const db = getDb();
   const rows: { id: string; userId: string; setupState: SetupState | null }[] = await db
@@ -264,13 +270,14 @@ async function reconcileNow(now: number): Promise<ReconcileResult> {
       );
     result.refreshed = held.length;
   }
-  if (!queueKnown) return result;
+  if (!takeOver || !queueKnown) return result;
 
+  // Each row on its own: one malformed setup_state must not stop the others from resuming.
   for (const row of rows) {
-    const state = row.setupState;
-    if (!isStuckSetupRun(state, live(row.id), now)) continue;
-    const from = resumeStep(state);
     try {
+      const state = row.setupState;
+      if (!isStuckSetupRun(state, live(row.id), now)) continue;
+      const from = resumeStep(state);
       if (!from) {
         // Every step finished: only the run's final save was lost.
         await saveSetupState(db, row.id, state.runId, {

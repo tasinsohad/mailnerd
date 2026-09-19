@@ -171,9 +171,10 @@ export const getJobSetupBoard = createServerFn({ method: "GET" })
   .handler(async ({ data, context }) => {
     const { db, userId } = (context as any) as { db: any; userId: string };
 
-    // Resume any run left stuck by a restart before the board is read. Rate-limited to about once a minute
-    // per process inside reconcileStuckSetupRuns itself; fired without waiting so a slow check never delays
-    // the board.
+    // Resume any run left stuck by a restart before the board is read (only on the production server,
+    // SETUP_RECONCILE=1; elsewhere it only refreshes this process's own runs). Rate-limited to about once a
+    // minute per process inside reconcileStuckSetupRuns itself; fired without waiting so a slow check never
+    // delays the board.
     void reconcileStuckSetupRuns().catch((err) =>
       console.error("[getJobSetupBoard] reconcileStuckSetupRuns failed:", err),
     );

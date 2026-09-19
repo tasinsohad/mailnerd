@@ -9,6 +9,9 @@ services:
     environment:
       # Redis runs right here (below), so the queue never depends on an outside database or its quota.
       REDIS_URL: redis://redis:6379
+      # This is the production server: it resumes setup runs an app restart interrupted, at the step they were
+      # on. Only here, never on a dev server that shares the database (see DEPLOY.md).
+      SETUP_RECONCILE: "1"
       HOST: 0.0.0.0
       PORT: "3000"
     depends_on:

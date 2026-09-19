@@ -484,9 +484,10 @@ async function endFailedDomainSetupJob(job: Job, err: Error | undefined): Promis
 }
 
 // Setup runs left "queued" or "running" by a process that went away (domain-setup.ts reconcileStuckSetupRuns;
-// it also refreshes the runs this process holds). First 30 s after the app starts, once the queue is up and
-// BullMQ has put back jobs that stalled in the restart; then on a timer (the check spaces itself to one a
-// minute). Once per process: production loads this module twice.
+// it also refreshes the runs this process holds). Only the production server (SETUP_RECONCILE=1) resumes
+// them; every process refreshes its own. First 30 s after the app starts, once the queue is up and BullMQ has
+// put back jobs that stalled in the restart; then on a timer (the check spaces itself to one a minute). Once
+// per process: production loads this module twice.
 const globalForReconcile = globalThis as unknown as { __setupReconcileTimer?: NodeJS.Timeout };
 if (!globalForReconcile.__setupReconcileTimer) {
   const check = () => {

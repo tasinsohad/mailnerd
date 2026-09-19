@@ -81,6 +81,10 @@ chmod 600 .env
 
 `REDIS_URL` is ignored here: Docker Compose runs Redis next to the app.
 
+`SETUP_RECONCILE=1` is set by `docker-compose.yml`: it makes this server resume setup runs that an app
+restart interrupted. Set it only on the production server. A local dev server that uses the same database
+must not have it: it can't see this server's queue, so it would resume runs that are still going here.
+
 **Stored credentials are plain text.** SSH passwords, Mailcow API keys and admin passwords, and the
 Cloudflare API token are saved in the database unencrypted; nothing in the app encrypts them with
 `ENCRYPTION_KEY` today. Anyone who can read the database can read them, so:
@@ -114,9 +118,10 @@ being blocked.
 
 ### Updating
 
-First make sure no server setup is running (**Jobs** page) before rebuilding. Rebuilding restarts
-the app, and restarting it mid-setup makes the queue retry that setup from the start, which wipes
-and reinstalls Mailcow on that server.
+Rebuilding restarts the app. Setup runs resume at the step they were on (on the production server
+only, where `SETUP_RECONCILE=1` is set), but a run cut off in the middle of its Mailcow install starts
+that install again. So before rebuilding, check the **Jobs** board and make sure no run is mid-install
+(its Server step running).
 
 ```bash
 cd /opt/mailnerd

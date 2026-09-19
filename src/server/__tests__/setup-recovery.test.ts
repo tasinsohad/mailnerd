@@ -9,6 +9,7 @@ import {
   isStuckSetupRun,
   reconcileDue,
   resumeStep,
+  takesOverStuckRuns,
 } from "../setup-recovery";
 
 // A run is taken over only when its state says queued or running, nothing in this process holds it, the
@@ -137,5 +138,14 @@ describe("interruptedRunError", () => {
     expect(interruptedRunError("connect ECONNREFUSED")).toBe(
       "The setup stopped: connect ECONNREFUSED. Retry to continue.",
     );
+  });
+});
+
+describe("takesOverStuckRuns", () => {
+  it("takes over only when SETUP_RECONCILE is exactly 1 (the production server)", () => {
+    expect(takesOverStuckRuns({ SETUP_RECONCILE: "1" })).toBe(true);
+    expect(takesOverStuckRuns({})).toBe(false);
+    expect(takesOverStuckRuns({ SETUP_RECONCILE: "0" })).toBe(false);
+    expect(takesOverStuckRuns({ SETUP_RECONCILE: "true" })).toBe(false);
   });
 });

@@ -21,6 +21,16 @@ export const RUN_STALE_AFTER_MS = 5 * 60_000;
 export const INTERRUPTED_MESSAGE =
   "The setup was interrupted (the app restarted during it). Retry to continue.";
 
+/**
+ * Whether this process takes over (resumes or finishes) setup runs that other processes left unfinished:
+ * only when SETUP_RECONCILE is "1", which docker-compose.yml sets for the production server. Any other process
+ * on the same database (a dev server, a local build) must not: it can't see the production queue's jobs or
+ * claims, so it would resume runs that are still going there.
+ */
+export function takesOverStuckRuns(env: Record<string, string | undefined>): boolean {
+  return env.SETUP_RECONCILE === "1";
+}
+
 /** Whether a check may start now: at most one per `minIntervalMs`. */
 export function reconcileDue(
   lastStartedMs: number | null,
