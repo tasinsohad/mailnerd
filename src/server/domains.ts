@@ -467,7 +467,8 @@ export const addDomainsWizardAction = createServerFn({ method: "POST" })
       if (okCount === 0) {
         await db.delete(domainBatches).where(eq(domainBatches.id, batch.id)).catch(() => {});
       }
-      return { ok: true, okCount, failed };
+      // Only when something landed: an empty batch was just deleted above, so its id is no longer valid.
+      return { ok: true, okCount, failed, ...(okCount > 0 ? { batchId: batch.id } : {}) };
     } catch (error) {
       return { ok: false, error: describeErrorForLog(error) };
     }
