@@ -6,6 +6,8 @@ import {
   chipStatuses,
   currentMailboxProgress,
   jobBoardSummary,
+  mailboxProgressText,
+  manualRunProgress,
   retryStep,
   rowAction,
   setupStatusLine,
@@ -94,6 +96,28 @@ describe("currentMailboxProgress", () => {
     expect(currentMailboxProgress(s, progress({ startedAt: TEARLIER }))).toBeNull();
     expect(currentMailboxProgress(null, progress())).toBeNull();
     expect(currentMailboxProgress(s, null)).toBeNull();
+  });
+});
+
+describe("mailboxProgressText", () => {
+  it("count, percent and time left", () => {
+    expect(mailboxProgressText(progress({ done: 240, secondsPerMailbox: 0.72 }))).toBe(
+      "Mailboxes 240/500 · 48% · about 3 min left",
+    );
+    expect(mailboxProgressText(progress())).toBe("Mailboxes 0/500 · 0% · estimating time left…");
+  });
+});
+
+describe("manualRunProgress", () => {
+  it("keeps progress the page's own run saved, drops an earlier run's", () => {
+    const clicked = Date.parse(T1);
+    expect(manualRunProgress(null, clicked)).toBeNull();
+    expect(manualRunProgress(progress(), clicked)).not.toBeNull();
+    expect(manualRunProgress(progress({ startedAt: "2026-09-18T10:05:02.000Z" }), clicked)).not.toBeNull();
+    // A few seconds before the click: the browser's clock runs a little ahead of the server's.
+    expect(manualRunProgress(progress({ startedAt: "2026-09-18T10:04:55.000Z" }), clicked)).not.toBeNull();
+    expect(manualRunProgress(progress({ startedAt: TEARLIER }), clicked)).toBeNull();
+    expect(manualRunProgress(progress({ startedAt: "not a date" }), clicked)).toBeNull();
   });
 });
 

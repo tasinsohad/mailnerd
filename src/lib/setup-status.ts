@@ -26,6 +26,25 @@ export function currentMailboxProgress(
   return Date.parse(progress.startedAt) >= Date.parse(state.startedAt) ? progress : null;
 }
 
+/** "Mailboxes 240/500 · 48% · about 6 min left": the count, percent and time left of a mailbox run. */
+export function mailboxProgressText(p: MailboxProgress): string {
+  return `Mailboxes ${p.done}/${p.total} · ${progressPercent(p)}% · ${formatEta(secondsLeft(p))}`;
+}
+
+// Leeway for the browser's clock running a little ahead of the server's, which stamps startedAt.
+const CLOCK_LEEWAY_MS = 10_000;
+
+/**
+ * The progress of a mailbox run the page started itself at `startedMs` (browser time: a manual Set up
+ * mailboxes / Retry / Recreate), or null when that run hasn't saved any yet and what's saved is an earlier run's.
+ */
+export function manualRunProgress(progress: MailboxProgress | null, startedMs: number): MailboxProgress | null {
+  if (!progress) return null;
+  const progressStartedMs = Date.parse(progress.startedAt);
+  if (!Number.isFinite(progressStartedMs)) return null;
+  return progressStartedMs >= startedMs - CLOCK_LEEWAY_MS ? progress : null;
+}
+
 /** How long a step has been running, e.g. "12 min so far"; null when its start isn't known. */
 function elapsedText(startedAt: string | null | undefined, nowMs: number): string | null {
   if (!startedAt) return null;
@@ -65,8 +84,7 @@ export function setupStatusLine(row: SetupRowInfo, nowMs: number = Date.now()): 
         }
         case "mailboxes": {
           const p = currentMailboxProgress(s, row.mailboxProgress);
-          if (!p) return "Setting up mailboxes…";
-          return `Mailboxes ${p.done}/${p.total} · ${progressPercent(p)}% · ${formatEta(secondsLeft(p))}`;
+          return p ? mailboxProgressText(p) : "Setting up mailboxes…";
         }
         case "dkim":
           return "Syncing DKIM…";

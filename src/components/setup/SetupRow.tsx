@@ -95,7 +95,8 @@ function StepChip({ step, status }: { step: SetupStep; status: ChipStatus }) {
 }
 
 // Determinate while mailboxes are created (value = percent); otherwise a sliding segment (value null).
-function SetupProgress({ value, label }: { value: number | null; label: string }) {
+// Also used by the domain page for its manual mailbox runs.
+export function SetupProgress({ value, label }: { value: number | null; label: string }) {
   return (
     <div
       role="progressbar"

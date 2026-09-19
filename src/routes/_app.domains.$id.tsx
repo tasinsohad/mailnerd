@@ -4,6 +4,11 @@ import { getDomainDetails, pushDnsToCloudflare, updateDomain, repairDomainDns } 
 import { provisionServer } from "@/server/provisioning";
 import { setupMailcowDomain, fetchDkimAndSync } from "@/server/mailcow";
 import { regeneratePlan } from "@/server/plans";
+import { getDomainSetup, startDomainSetup } from "@/server/domain-setup-fns";
+import { SetupProgress, SetupRow, toSetupRowData } from "@/components/setup/SetupRow";
+import { isActive, type ServerChoice, type SetupState, type SetupStep } from "@/lib/setup-state";
+import { mailboxProgressText, manualRunProgress } from "@/lib/setup-status";
+import { progressPercent } from "@/lib/mailbox-progress";
 import { downloadCsv } from "@/lib/csv";
 import { buildExportCsv } from "@/lib/export-formats";
 import { ExportButton } from "@/components/ExportButton";
@@ -226,6 +231,14 @@ function DomainDetailsPage() {
     },
   });
 
+  // After starting (or answering) a setup run: refetch the setup row and the domain's details.
+  const refreshSetup = () => {
+    qc.invalidateQueries({ queryKey: ["domain-setup", id] });
+    qc.invalidateQueries({ queryKey: ["domain", id] });
+  };
+
+  // provisionServer starts a setup run from the server step (the run itself asks before wiping a server
+  // other domains use).
   const provisionMutation = useMutation({
     mutationFn: () => {
       setLogs([]);
@@ -234,8 +247,33 @@ function DomainDetailsPage() {
     },
     onSuccess: (res: any) => {
       if (res?.error) toast.error(res.error);
-      else toast.success("Server provisioned successfully");
-      qc.invalidateQueries({ queryKey: ["domain", id] });
+      else toast.success("Server setup started — follow it in the setup row above.");
+      refreshSetup();
+    },
+    onError: (err: any) => {
+      toast.error(err.message);
+      refreshSetup();
+    },
+  });
+
+  // Run Full Automation (every step) and Wipe & re-provision (from the server step, reinstalling Mailcow):
+  // a setup run on the server, which keeps going when this page is closed.
+  const startRunMutation = useMutation({
+    mutationFn: (opts: { fromStep?: SetupStep; serverChoice?: ServerChoice }) => {
+      setLogs([]);
+      setTerminalStatus("");
+      return startDomainSetup({ data: { domainId: id, ...opts } });
+    },
+    onSuccess: (res, opts) => {
+      if (!res.ok) toast.error(res.error ?? "Couldn't start setup");
+      else if (opts.serverChoice === "reinstall")
+        toast.success("Wipe & re-provision started — it keeps running if you close this page.");
+      else toast.success("Setup started — it keeps running if you close this page.");
+      refreshSetup();
+    },
+    onError: (err: any) => {
+      toast.error(err.message);
+      refreshSetup();
     },
   });
 
@@ -388,10 +426,10 @@ function DomainDetailsPage() {
   const handleWipeAndReprovision = () => {
     if (
       confirm(
-        "Wipe & re-provision EVERYTHING on this server?\n\nThis tears down Docker/Mailcow on the server, reinstalls from scratch, then re-runs DNS → provision → mailbox creation → DKIM. It takes 20-40 minutes and all current mailbox passwords will be regenerated.\n\nContinue?",
+        "Wipe & re-provision EVERYTHING on this server?\n\nThis tears down Docker/Mailcow on the server, reinstalls from scratch, then re-runs provision → mailbox creation → DKIM. It takes 20-40 minutes and all current mailbox passwords will be regenerated.\n\nContinue?",
       )
     ) {
-      runFullAutomation();
+      startRunMutation.mutate({ fromStep: "server", serverChoice: "reinstall" });
     }
   };
 
@@ -413,81 +451,46 @@ function DomainDetailsPage() {
     }
   });
 
-  const runFullAutomation = async () => {
-    try {
-      setLogs([]);
-      setTerminalStatus("");
-      toast.info("Starting full automation sequence...");
+  // This domain's setup run (the same row as the job board). Polled every 3 s while a run is queued, running
+  // or waiting for the user, and every 2 s while a manual mailbox run from this page is going, for its progress.
+  const manualMailboxRunPending = setupMailcowMutation.isPending || recreateMailboxesMutation.isPending;
+  const setupQuery = useQuery({
+    queryKey: ["domain-setup", id],
+    queryFn: () => getDomainSetup({ data: { domainId: id } }),
+    refetchInterval: (query) => {
+      if (manualMailboxRunPending) return 2000;
+      const row = query.state.data as { setupState?: unknown } | null | undefined;
+      return isActive(row?.setupState as SetupState | null) ? 3000 : false;
+    },
+  });
+  const setupRow = setupQuery.data ? toSetupRowData(setupQuery.data) : null;
+  const setupState = setupRow?.setupState ?? null;
+  const runActive = isActive(setupState);
+  // Queued or running: the run holds the domain, so the server refuses manual mailbox runs meanwhile.
+  const runInFlight = setupState?.status === "queued" || setupState?.status === "running";
 
-      toast.loading("Step 1: Pushing DNS...", { id: "auto" });
-      const resDns = await pushDnsMutation.mutateAsync();
-      if (resDns?.error) {
-        throw new Error(resDns.error);
-      }
-
-      toast.loading("Step 2: Provisioning VPS (this takes 2-3 minutes)...", { id: "auto" });
-      const resProv = await provisionMutation.mutateAsync();
-      if (resProv?.error) {
-        throw new Error(resProv.error);
-      }
-
-      // Poll until the domain status is "ready"
-      let isReady = false;
-      const startTime = Date.now();
-      const timeoutMs = 15 * 60 * 1000; // 15 minutes timeout
-
-      while (!isReady) {
-        // Wait 5 seconds
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-
-        if (Date.now() - startTime > timeoutMs) {
-          throw new Error("VPS provisioning timed out after 15 minutes");
-        }
-
-        // Fetch fresh domain details and update react-query cache/UI
-        const details = await qc.fetchQuery({
-          queryKey: ["domain", id],
-          queryFn: () => getDomainDetails({ data: { id } }),
-        });
-
-        if (!details?.domain) {
-          throw new Error("Failed to load domain details during polling");
-        }
-
-        const currentStatus = details.domain.status;
-        if (currentStatus === "ready") {
-          isReady = true;
-        } else if (currentStatus === "failed" || currentStatus === "error") {
-          throw new Error("VPS provisioning failed. Check SSH details or server logs.");
-        }
-      }
-
-      toast.loading("Step 3: Setting up Mailcow...", { id: "auto" });
-      const resMail = await setupMailcowMutation.mutateAsync();
-      if (resMail?.error) {
-        throw new Error(resMail.error);
-      }
-      // A run with no top-level error can still have rejected mailboxes — fail loudly.
-      if (resMail?.summary && resMail.summary.failed > 0) {
-        const firstErr = (resMail as any).results?.find(
-          (r: any) => r.type === "mailbox" && !r.success,
-        )?.error;
-        throw new Error(
-          `Only ${resMail.summary.created}/${resMail.summary.total} mailboxes were created${firstErr ? ` — ${firstErr}` : ""}`,
-        );
-      }
-
-      toast.loading("Step 4: Syncing DKIM...", { id: "auto" });
-      const resDkim = await syncDkimMutation.mutateAsync();
-      if (resDkim?.error) {
-        throw new Error(resDkim.error);
-      }
-
-      toast.success("Full automation completed successfully!", { id: "auto" });
-    } catch (err: any) {
-      toast.error("Automation failed: " + (err.message || String(err)), { id: "auto" });
+  // When the run moves on (a step starts or ends, the run ends, the domain's status changes), the rest of the
+  // page changes with it: the status, the terminal log, the mailboxes and their passwords. Refetch the details.
+  const setupSignature = setupRow
+    ? `${setupRow.status}:${setupState?.runId}:${setupState?.status}:${setupState?.step}`
+    : null;
+  const lastSetupSignature = useRef<string | null>(null);
+  useEffect(() => {
+    if (setupSignature === null) return;
+    if (lastSetupSignature.current !== null && lastSetupSignature.current !== setupSignature) {
+      qc.invalidateQueries({ queryKey: ["domain", id] });
     }
-  };
+    lastSetupSignature.current = setupSignature;
+  }, [setupSignature, id, qc]);
+
+  // Progress of the manual mailbox run this page started: only once that run has saved some.
+  const manualRunStartedMs = setupMailcowMutation.isPending
+    ? setupMailcowMutation.submittedAt
+    : recreateMailboxesMutation.isPending
+      ? recreateMailboxesMutation.submittedAt
+      : null;
+  const manualProgress =
+    manualRunStartedMs !== null ? manualRunProgress(setupRow?.mailboxProgress ?? null, manualRunStartedMs) : null;
 
   const exportCsv = (formatId: string) => {
     // Mail server clients connect to (mailcow host), e.g. mail.example.com
@@ -537,7 +540,9 @@ function DomainDetailsPage() {
     pushDnsMutation.isPending ||
     provisionMutation.isPending ||
     setupMailcowMutation.isPending ||
-    syncDkimMutation.isPending;
+    recreateMailboxesMutation.isPending ||
+    syncDkimMutation.isPending ||
+    startRunMutation.isPending;
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
@@ -564,11 +569,15 @@ function DomainDetailsPage() {
             className="h-10 gap-2 px-4 border-primary/40 text-primary hover:bg-primary/10"
           />
           <Button
-            onClick={runFullAutomation}
-            disabled={isAnyPending}
+            onClick={() => startRunMutation.mutate({})}
+            disabled={isAnyPending || runActive}
             className="h-10 gap-2 px-5 font-semibold"
           >
-            {isAnyPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4 fill-current" />}
+            {startRunMutation.isPending || runInFlight ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Zap className="h-4 w-4 fill-current" />
+            )}
             Run Full Automation
           </Button>
 
@@ -589,10 +598,16 @@ function DomainDetailsPage() {
               <DropdownMenuItem onClick={() => pushDnsMutation.mutate()} disabled={pushDnsMutation.isPending}>
                 <Send className="h-4 w-4" /> Push DNS to Cloudflare
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => provisionMutation.mutate()} disabled={provisionMutation.isPending}>
+              <DropdownMenuItem
+                onClick={() => provisionMutation.mutate()}
+                disabled={provisionMutation.isPending || runActive}
+              >
                 <Zap className="h-4 w-4" /> Provision server
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setupMailcowMutation.mutate()} disabled={setupMailcowMutation.isPending}>
+              <DropdownMenuItem
+                onClick={() => setupMailcowMutation.mutate()}
+                disabled={setupMailcowMutation.isPending || runInFlight}
+              >
                 <Mail className="h-4 w-4" /> Set up mailboxes
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => syncDkimMutation.mutate()} disabled={syncDkimMutation.isPending}>
@@ -603,19 +618,22 @@ function DomainDetailsPage() {
               <DropdownMenuItem onClick={() => repairDnsMutation.mutate()} disabled={repairDnsMutation.isPending}>
                 <Network className="h-4 w-4" /> Fix DNS (un-proxy)
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleRecreateMailboxes} disabled={recreateMailboxesMutation.isPending}>
+              <DropdownMenuItem
+                onClick={handleRecreateMailboxes}
+                disabled={recreateMailboxesMutation.isPending || runInFlight}
+              >
                 <RefreshCw className="h-4 w-4" /> Recreate mailboxes
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={handleRegeneratePlan}
-                disabled={regeneratePlanMutation.isPending || recreateMailboxesMutation.isPending}
+                disabled={regeneratePlanMutation.isPending || recreateMailboxesMutation.isPending || runInFlight}
               >
                 <ListPlus className="h-4 w-4" /> Change mailbox count…
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={handleWipeAndReprovision}
-                disabled={isAnyPending}
+                disabled={isAnyPending || runActive}
                 className="text-destructive focus:text-destructive"
               >
                 <Trash2 className="h-4 w-4" /> Wipe &amp; re-provision
@@ -624,6 +642,21 @@ function DomainDetailsPage() {
           </DropdownMenu>
         </div>
       </div>
+
+      {setupRow && (
+        <section
+          aria-labelledby="domain-setup-title"
+          className="overflow-hidden rounded-xl border border-border bg-card"
+        >
+          <h2
+            id="domain-setup-title"
+            className="border-b border-border px-4 py-3 font-display text-base font-semibold text-foreground sm:px-5"
+          >
+            Setup
+          </h2>
+          <SetupRow row={setupRow} onChanged={refreshSetup} />
+        </section>
+      )}
 
       <HealthCard
         domainId={id}
@@ -956,6 +989,13 @@ function DomainDetailsPage() {
           filenameBase={domain?.name ?? "domain"}
         />
 
+        {manualProgress && (
+          <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3 sm:p-4">
+            <p className="break-words text-sm text-foreground">{mailboxProgressText(manualProgress)}</p>
+            <SetupProgress value={progressPercent(manualProgress)} label="Mailbox creation progress" />
+          </div>
+        )}
+
         {unfinishedInboxes.length > 0 && (
           <div className="rounded-lg border border-warning/40 bg-warning/10 p-4 flex flex-col gap-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -971,11 +1011,7 @@ function DomainDetailsPage() {
               </div>
               <Button
                 onClick={() => setupMailcowMutation.mutate()}
-                disabled={
-                  isAnyPending ||
-                  recreateMailboxesMutation.isPending ||
-                  regeneratePlanMutation.isPending
-                }
+                disabled={isAnyPending || regeneratePlanMutation.isPending || runInFlight}
                 className="h-9 w-full shrink-0 gap-2 rounded-xl sm:w-auto"
               >
                 {setupMailcowMutation.isPending ? (
