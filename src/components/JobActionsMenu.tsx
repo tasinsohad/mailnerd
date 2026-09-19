@@ -14,28 +14,32 @@ import { pushDnsToCloudflare, repairDomainDns } from "@/server/domains";
 import { provisionServer } from "@/server/provisioning";
 import { setupMailcowDomain, fetchDkimAndSync } from "@/server/mailcow";
 import { ResetPasswordsDialog } from "@/components/ResetPasswordsDialog";
+import { wipeOncePerServer } from "@/lib/wipe-plan";
 
 // Run any per-domain action across EVERY domain in a job. Same control set as a single
 // domain, applied to the whole batch sequentially with a running progress toast.
 export function JobActionsMenu({
-  domainIds,
+  domains,
   batchId,
   jobName,
   onChanged,
 }: {
-  domainIds: string[];
+  /** The job's domains; the IP lets "Wipe & re-provision" wipe a shared server once. */
+  domains: { id: string; ipAddress?: string | null }[];
   batchId?: string;
   jobName?: string;
   onChanged?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
+  const domainIds = domains.map((d) => d.id);
   const n = domainIds.length;
 
   const runAll = async (
     label: string,
     fn: (domainId: string) => Promise<any>,
     confirmMsg?: string,
+    ids: string[] = domainIds,
   ) => {
     if (!n) return;
     if (confirmMsg && !confirm(confirmMsg)) return;
@@ -45,7 +49,7 @@ export function JobActionsMenu({
     for (let i = 0; i < n; i++) {
       toast.loading(`${label} — ${i + 1}/${n}…`, { id: "jobactions" });
       try {
-        const res: any = await fn(domainIds[i]);
+        const res: any = await fn(ids[i]);
         if (res?.error || (res?.summary && res.summary.failed > 0)) fail++;
         else ok++;
       } catch {
@@ -57,6 +61,22 @@ export function JobActionsMenu({
     toast[fail ? "error" : "success"](
       `${label}: ${ok} ok${fail ? `, ${fail} failed` : ""} across ${n} domain${n !== 1 ? "s" : ""}.`,
       { id: "jobactions", duration: 8000 },
+    );
+  };
+
+  // A server that several of the job's domains share is wiped once: the first domain on it reinstalls, the
+  // others are added to the fresh Mailcow (the server lock runs them after it).
+  const wipeAll = () => {
+    const plan = wipeOncePerServer(domains);
+    const choice = new Map(plan.map((p) => [p.id, p.serverChoice]));
+    const servers = plan.filter((p) => p.serverChoice === "reinstall").length;
+    runAll(
+      "Wiping & re-provisioning",
+      (id) => provisionServer({ data: { domainId: id, serverChoice: choice.get(id) ?? "reinstall" } }),
+      `Wipe & re-provision the servers of ALL ${n} domains from scratch? Each takes 20–40 min. ` +
+        `Domains that share a server are reinstalled once (${servers} server${servers !== 1 ? "s" : ""} ` +
+        `wiped); the other domains on it are added to the fresh Mailcow.`,
+      plan.map((p) => p.id),
     );
   };
 
@@ -109,13 +129,7 @@ export function JobActionsMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="text-destructive focus:text-destructive"
-          onClick={() =>
-            runAll(
-              "Wiping & re-provisioning",
-              (id) => provisionServer({ data: { domainId: id, serverChoice: "reinstall" } }),
-              `Wipe & re-provision ALL ${n} servers from scratch? Each takes 20–40 min.`,
-            )
-          }
+          onClick={wipeAll}
         >
           <Trash2 className="h-4 w-4" /> Wipe &amp; re-provision
         </DropdownMenuItem>

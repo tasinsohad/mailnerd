@@ -7,7 +7,13 @@ import { toast } from "sonner";
 import type { HealthAction, DomainHealth, Indicator } from "@/server/health";
 import { runJobHealth, getBatchServerHealth } from "@/server/health-actions";
 import { runJobRemediation } from "@/server/remediation";
-import { ACTION_LABEL, ACTION_ORDER, DESTRUCTIVE_ACTIONS, runHealthFix } from "@/lib/health-fixes";
+import {
+  ACTION_LABEL,
+  ACTION_ORDER,
+  DESTRUCTIVE_ACTIONS,
+  healthFixTargets,
+  runHealthFix,
+} from "@/lib/health-fixes";
 import { LiveConsole, openConsole, type ConsoleLine } from "@/components/LiveConsole";
 
 type Domain = { id: string; name: string; ipAddress?: string | null; health?: DomainHealth | null };
@@ -133,9 +139,17 @@ export function JobIssuesPanel({
   const runFix = async (bucket: FixBucket) => {
     const label = ACTION_LABEL[bucket.action];
     const n = bucket.domainIds.length;
+    // Re-provision wipes each server once: the other targets on a server join the fresh Mailcow.
+    const ipById = new Map(domains.map((d) => [d.id, d.ipAddress ?? null]));
+    const targets = healthFixTargets(
+      bucket.action,
+      bucket.domainIds.map((id) => ({ id, ipAddress: ipById.get(id) ?? null })),
+    );
     if (DESTRUCTIVE_ACTIONS.has(bucket.action)) {
       const verb = bucket.action === "provision" ? "wipe & re-provision" : "delete & recreate mailboxes for";
-      if (!confirm(`This will ${verb} ${n} target${n === 1 ? "" : "s"}. Continue?`)) return;
+      const shared =
+        bucket.action === "provision" ? " Domains that share a server are reinstalled once." : "";
+      if (!confirm(`This will ${verb} ${n} target${n === 1 ? "" : "s"}.${shared} Continue?`)) return;
     }
     setRunningAction(bucket.action);
     let ok = 0;
@@ -143,7 +157,9 @@ export function JobIssuesPanel({
     for (let i = 0; i < n; i++) {
       toast.loading(`${label} — ${i + 1}/${n}…`, { id: "jobfix" });
       try {
-        const res: any = await runHealthFix(bucket.action, bucket.domainIds[i]);
+        const res: any = await runHealthFix(bucket.action, targets[i].id, {
+          serverChoice: targets[i].serverChoice,
+        });
         if (res?.error || (res?.summary && res.summary.failed > 0)) fail++;
         else ok++;
       } catch {
