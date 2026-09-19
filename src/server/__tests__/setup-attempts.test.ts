@@ -5,6 +5,11 @@ import {
   runAttempts,
   ServerBusyError,
   isServerBusyError,
+  DomainBusyError,
+  isDomainBusyError,
+  isBusyWait,
+  RunSupersededError,
+  isRunSupersededError,
   SERVER_BUSY_RECHECK_MS,
 } from "../setup-attempts";
 
@@ -47,6 +52,28 @@ describe("isServerBusyError", () => {
   });
 });
 
+describe("DomainBusyError and RunSupersededError", () => {
+  it("recognise the class and a same-named error from another module copy", () => {
+    expect(isDomainBusyError(new DomainBusyError("mailbox setup"))).toBe(true);
+    expect(isRunSupersededError(new RunSupersededError())).toBe(true);
+    const busyCopy = new Error("busy");
+    busyCopy.name = "DomainBusyError";
+    const supersededCopy = new Error("replaced");
+    supersededCopy.name = "RunSupersededError";
+    expect(isDomainBusyError(busyCopy)).toBe(true);
+    expect(isRunSupersededError(supersededCopy)).toBe(true);
+    expect(isDomainBusyError(new Error("boom"))).toBe(false);
+    expect(isRunSupersededError(new Error("boom"))).toBe(false);
+  });
+
+  it("counts a busy server or a busy domain as a wait, not a failure", () => {
+    expect(isBusyWait(new ServerBusyError("1.2.3.4"))).toBe(true);
+    expect(isBusyWait(new DomainBusyError("mailbox setup"))).toBe(true);
+    expect(isBusyWait(new RunSupersededError())).toBe(false);
+    expect(isBusyWait(new Error("boom"))).toBe(false);
+  });
+});
+
 function harness(outcomes: (string | Error)[]) {
   const calls: { attempt: number; finalAttempt: boolean }[] = [];
   const sleeps: number[] = [];
@@ -66,7 +93,7 @@ function harness(outcomes: (string | Error)[]) {
         sleeps.push(ms);
       },
       onRetry: (failed) => retries.push(failed),
-      onServerBusy: (_err, waitMs) => busy.push(waitMs),
+      onBusy: (_err, waitMs) => busy.push(waitMs),
     });
   return { run, calls, sleeps, retries, busy };
 }
@@ -110,6 +137,15 @@ describe("runAttempts", () => {
     expect(h.sleeps).toEqual([SERVER_BUSY_RECHECK_MS, SERVER_BUSY_RECHECK_MS, 30_000]);
     expect(h.busy).toEqual([SERVER_BUSY_RECHECK_MS, SERVER_BUSY_RECHECK_MS]);
     expect(h.retries).toEqual([1]);
+  });
+
+  it("waits for a domain another run holds without using up an attempt", async () => {
+    const h = harness([new DomainBusyError("mailbox setup"), "done"]);
+    await expect(h.run()).resolves.toBe("done");
+    expect(h.calls.map((c) => c.attempt)).toEqual([1, 1]);
+    expect(h.sleeps).toEqual([SERVER_BUSY_RECHECK_MS]);
+    expect(h.busy).toEqual([SERVER_BUSY_RECHECK_MS]);
+    expect(h.retries).toEqual([]);
   });
 
   it("still gets its final attempt after waiting for a busy server on it", async () => {

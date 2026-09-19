@@ -19,7 +19,13 @@ import {
   type SetupStep,
 } from "../lib/setup-state";
 import { runDomainSetup, type SetupDeps } from "./domain-setup-core";
-import { ServerBusyError, isServerBusyError } from "./setup-attempts";
+import {
+  DomainBusyError,
+  RunSupersededError,
+  ServerBusyError,
+  isServerBusyError,
+  isRunSupersededError,
+} from "./setup-attempts";
 import {
   claimDomain,
   releaseDomain,
@@ -55,17 +61,28 @@ export async function loadSetupState(db: Db, domainId: string): Promise<SetupSta
   return (row?.setupState as SetupState | null | undefined) ?? null;
 }
 
-/** Merge `patch` into the domain's saved setup state and save it. */
+/**
+ * Merge `patch` into run `runId`'s saved setup state and save it. Writes only while the domain's
+ * setup_state still belongs to that run (the UPDATE is conditional on its runId), so a run that was replaced
+ * can never overwrite its successor. Then it writes nothing, doesn't throw, and returns the state as it is
+ * now (null if there is none): callers compare its runId with their own to learn they were superseded.
+ */
 export async function saveSetupState(
   db: Db,
   domainId: string,
+  runId: string,
   patch: Partial<SetupState>,
-): Promise<SetupState> {
+): Promise<SetupState | null> {
   const prev = await loadSetupState(db, domainId);
-  if (!prev) throw new Error("This domain has no setup run to update.");
+  if (prev?.runId !== runId) return prev;
   const next = mergeSetupState(prev, patch, new Date().toISOString());
-  await db.update(domains).set({ setupState: next }).where(eq(domains.id, domainId));
-  return next;
+  const written: unknown[] = await db
+    .update(domains)
+    .set({ setupState: next })
+    .where(and(eq(domains.id, domainId), sql`${domains.setupState}->>'runId' = ${runId}`))
+    .returning({ id: domains.id });
+  // Replaced between the read and the write: report the state that replaced it.
+  return written.length ? next : loadSetupState(db, domainId);
 }
 
 /**
@@ -116,7 +133,7 @@ export async function enqueueDomainSetup(opts: {
     releaseDomain(domainId, claim.owner);
     // Queueing failed after the state was saved: show why on the board instead of a run stuck at "queued".
     if (stateSaved) {
-      await saveSetupState(db, domainId, {
+      await saveSetupState(db, domainId, runId, {
         status: "failed",
         error: errorMessage(err),
         finishedAt: new Date().toISOString(),
@@ -129,11 +146,13 @@ export async function enqueueDomainSetup(opts: {
 }
 
 /**
- * One attempt of a domain's setup run, called by the queue's worker or its in-process fallback, which hold the
- * domain's claim. Returns "done", "waiting" (for the user's server choice) or "superseded" (a newer run
- * replaced this one, so nothing was done). Throws when a step fails: the step is marked failed with the error,
- * and on the final attempt the run is marked failed. Throws ServerBusyError when another setup is using the
- * server: the run goes back to "queued" and the caller tries again later without counting an attempt.
+ * One attempt of a domain's setup run, called by the queue's worker or its in-process fallback. It first
+ * (re)claims the domain with the run's lock owner, which also refreshes the claim during a long run.
+ * Returns "done", "waiting" (for the user's server choice) or "superseded" (a newer run replaced this one:
+ * it stops at its next state write, and writes nothing). Throws when a step fails: the step is marked failed
+ * with the error, and on the final attempt the run is marked failed. Throws ServerBusyError when another
+ * setup is using the server (the run goes back to "queued"), or DomainBusyError when another run holds the
+ * domain (nothing is written): the caller tries again later without counting an attempt.
  */
 export async function executeDomainSetupJob(
   domainId: string,
@@ -146,6 +165,14 @@ export async function executeDomainSetupJob(
   if (current?.runId !== runId) {
     logFn(`Skipped an older setup run for this domain: a newer run replaced it.\n`);
     return "superseded";
+  }
+
+  // Held for the whole run. The enqueuer took it, but an attempt after an app restart (or a long wait) may
+  // find it gone or stale, so each attempt claims it again. Refused: wait, as for a busy server.
+  const claim = claimDomain(domainId, "server setup", opts.lockOwner);
+  if (!claim.ok) {
+    logFn(`Waiting for the ${claim.running} on this domain to finish before continuing...\n`);
+    throw new DomainBusyError(claim.running);
   }
 
   // The last pass found the server busy (it left the run queued at the server step). While it still is, check
@@ -194,7 +221,10 @@ export async function executeDomainSetupJob(
     load: async () => ({ ...latest, attempt: opts.attempt - 1 }),
 
     save: async (patch) => {
-      latest = await saveSetupState(db, domainId, patch);
+      const saved = await saveSetupState(db, domainId, runId, patch);
+      // Replaced by a newer run: stop here (runDomainSetup's own failure save stops the same way).
+      if (saved?.runId !== runId) throw new RunSupersededError();
+      latest = saved;
       // Narrate the run in the terminal log: a header when a step starts, and how it ended.
       if (patch.step && patch.step !== currentStep) {
         currentStep = patch.step;
@@ -375,10 +405,14 @@ export async function executeDomainSetupJob(
     log(`Setup attempt ${opts.attempt}${opts.finalAttempt ? " (last)" : ""}.`);
     return await runDomainSetup(deps);
   } catch (err) {
+    if (isRunSupersededError(err)) {
+      log("A newer setup run replaced this one, so this one stops here.");
+      return "superseded";
+    }
     const message = errorMessage(err);
     if (isServerBusyError(err)) {
       log(message, "Queued");
-      await saveSetupState(db, domainId, {
+      await saveSetupState(db, domainId, runId, {
         status: "queued",
         error: null,
         steps: { ...latest.steps, server: "pending" },
@@ -387,7 +421,7 @@ export async function executeDomainSetupJob(
       );
     } else if (opts.finalAttempt) {
       log(`Setup failed: ${message}`, "Failed");
-      await saveSetupState(db, domainId, {
+      await saveSetupState(db, domainId, runId, {
         status: "failed",
         error: message,
         finishedAt: new Date().toISOString(),

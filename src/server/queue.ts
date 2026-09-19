@@ -13,7 +13,7 @@ import { ensureMailDomains, createMailboxes, syncDkim, unproxyDns } from "./pipe
 import { ensureWorkingApiKey } from "./mailcow-key";
 import {
   isFinalAttempt,
-  isServerBusyError,
+  isBusyWait,
   runAttempts,
   SETUP_ATTEMPTS,
   RETRY_BASE_MS,
@@ -383,8 +383,9 @@ async function runQueuedDomainSetup(connection: Redis, job: Job, token: string |
       });
       finished = true;
     } catch (err) {
-      // Another setup is using the server: check again later without using up an attempt.
-      if (isServerBusyError(err)) {
+      // Another setup is using the server, or another run holds the domain: check again later without
+      // using up an attempt.
+      if (isBusyWait(err)) {
         await job.moveToDelayed(Date.now() + SERVER_BUSY_RECHECK_MS, token);
         throw new DelayedError();
       }
@@ -423,7 +424,7 @@ async function runDomainSetupInProcess(data: DomainSetupJobData, notice?: string
       sleep,
       onRetry: (failed, delayMs) =>
         logFn(`Attempt ${failed} failed. Trying again in ${Math.round(delayMs / 1000)} s...\n`),
-      onServerBusy: (_err, waitMs) => logFn(`Checking the server again in ${Math.round(waitMs / 1000)} s...\n`),
+      onBusy: (_err, waitMs) => logFn(`Checking again in ${Math.round(waitMs / 1000)} s...\n`),
     });
   } catch (err) {
     console.error(`In-process setup run failed for domain ${domainId}:`, err);

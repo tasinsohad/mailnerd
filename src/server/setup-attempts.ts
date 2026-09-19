@@ -35,16 +35,49 @@ export function isServerBusyError(err: unknown): err is ServerBusyError {
 }
 
 /**
+ * Another run holds the domain itself (domain-locks.ts claimDomain) when an attempt starts: this run's own
+ * claim went stale and was taken, for example by a manual mailbox run. Not a failed attempt either: the run
+ * waits SERVER_BUSY_RECHECK_MS and tries again.
+ */
+export class DomainBusyError extends Error {
+  constructor(readonly running: string) {
+    super(`Waiting for the ${running} on this domain to finish before continuing.`);
+    this.name = "DomainBusyError";
+  }
+}
+
+export function isDomainBusyError(err: unknown): err is DomainBusyError {
+  return err instanceof DomainBusyError || (err instanceof Error && err.name === "DomainBusyError");
+}
+
+/** Wait and try the same attempt again later: another run has the server or the domain. */
+export function isBusyWait(err: unknown): err is ServerBusyError | DomainBusyError {
+  return isServerBusyError(err) || isDomainBusyError(err);
+}
+
+/** The domain's setup_state now belongs to a newer run: this run stops without writing anything more. */
+export class RunSupersededError extends Error {
+  constructor() {
+    super("A newer setup run replaced this one.");
+    this.name = "RunSupersededError";
+  }
+}
+
+export function isRunSupersededError(err: unknown): err is RunSupersededError {
+  return err instanceof RunSupersededError || (err instanceof Error && err.name === "RunSupersededError");
+}
+
+/**
  * The in-process fallback's retry loop, matching the queue: up to `attempts` attempts with 30 s / 60 s
- * waits between failures. A busy server waits and tries the same attempt again without counting it.
- * Returns the first successful result, or throws the last attempt's error.
+ * waits between failures. A busy server or domain waits and tries the same attempt again without counting
+ * it. Returns the first successful result, or throws the last attempt's error.
  */
 export async function runAttempts<T>(opts: {
   attempts: number;
   run: (attempt: number, finalAttempt: boolean) => Promise<T>;
   sleep: (ms: number) => Promise<void>;
   onRetry?: (failedAttempt: number, delayMs: number, err: unknown) => void;
-  onServerBusy?: (err: ServerBusyError, waitMs: number) => void;
+  onBusy?: (err: ServerBusyError | DomainBusyError, waitMs: number) => void;
 }): Promise<T> {
   let attempt = 1;
   for (;;) {
@@ -52,8 +85,8 @@ export async function runAttempts<T>(opts: {
     try {
       return await opts.run(attempt, finalAttempt);
     } catch (err) {
-      if (isServerBusyError(err)) {
-        opts.onServerBusy?.(err, SERVER_BUSY_RECHECK_MS);
+      if (isBusyWait(err)) {
+        opts.onBusy?.(err, SERVER_BUSY_RECHECK_MS);
         await opts.sleep(SERVER_BUSY_RECHECK_MS);
         continue;
       }
