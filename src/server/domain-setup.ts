@@ -551,6 +551,8 @@ export async function executeDomainSetupJob(
         onProgress: (done, failed, _total, finished) =>
           finished ? void progress.finish(done, failed) : progress.update(done),
       });
+      // createMailboxes reports the finish before it returns: let that last write land first.
+      await progress.settled();
       log(
         `Mailboxes: ${summary.created}/${summary.total} created${summary.failed ? `, ${summary.failed} failed` : ""}.`,
       );

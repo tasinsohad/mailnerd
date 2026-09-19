@@ -72,6 +72,9 @@ export const setupMailcowDomain = createServerFn({ method: "POST" })
         onProgress: (done, failedCount, total, finished) =>
           finished ? void progressWriter.finish(done, failedCount) : progressWriter.update(done),
       });
+      // createMailboxes reports the finish before it returns: let that last write land before the page
+      // stops polling the progress.
+      await progressWriter.settled();
       return { results: [...domainResults, ...mailboxResults], summary, failed };
     } finally {
       releaseDomain(loaded.id, claim.owner);
