@@ -17,6 +17,8 @@ export interface SetupState {
   /** Set while the run waits for the user to decide what to do with a server that already runs Mailcow. */
   waiting: null | { kind: "server-choice"; ip: string; hostname: string | null; otherDomains: string[] };
   serverChoice: ServerChoice | null;
+  /** When the current step started running (set by runDomainSetup each time a step starts); null before that. */
+  stepStartedAt: string | null;
   startedAt: string;
   updatedAt: string;
   finishedAt: string | null;
@@ -47,6 +49,7 @@ export function newSetupState(
     error: null,
     waiting: null,
     serverChoice: opts.serverChoice ?? null,
+    stepStartedAt: null,
     startedAt: nowIso,
     updatedAt: nowIso,
     finishedAt: null,

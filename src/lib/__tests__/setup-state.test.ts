@@ -7,7 +7,7 @@ const T1 = "2026-09-18T10:05:00.000Z";
 describe("newSetupState", () => {
   it("starts queued with every step pending", () => {
     const s = newSetupState("r1", T0);
-    expect(s).toMatchObject({ runId: "r1", status: "queued", step: null, attempt: 0, error: null, waiting: null, serverChoice: null, startedAt: T0, updatedAt: T0, finishedAt: null });
+    expect(s).toMatchObject({ runId: "r1", status: "queued", step: null, attempt: 0, error: null, waiting: null, serverChoice: null, stepStartedAt: null, startedAt: T0, updatedAt: T0, finishedAt: null });
     expect(SETUP_STEPS.map((k) => s.steps[k])).toEqual(["pending", "pending", "pending", "pending"]);
   });
   it("marks the steps before fromStep as done", () => {

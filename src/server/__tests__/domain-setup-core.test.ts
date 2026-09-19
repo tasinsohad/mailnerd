@@ -136,6 +136,28 @@ describe("runDomainSetup", () => {
     expect(state.finishedAt).not.toBeNull();
   });
 
+  it("stamps stepStartedAt in the save that marks each step running", async () => {
+    const { deps, getState } = makeFake(freshState(), { hasMailcow: false });
+    const startsRunning: Partial<SetupState>[] = [];
+    const save = deps.save;
+    deps.save = async (patch) => {
+      if (patch.step && patch.steps?.[patch.step] === "running") startsRunning.push(patch);
+      return save(patch);
+    };
+    const before = Date.now();
+
+    await runDomainSetup(deps);
+
+    expect(startsRunning.map((p) => p.step)).toEqual(["dns", "server", "mailboxes", "dkim"]);
+    for (const patch of startsRunning) {
+      expect(typeof patch.stepStartedAt).toBe("string");
+      const ms = Date.parse(patch.stepStartedAt as string);
+      expect(ms).toBeGreaterThanOrEqual(before);
+      expect(ms).toBeLessThanOrEqual(Date.now());
+    }
+    expect(getState().stepStartedAt).toBe(startsRunning[3].stepStartedAt);
+  });
+
   it("only runs mailboxes and dkim when dns and server are already done", async () => {
     const { deps, calls } = makeFake(freshState({ fromStep: "mailboxes" }), { hasMailcow: false });
 

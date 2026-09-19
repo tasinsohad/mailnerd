@@ -26,14 +26,24 @@ export function currentMailboxProgress(
   return Date.parse(progress.startedAt) >= Date.parse(state.startedAt) ? progress : null;
 }
 
+/** How long a step has been running, e.g. "12 min so far"; null when its start isn't known. */
+function elapsedText(startedAt: string | null | undefined, nowMs: number): string | null {
+  if (!startedAt) return null;
+  const startedMs = Date.parse(startedAt);
+  if (!Number.isFinite(startedMs)) return null;
+  // Clamped: the browser's clock may run a little behind the server's.
+  const minutes = Math.floor(Math.max(0, nowMs - startedMs) / 60_000);
+  return minutes < 1 ? "under a minute so far" : `${minutes} min so far`;
+}
+
 /**
  * One line saying where the domain's setup is. Null while the run waits for the user's server choice: the
  * choice panel takes its place.
  *
- * The Mailcow install shows no elapsed time: the run doesn't save when its step started, and its updatedAt
- * is refreshed by the liveness heartbeat about once a minute, so it can't stand in for that.
+ * The Mailcow install shows its elapsed time from stepStartedAt (not updatedAt: the liveness heartbeat
+ * refreshes that about once a minute). Runs saved before stepStartedAt existed show the plain text.
  */
-export function setupStatusLine(row: SetupRowInfo): string | null {
+export function setupStatusLine(row: SetupRowInfo, nowMs: number = Date.now()): string | null {
   const s = row.setupState;
   if (!s) return row.status === "ready" ? "Set up" : "Not started";
   switch (s.status) {
@@ -49,8 +59,10 @@ export function setupStatusLine(row: SetupRowInfo): string | null {
       switch (s.step) {
         case "dns":
           return "Setting up DNS…";
-        case "server":
-          return "Installing Mailcow (usually 20–40 min)";
+        case "server": {
+          const elapsed = elapsedText(s.stepStartedAt, nowMs);
+          return `Installing Mailcow (usually 20–40 min)${elapsed ? ` · ${elapsed}` : ""}`;
+        }
         case "mailboxes": {
           const p = currentMailboxProgress(s, row.mailboxProgress);
           if (!p) return "Setting up mailboxes…";

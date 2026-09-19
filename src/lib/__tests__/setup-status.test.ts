@@ -46,6 +46,22 @@ describe("setupStatusLine", () => {
     expect(setupStatusLine(running("dkim"))).toBe("Syncing DKIM…");
     expect(setupStatusLine(running(null))).toBe("Starting…");
   });
+  it("server: how long the install has been running, from stepStartedAt", () => {
+    const server = (stepStartedAt: string | null) =>
+      row({ setupState: state({ status: "running", step: "server", stepStartedAt }) });
+    const now = Date.parse(T1);
+    expect(setupStatusLine(server("2026-09-18T09:53:00.000Z"), now)).toBe(
+      "Installing Mailcow (usually 20–40 min) · 12 min so far",
+    );
+    expect(setupStatusLine(server("2026-09-18T10:04:30.000Z"), now)).toBe(
+      "Installing Mailcow (usually 20–40 min) · under a minute so far",
+    );
+    // A browser clock behind the server's doesn't show a negative time.
+    expect(setupStatusLine(server("2026-09-18T10:06:00.000Z"), now)).toBe(
+      "Installing Mailcow (usually 20–40 min) · under a minute so far",
+    );
+    expect(setupStatusLine(server(null), now)).toBe("Installing Mailcow (usually 20–40 min)");
+  });
   it("mailboxes: count, percent and time left from this run's progress", () => {
     const r = row({
       setupState: state({ status: "running", step: "mailboxes" }),

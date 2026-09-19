@@ -47,7 +47,12 @@ export async function runDomainSetup(deps: SetupDeps): Promise<"done" | "waiting
 
   for (const step of SETUP_STEPS) {
     if (state.steps[step] === "done") continue;
-    state = await deps.save({ step, steps: { ...state.steps, [step]: "running" } });
+    // stepStartedAt lets the board show how long the step has run (a Mailcow install takes 20–40 min).
+    state = await deps.save({
+      step,
+      steps: { ...state.steps, [step]: "running" },
+      stepStartedAt: new Date().toISOString(),
+    });
     try {
       if (step === "server") {
         const inspection = await deps.inspectServer();
