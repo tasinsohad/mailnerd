@@ -309,13 +309,15 @@ async function runQueuedSetup(connection: Redis, job: Job, token: string | undef
 }
 
 // A queued job's log line goes to the domain's log channel: over Redis pub/sub for the SSE handler, and on
-// jobEvents for listeners in this process.
+// jobEvents for listeners in this process. Both carry the same payload as an in-process run's: the log
+// viewers render `chunk` (`msg` stays for clients that still read it).
 function queuedLogFn(connection: Redis, domainId: string): { logFn: LogFn; close: () => Promise<void> } {
   const channel = `server-log:${domainId}`;
   const pub = connection.duplicate();
   const logFn: LogFn = (msg, status) => {
-    pub.publish(channel, JSON.stringify({ msg, status }));
-    jobEvents.emit(channel, { msg, status, chunk: msg });
+    const payload = { chunk: msg, msg, status };
+    pub.publish(channel, JSON.stringify(payload));
+    jobEvents.emit(channel, payload);
   };
   return { logFn, close: () => pub.quit().then(() => undefined, () => pub.disconnect()) };
 }
