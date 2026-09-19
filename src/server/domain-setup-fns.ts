@@ -14,6 +14,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { domains, domainBatches } from "@/lib/db/schema";
 import { enqueueDomainSetup, reconcileStuckSetupRuns } from "./domain-setup";
 import { isActive, type SetupState } from "@/lib/setup-state";
+import { retryStep } from "@/lib/setup-status";
 
 const fromStepSchema = z.enum(["dns", "server", "mailboxes", "dkim"]);
 const serverChoiceSchema = z.enum(["reuse", "reinstall"]);
@@ -105,7 +106,18 @@ export const startJobSetup = createServerFn({ method: "POST" })
         continue;
       }
       try {
-        await enqueueDomainSetup({ domainId: row.id, userId: row.userId });
+        // A domain whose last run failed resumes at the step it failed on (keeping the server choice it
+        // already made, if any), instead of starting the whole run over from DNS.
+        if (state?.status === "failed") {
+          await enqueueDomainSetup({
+            domainId: row.id,
+            userId: row.userId,
+            fromStep: retryStep(state),
+            serverChoice: state.serverChoice,
+          });
+        } else {
+          await enqueueDomainSetup({ domainId: row.id, userId: row.userId });
+        }
         started++;
       } catch (err) {
         errors.push({ domain: row.name, error: errorMessage(err) });

@@ -11,6 +11,35 @@ export interface SetupRowInfo {
   mailboxProgress: MailboxProgress | null;
 }
 
+/** One domain on the setup board: what getJobSetupBoard lists and getDomainSetup returns. */
+export interface SetupRowData {
+  id: string;
+  name: string;
+  ipAddress: string | null;
+  status: string;
+  setupState: SetupState | null;
+  mailboxProgress: MailboxProgress | null;
+}
+
+/** Type a row from getJobSetupBoard / getDomainSetup: its jsonb columns come back untyped. */
+export function toSetupRowData(row: {
+  id: string;
+  name: string;
+  ipAddress?: string | null;
+  status: string;
+  setupState?: unknown;
+  mailboxProgress?: unknown;
+}): SetupRowData {
+  return {
+    id: row.id,
+    name: row.name,
+    ipAddress: row.ipAddress ?? null,
+    status: row.status,
+    setupState: (row.setupState as SetupState | null | undefined) ?? null,
+    mailboxProgress: (row.mailboxProgress as MailboxProgress | null | undefined) ?? null,
+  };
+}
+
 /** A step chip: the step's own status, or "waiting" for the step the run paused on to ask the user. */
 export type ChipStatus = StepStatus | "waiting";
 

@@ -5,8 +5,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { startDomainSetup } from "@/server/domain-setup-fns";
-import { SETUP_STEPS, STEP_LABELS, type SetupState, type SetupStep } from "@/lib/setup-state";
-import { progressPercent, type MailboxProgress } from "@/lib/mailbox-progress";
+import { SETUP_STEPS, STEP_LABELS, type SetupStep } from "@/lib/setup-state";
+import { progressPercent } from "@/lib/mailbox-progress";
 import {
   chipStatuses,
   currentMailboxProgress,
@@ -14,38 +14,10 @@ import {
   rowAction,
   setupStatusLine,
   type ChipStatus,
+  type SetupRowData,
 } from "@/lib/setup-status";
 import { ServerChoicePanel } from "./ServerChoicePanel";
 import { SetupLogDialog } from "./SetupLogDialog";
-
-/** One domain on the setup board: what getJobSetupBoard lists and getDomainSetup returns. */
-export interface SetupRowData {
-  id: string;
-  name: string;
-  ipAddress: string | null;
-  status: string;
-  setupState: SetupState | null;
-  mailboxProgress: MailboxProgress | null;
-}
-
-/** Type a row from getJobSetupBoard / getDomainSetup: its jsonb columns come back untyped. */
-export function toSetupRowData(row: {
-  id: string;
-  name: string;
-  ipAddress?: string | null;
-  status: string;
-  setupState?: unknown;
-  mailboxProgress?: unknown;
-}): SetupRowData {
-  return {
-    id: row.id,
-    name: row.name,
-    ipAddress: row.ipAddress ?? null,
-    status: row.status,
-    setupState: (row.setupState as SetupState | null | undefined) ?? null,
-    mailboxProgress: (row.mailboxProgress as MailboxProgress | null | undefined) ?? null,
-  };
-}
 
 const CHIP: Record<ChipStatus, { tone: string; label: string }> = {
   done: { tone: "text-success", label: "done" },

@@ -5,8 +5,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { getJobSetupBoard, startJobSetup } from "@/server/domain-setup-fns";
 import { isActive, type SetupState } from "@/lib/setup-state";
-import { canStartJobSetup, jobBoardSummary, summaryText } from "@/lib/setup-status";
-import { SetupRow, toSetupRowData } from "./SetupRow";
+import { canStartJobSetup, jobBoardSummary, summaryText, toSetupRowData } from "@/lib/setup-status";
+import { SetupRow } from "./SetupRow";
 
 function domainsCount(n: number): string {
   return `${n} domain${n === 1 ? "" : "s"}`;
