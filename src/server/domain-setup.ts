@@ -34,6 +34,7 @@ import {
   busyMessage,
   claimServer,
   releaseServer,
+  serverIpKey,
   WAITING_FOR_CHOICE_MESSAGE,
 } from "./domain-locks";
 import {
@@ -441,11 +442,17 @@ export async function executeDomainSetupJob(
       log(`Checking whether ${target.ipAddress} already runs Mailcow...`);
       const { hasMailcow, hostname } = await readServerMailcow(target);
 
-      // Other app domains on the same IP, across all accounts. Names only for this domain's owner.
+      // Other app domains on the same IP, across all accounts. Names only for this domain's owner. The IP
+      // is compared the way the server lock compares it, so " 1.2.3.4" or a differently-cased host matches.
       const others: { name: string; userId: string }[] = await db
         .select({ name: domains.name, userId: domains.userId })
         .from(domains)
-        .where(and(eq(domains.ipAddress, target.ipAddress), ne(domains.id, domainId)));
+        .where(
+          and(
+            sql`lower(trim(${domains.ipAddress})) = ${serverIpKey(target.ipAddress)}`,
+            ne(domains.id, domainId),
+          ),
+        );
       const otherDomainsOnServer = others
         .filter((o) => o.userId === domain.userId)
         .map((o) => o.name);

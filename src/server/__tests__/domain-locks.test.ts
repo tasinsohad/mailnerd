@@ -8,6 +8,7 @@ import {
   newClaimOwner,
   claimServer,
   releaseServer,
+  serverIpKey,
   STALE_CLAIM_MS,
 } from "../domain-locks";
 
@@ -104,6 +105,12 @@ describe("server run locks", () => {
     releaseServer("1.2.3.4", "someone-else");
     expect(claimServer("1.2.3.4", "b")).toEqual({ ok: false, heldBy: "a" });
     releaseServer("1.2.3.4", "a");
+  });
+
+  it("compares IPs trimmed and lowercased, the same key the other-domains query uses", () => {
+    expect(serverIpKey(" Mail.Example.COM ")).toBe("mail.example.com");
+    expect(claimSrv("1.2.3.4", "a")).toEqual({ ok: true });
+    expect(claimServer(" 1.2.3.4 ", "b")).toEqual({ ok: false, heldBy: "a" });
   });
 
   it("treats a different IP as independent", () => {
