@@ -7,13 +7,15 @@ import type { ServerChoice, SetupState } from "@/lib/setup-state";
 
 // Shown while a domain's setup waits for the user: its server already runs Mailcow. Keeping it adds this
 // domain to that Mailcow; reinstalling wipes the server, every domain on it included, so it asks first.
+type ServerChoiceWaiting = Extract<NonNullable<SetupState["waiting"]>, { kind: "server-choice" }>;
+
 export function ServerChoicePanel({
   domainId,
   waiting,
   onChanged,
 }: {
   domainId: string;
-  waiting: NonNullable<SetupState["waiting"]>;
+  waiting: ServerChoiceWaiting;
   /** May return a promise (e.g. the board's invalidate/refetch): awaited before the busy state clears, so
    * the choice buttons stay disabled until the fresh row lands instead of flashing back to their old state. */
   onChanged: () => void | Promise<unknown>;

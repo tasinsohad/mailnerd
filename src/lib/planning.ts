@@ -128,6 +128,25 @@ export function generateDnsRecords(
     proxied: false,
   });
 
+  // Root-domain mail records — ALWAYS published, even when only subdomains send. Our best-performing
+  // zones carry MX, SPF, DMARC and a root DKIM record on the apex regardless of where mailboxes live;
+  // it strengthens the domain's sending reputation and covers any mail sent as @<domain>. The root
+  // DKIM record (dkim._domainkey.<domain>) is synced from Mailcow in pipeline.ts, like subdomain DKIM.
+  records.push({
+    type: "MX",
+    name: "@",
+    content: `mail.${domainName}`,
+    ttl: 1,
+    priority: 10,
+  });
+
+  records.push({
+    type: "TXT",
+    name: "@",
+    content: `v=spf1 ip4:${serverIp} -all`,
+    ttl: 1,
+  });
+
   records.push({
     type: "TXT",
     name: "_dmarc",
@@ -139,11 +158,9 @@ export function generateDnsRecords(
   // Subdomain template
   const uniqueSubdomains = [...new Set(plan.inboxes.map((ib) => ib.subdomainPrefix))];
   for (const sub of uniqueSubdomains) {
-    // Apex / main-domain mailboxes: the root A and root _dmarc are already added above, so here
-    // we only add the records the apex needs to send/receive mail (MX, SPF, autodiscovery).
+    // Apex / main-domain mailboxes: the root A, MX, SPF and _dmarc are already added above (root MX/SPF
+    // are now unconditional), so here we only add the apex autodiscovery records mailboxes need.
     if (sub === "@") {
-      records.push({ type: "MX", name: "@", content: `mail.${domainName}`, ttl: 1, priority: 10 });
-      records.push({ type: "TXT", name: "@", content: `v=spf1 ip4:${serverIp} -all`, ttl: 1 });
       records.push({ type: "CNAME", name: "autodiscover", content: `mail.${domainName}`, ttl: 1, proxied: false });
       records.push({ type: "CNAME", name: "autoconfig", content: `mail.${domainName}`, ttl: 1, proxied: false });
       records.push({ type: "SRV", name: `_autodiscover._tcp`, content: `0 443 mail.${domainName}`, priority: 0, ttl: 1 });

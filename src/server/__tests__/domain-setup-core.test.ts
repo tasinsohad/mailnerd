@@ -7,6 +7,7 @@ import {
   otherDomainsOnServer,
   serverDecision,
   runDomainSetup,
+  type FcrdnsGate,
   type ServerInspection,
   type SetupDeps,
 } from "../domain-setup-core";
@@ -194,12 +195,16 @@ interface FakeOpts {
   dnsFailsOnce?: Error;
   /** dns() throws this error every time it's called. */
   dnsAlwaysFails?: Error;
+  /** When set, a fcrdns() dep is provided. A single value is returned every call; an array is dequeued
+   *  per call (so a first-fail-then-pass sequence models the user fixing the PTR and re-checking). */
+  fcrdns?: FcrdnsGate | FcrdnsGate[];
 }
 
 function makeFake(initial: SetupState, opts: FakeOpts = {}) {
   let state = initial;
   const calls: string[] = [];
   let dnsCalls = 0;
+  const fcrdnsQueue = Array.isArray(opts.fcrdns) ? [...opts.fcrdns] : null;
 
   const deps: SetupDeps = {
     async load() {
@@ -244,8 +249,24 @@ function makeFake(initial: SetupState, opts: FakeOpts = {}) {
     },
   };
 
+  if (opts.fcrdns !== undefined) {
+    deps.fcrdns = async () => {
+      calls.push("fcrdns");
+      if (fcrdnsQueue) return fcrdnsQueue.shift() ?? { ok: true };
+      return opts.fcrdns as FcrdnsGate;
+    };
+  }
+
   return { deps, calls, getState: () => state };
 }
+
+const fcrdnsFail = (ip = "1.2.3.4"): FcrdnsGate => ({
+  ok: false,
+  ip,
+  ptrHost: null,
+  expected: `mail.example.com`,
+  message: `No reverse DNS (PTR) record exists for ${ip}. Set the PTR to mail.example.com, then re-check and continue.`,
+});
 
 function freshState(opts: { fromStep?: SetupStep; serverChoice?: "reuse" | "reinstall" | null } = {}): SetupState {
   return newSetupState("run-1", "2026-09-18T00:00:00.000Z", opts);
@@ -368,5 +389,68 @@ describe("runDomainSetup", () => {
     expect(result).toBe("done");
     expect(calls.filter((c) => c === "dns")).toHaveLength(2);
     expect(calls[calls.length - 1]).toBe("dkim");
+  });
+
+  // --- FCrDNS gate before mailboxes ---
+
+  it("runs the fcrdns gate before creating mailboxes and proceeds when it passes", async () => {
+    const { deps, calls } = makeFake(freshState({ fromStep: "mailboxes" }), {
+      fcrdns: { ok: true },
+    });
+
+    const result = await runDomainSetup(deps);
+
+    expect(result).toBe("done");
+    // The gate runs, and only then are mailboxes created.
+    expect(calls).toEqual(["fcrdns", "mailboxes", "dkim"]);
+  });
+
+  it("pauses in a waiting/fcrdns state and never creates mailboxes when FCrDNS fails", async () => {
+    const { deps, calls, getState } = makeFake(freshState({ fromStep: "mailboxes" }), {
+      fcrdns: fcrdnsFail("9.9.9.9"),
+    });
+
+    const result = await runDomainSetup(deps);
+
+    expect(result).toBe("waiting");
+    const state = getState();
+    expect(state.status).toBe("waiting");
+    expect(state.waiting).toEqual({
+      kind: "fcrdns",
+      ip: "9.9.9.9",
+      ptrHost: null,
+      expected: "mail.example.com",
+      message: expect.stringContaining("reverse DNS"),
+    });
+    // mailboxes step is put back to pending so re-checking re-runs it; mailboxes/dkim never ran.
+    expect(state.steps.mailboxes).toBe("pending");
+    expect(calls).toContain("fcrdns");
+    expect(calls).not.toContain("mailboxes");
+    expect(calls).not.toContain("dkim");
+  });
+
+  it("re-check and continue: a second pass with a now-passing FCrDNS completes the run", async () => {
+    const { deps, calls } = makeFake(freshState({ fromStep: "mailboxes" }), {
+      // First pass fails (waits), second pass passes (the user set the PTR in between).
+      fcrdns: [fcrdnsFail(), { ok: true }],
+    });
+
+    expect(await runDomainSetup(deps)).toBe("waiting");
+    expect(calls).not.toContain("mailboxes");
+
+    // The re-check action re-enters the run from the mailboxes step.
+    expect(await runDomainSetup(deps)).toBe("done");
+    expect(calls.filter((c) => c === "fcrdns")).toHaveLength(2);
+    expect(calls).toContain("mailboxes");
+    expect(calls[calls.length - 1]).toBe("dkim");
+  });
+
+  it("skips the gate entirely when no fcrdns dep is provided (backward compatible)", async () => {
+    const { deps, calls } = makeFake(freshState({ fromStep: "mailboxes" }), {});
+
+    const result = await runDomainSetup(deps);
+
+    expect(result).toBe("done");
+    expect(calls).toEqual(["mailboxes", "dkim"]);
   });
 });

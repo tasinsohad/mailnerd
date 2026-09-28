@@ -64,6 +64,8 @@ import { resolveAndSaveCfZoneId } from "./cloudflare";
 import { pushDns, unproxyDns, ensureMailDomains, createMailboxes, syncDkim } from "./pipeline";
 import { readMailcowConfigOverSsh, ensureWorkingApiKey } from "./mailcow-key";
 import { mailcowListAll } from "./mailcow-helpers";
+import { doh, isCloudflareIp } from "./health-net";
+import { fcrdnsVerdict } from "./health-checks";
 import { assertServerNotProtected } from "./protected-servers";
 import { createMailboxProgressWriter } from "./mailbox-progress-store";
 
@@ -599,6 +601,43 @@ export async function executeDomainSetupJob(
       }
     },
 
+    fcrdns: async () => {
+      const domain = await loadDomain(db, domainId);
+      const ip = serverTarget(domain).ipAddress;
+      const expected = domain.mailcowHostname || `mail.${domain.name}`;
+      try {
+        const revName = ip.split(".").reverse().join(".") + ".in-addr.arpa";
+        const ptr = (await doh(revName, "PTR")).map((h) => h.replace(/\.$/, ""));
+        const forwardIps: string[] = [];
+        for (const host of ptr) {
+          try {
+            forwardIps.push(...(await doh(host, "A")));
+          } catch {
+            /* ignore per-host resolution failure */
+          }
+        }
+        const forwardProxied = forwardIps.length > 0 && forwardIps.every((x) => isCloudflareIp(x));
+        const verdict = fcrdnsVerdict(ip, ptr, forwardIps, forwardProxied);
+        if (verdict === "confirmed") {
+          log(`Reverse DNS (FCrDNS) passes: ${ip} → ${ptr[0]} → ${ip}.`);
+          return { ok: true as const };
+        }
+        const ptrHost = ptr[0] ?? null;
+        return {
+          ok: false as const,
+          ip,
+          ptrHost,
+          expected,
+          message: fcrdnsWaitMessage(verdict, ip, expected, ptrHost, forwardIps),
+        };
+      } catch {
+        // Reverse DNS couldn't be queried (transient resolver hiccup) — this is "unknown", not
+        // "fails". Don't deadlock the run: proceed, and let the health engine flag any PTR problem.
+        log(`Couldn't query reverse DNS for ${ip}, so the FCrDNS gate was skipped this pass.`);
+        return { ok: true as const };
+      }
+    },
+
     mailboxes: async () => {
       const loaded = await loadDomain(db, domainId);
       // A re-provision regenerates the key: re-read it from the server if the saved one stopped working.
@@ -630,7 +669,7 @@ export async function executeDomainSetupJob(
 
     dkim: async () => {
       const domain = await loadDomain(db, domainId);
-      const { results } = await syncDkim(db, domain, domain.userId);
+      const { results } = await syncDkim(db, domain, domain.userId, { log: (line) => log(line) });
       const bad = results.find((r) => !r.success);
       if (bad)
         throw new Error(
@@ -800,6 +839,30 @@ async function readServerMailDomains(target: {
   } catch {
     return null;
   }
+}
+
+// The waiting message shown when the FCrDNS gate blocks mailboxes: exactly what PTR to set and where.
+function fcrdnsWaitMessage(
+  verdict: "proxied" | "mismatch" | "missing",
+  ip: string,
+  expected: string,
+  ptrHost: string | null,
+  forwardIps: string[],
+): string {
+  const panel = "in your VPS provider's control panel (the reverse DNS / PTR setting)";
+  if (verdict === "missing")
+    return `No reverse DNS (PTR) record exists for ${ip}. Set the PTR for ${ip} to ${expected} ${panel}, then re-check and continue. Mailboxes won't go live until FCrDNS passes.`;
+  if (verdict === "mismatch")
+    return (
+      `The PTR for ${ip}${ptrHost ? ` points to ${ptrHost}` : ""}, which doesn't forward-resolve back to ${ip}` +
+      `${forwardIps.length ? ` (it resolves to ${forwardIps.join(", ")})` : ""}. Set the PTR for ${ip} to ${expected} ${panel}, ` +
+      `and make sure ${expected} A-records to ${ip}. Then re-check and continue.`
+    );
+  return (
+    `The PTR for ${ip} is correct${ptrHost ? ` (${ptrHost})` : ""}, but ${ptrHost ?? expected} is Cloudflare-proxied, ` +
+    `so it can't forward-confirm to ${ip}. Un-proxy ${expected} (set it DNS-only in Cloudflare) so it resolves to ${ip}, ` +
+    `then re-check and continue.`
+  );
 }
 
 function errorMessage(err: unknown): string {

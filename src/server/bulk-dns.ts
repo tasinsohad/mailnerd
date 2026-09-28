@@ -104,13 +104,22 @@ export const bulkSetupDns = createServerFn({ method: "POST" })
     const names = [...new Set(data.names.map((n) => n.toLowerCase().trim().replace(/\.$/, "")))].filter(
       Boolean,
     );
-    log.info(`${zones.length} Cloudflare zones available. Processing ${names.length} name(s).`);
+    // Always give each zone's ROOT the same essential mail records, even when only subdomains were
+    // pasted: our best-performing zones publish MX/SPF/DMARC/DKIM on the apex regardless of where mail
+    // is sent from. Idempotent — an already-present record is adopted below, never duplicated.
+    const withRoots = new Set(names);
+    for (const name of names) {
+      const zone = zoneForName(zones, name);
+      if (zone) withRoots.add(zone.name);
+    }
+    const targetNames = [...withRoots];
+    log.info(`${zones.length} Cloudflare zones available. Processing ${targetNames.length} name(s).`);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const zoneRecordsCache = new Map<string, any[]>();
     const results: BulkDnsResult[] = [];
 
-    for (const name of names) {
+    for (const name of targetNames) {
       const zone = zoneForName(zones, name);
       if (!zone) {
         log.error(`${name}: no matching Cloudflare zone in this account — skipped.`);
@@ -214,6 +223,6 @@ export const bulkSetupDns = createServerFn({ method: "POST" })
     }
 
     const totalCreated = results.reduce((n, r) => n + r.created.length, 0);
-    log.info(`Bulk DNS setup finished — ${totalCreated} record(s) created across ${names.length} name(s).`);
+    log.info(`Bulk DNS setup finished — ${totalCreated} record(s) created across ${targetNames.length} name(s).`);
     return { mailHost, results, transcript: log.transcript() };
   });

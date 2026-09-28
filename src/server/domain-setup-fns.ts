@@ -164,6 +164,42 @@ export const decideServerChoice = createServerFn({ method: "POST" })
     }
   });
 
+// Re-check the reverse-DNS (FCrDNS) gate a waiting run left behind, and queue the next pass from the
+// mailboxes step. The gate runs again on that pass: if the PTR now passes, mailboxes are created;
+// otherwise the run waits again with a fresh message.
+export const recheckFcrdns = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .inputValidator((d: unknown) => z.object({ domainId: z.string().uuid() }).parse(d))
+  .handler(async ({ data, context }) => {
+    const { db, userId } = (context as any) as { db: any; userId: string };
+
+    const domain = await db.query.domains.findFirst({
+      where: and(eq(domains.id, data.domainId), eq(domains.userId, userId)),
+      columns: { id: true, userId: true, setupState: true },
+    });
+    if (!domain) return { ok: false as const, error: "Domain not found" };
+
+    const state = domain.setupState as SetupState | null;
+    if (state?.status !== "waiting" || state.waiting?.kind !== "fcrdns") {
+      return { ok: false as const, error: "This domain isn't waiting on a reverse-DNS check." };
+    }
+
+    try {
+      // Re-enter from the mailboxes step (dns + server are already done); allowWaiting lets it proceed
+      // past the current "waiting" state. The mailboxes step re-runs the FCrDNS gate first.
+      await enqueueDomainSetup({
+        domainId: domain.id,
+        userId: domain.userId,
+        fromStep: "mailboxes",
+        serverChoice: state.serverChoice,
+        allowWaiting: true,
+      });
+      return { ok: true as const };
+    } catch (err) {
+      return { ok: false as const, error: errorMessage(err) };
+    }
+  });
+
 // The job setup board: every domain of one job, in name order, with its setup run and mailbox progress.
 export const getJobSetupBoard = createServerFn({ method: "GET" })
   .middleware([requireAuth])

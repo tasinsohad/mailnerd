@@ -17,6 +17,7 @@ import {
   type SetupRowData,
 } from "@/lib/setup-status";
 import { ServerChoicePanel } from "./ServerChoicePanel";
+import { FcrdnsWaitPanel } from "./FcrdnsWaitPanel";
 import { SetupLogDialog } from "./SetupLogDialog";
 
 const CHIP: Record<ChipStatus, { tone: string; label: string }> = {
@@ -177,8 +178,11 @@ export function SetupRow({
         />
       )}
 
-      {state?.status === "waiting" && state.waiting && (
+      {state?.status === "waiting" && state.waiting?.kind === "server-choice" && (
         <ServerChoicePanel domainId={row.id} waiting={state.waiting} onChanged={onChanged} />
+      )}
+      {state?.status === "waiting" && state.waiting?.kind === "fcrdns" && (
+        <FcrdnsWaitPanel domainId={row.id} waiting={state.waiting} onChanged={onChanged} />
       )}
 
       <div className="flex flex-wrap gap-2">

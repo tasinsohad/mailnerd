@@ -7,6 +7,9 @@ import {
   findMatchingCfRecord,
   isCfAlreadyExistsError,
   isTransientHttp,
+  dkimNeedsRegen,
+  ensureDkim2048Key,
+  DKIM_MIN_BITS,
   QUOTA,
 } from "../mailcow-helpers";
 
@@ -154,5 +157,80 @@ describe("isTransientHttp", () => {
 describe("QUOTA", () => {
   it("keeps maxquota <= domain quota", () => {
     expect(QUOTA.MAILBOX_MAX_QUOTA_MB).toBeLessThanOrEqual(QUOTA.DOMAIN_QUOTA_MB);
+  });
+});
+
+describe("dkimNeedsRegen", () => {
+  it("regenerates only a known weaker-than-2048 key", () => {
+    expect(dkimNeedsRegen(1024)).toBe(true);
+    expect(dkimNeedsRegen("1024")).toBe(true);
+    expect(dkimNeedsRegen(2048)).toBe(false);
+    expect(dkimNeedsRegen(4096)).toBe(false);
+  });
+  it("never regenerates on an unknown/absent length", () => {
+    expect(dkimNeedsRegen(undefined)).toBe(false);
+    expect(dkimNeedsRegen(null)).toBe(false);
+    expect(dkimNeedsRegen("")).toBe(false);
+    expect(dkimNeedsRegen(0)).toBe(false);
+    expect(dkimNeedsRegen("nope")).toBe(false);
+  });
+});
+
+describe("ensureDkim2048Key", () => {
+  // A tiny Mailcow fake that records calls and answers get/dkim from a scripted state.
+  function fakeMc(initial: { pubkey?: string; length?: number | null } | null) {
+    const calls: { path: string; body?: unknown }[] = [];
+    let state = initial;
+    const mc = async (path: string, body?: unknown) => {
+      calls.push({ path, body });
+      if (path.startsWith("get/dkim/")) {
+        return { ok: true, status: 200, json: state ?? {} };
+      }
+      if (path === "delete/dkim") {
+        state = null;
+        return { ok: true, status: 200, json: [{ type: "success", msg: "dkim_removed" }] };
+      }
+      if (path === "add/dkim") {
+        const size = (body as { key_size?: number }).key_size ?? 2048;
+        state = { pubkey: "GENERATED", length: size };
+        return { ok: true, status: 200, json: [{ type: "success", msg: "dkim_added" }] };
+      }
+      return { ok: false, status: 400, json: [{ type: "error", msg: "unexpected" }] };
+    };
+    return { mc, calls, get state() { return state; } };
+  }
+
+  it("generates a 2048-bit key when none exists", async () => {
+    const f = fakeMc(null);
+    const res = await ensureDkim2048Key(f.mc, "example.com");
+    expect(res).toMatchObject({ created: true, regenerated: false, length: DKIM_MIN_BITS });
+    const add = f.calls.find((c) => c.path === "add/dkim");
+    expect(add?.body).toMatchObject({ domains: "example.com", dkim_selector: "dkim", key_size: 2048 });
+    expect(f.calls.some((c) => c.path === "delete/dkim")).toBe(false);
+  });
+
+  it("leaves an existing 2048-bit key untouched (idempotent)", async () => {
+    const f = fakeMc({ pubkey: "EXISTING", length: 2048 });
+    const res = await ensureDkim2048Key(f.mc, "example.com");
+    expect(res).toMatchObject({ created: false, regenerated: false, length: 2048 });
+    expect(f.calls.some((c) => c.path === "add/dkim" || c.path === "delete/dkim")).toBe(false);
+  });
+
+  it("deletes and regenerates a weak (1024-bit) key at 2048", async () => {
+    const f = fakeMc({ pubkey: "WEAK", length: 1024 });
+    const res = await ensureDkim2048Key(f.mc, "example.com");
+    expect(res).toMatchObject({ created: false, regenerated: true, length: DKIM_MIN_BITS });
+    const order = f.calls.map((c) => c.path);
+    expect(order.indexOf("delete/dkim")).toBeLessThan(order.lastIndexOf("add/dkim"));
+  });
+
+  it("reports an error when generation fails", async () => {
+    const mc = async (path: string) =>
+      path.startsWith("get/dkim/")
+        ? { ok: true, status: 200, json: {} }
+        : { ok: true, status: 200, json: [{ type: "danger", msg: "dkim_domain_or_selector_invalid" }] };
+    const res = await ensureDkim2048Key(mc, "example.com");
+    expect(res.created).toBe(false);
+    expect(res.error).toContain("dkim_domain_or_selector_invalid");
   });
 });

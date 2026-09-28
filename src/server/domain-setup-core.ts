@@ -93,6 +93,15 @@ export function serverDecision(i: ServerInspection, choice: ServerChoice | null)
   return "ask";
 }
 
+/**
+ * The reverse-DNS (FCrDNS) gate result, checked before mailboxes go live. `ok` means FCrDNS passes
+ * (or couldn't be determined — an unknown status never blocks). Otherwise the run pauses in a "waiting"
+ * state carrying exactly what PTR to set and where, with a "re-check and continue" action.
+ */
+export type FcrdnsGate =
+  | { ok: true }
+  | { ok: false; ip: string; ptrHost: string | null; expected: string; message: string };
+
 export interface SetupDeps {
   load(): Promise<SetupState>;
   save(patch: Partial<SetupState>): Promise<SetupState>;
@@ -101,6 +110,8 @@ export interface SetupDeps {
   inspectServer(): Promise<ServerInspection & { ip: string }>;
   install(): Promise<void>;
   reuse(): Promise<void>;
+  /** Reverse-DNS (FCrDNS) gate run before mailboxes are created. Optional: when absent the gate is skipped. */
+  fcrdns?(): Promise<FcrdnsGate>;
   mailboxes(): Promise<{ created: number; failed: number; total: number }>;
   dkim(): Promise<void>;
 }
@@ -135,6 +146,27 @@ export async function runDomainSetup(deps: SetupDeps): Promise<"done" | "waiting
       } else if (step === "dns") {
         await deps.dns();
       } else if (step === "mailboxes") {
+        // Reverse-DNS gate: mailboxes must NEVER go live on an IP that fails FCrDNS (no PTR, PTR
+        // mismatch, or the PTR host doesn't forward-resolve to the server IP). Pause and wait for the
+        // user to set the PTR, then re-check on the next pass — same wait pattern as the server choice.
+        if (deps.fcrdns) {
+          const gate = await deps.fcrdns();
+          if (!gate.ok) {
+            deps.log(`Reverse DNS (FCrDNS) for ${gate.ip} isn't ready. ${gate.message}\n`);
+            await deps.save({
+              status: "waiting",
+              steps: { ...state.steps, mailboxes: "pending" },
+              waiting: {
+                kind: "fcrdns",
+                ip: gate.ip,
+                ptrHost: gate.ptrHost,
+                expected: gate.expected,
+                message: gate.message,
+              },
+            });
+            return "waiting";
+          }
+        }
         const result = await deps.mailboxes();
         if (result.failed > 0) throw new Error(`${result.failed} of ${result.total} mailboxes couldn't be created`);
       } else {

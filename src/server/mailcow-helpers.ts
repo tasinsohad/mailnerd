@@ -1,7 +1,12 @@
 import https from "node:https";
 import crypto from "node:crypto";
 import { retryTransient } from "@/lib/retry";
-import { MAILCOW_SHELL_PRELUDE } from "./health-checks";
+import { MAILCOW_SHELL_PRELUDE, DKIM_MIN_BITS } from "./health-checks";
+
+// Mailcow's default DKIM selector, and the key size we require (see DKIM_MIN_BITS). Mailcow autogenerates
+// a key when a domain is added, but its size depends on the instance's default — so we pin it explicitly.
+export const DKIM_SELECTOR = "dkim";
+export { DKIM_MIN_BITS };
 
 // Quota sizing for Mailcow domains/mailboxes. IMPORTANT: Mailcow's add/domain fields are
 // `mailboxes`, `quota` (domain TOTAL, MB), `maxquota` (max a single mailbox may have, MB),
@@ -582,6 +587,65 @@ export function parseMailcowResult(
   if (errors.length > 0) return { success: false, error: errors.join("; ") };
   if (!sawSuccess) return { success: false, error: "Mailcow did not confirm success" };
   return { success: true };
+}
+
+// Whether a Mailcow DKIM key of the reported `length` (bits, from get/dkim's `length` field) must be
+// regenerated to reach DKIM_MIN_BITS. Only a KNOWN weaker size triggers a regen — an absent/unreadable
+// length is left to the caller (add-if-missing), never regenerated on uncertainty.
+export function dkimNeedsRegen(length: unknown): boolean {
+  const n = typeof length === "number" ? length : Number(length);
+  return Number.isFinite(n) && n > 0 && n < DKIM_MIN_BITS;
+}
+
+// The shape get/dkim returns for a domain that has a key. `length` is the RSA key size in bits.
+type McDkimInfo = { pubkey?: unknown; dkim_txt?: unknown; length?: unknown };
+
+// Ensure a mail domain has a DKIM key of at least DKIM_MIN_BITS in Mailcow. Reads get/dkim/<domain>:
+//  - no key yet        -> generate one at DKIM_MIN_BITS (add/dkim)
+//  - key >= min bits   -> left untouched (idempotent)
+//  - key < min bits    -> delete + regenerate at DKIM_MIN_BITS
+// `mc` is the Mailcow request fn (transport-agnostic, so this is unit-testable). Returns what it found
+// and did; `error` is set only when a generate attempt failed.
+export async function ensureDkim2048Key(
+  mc: (path: string, body?: unknown) => Promise<{ ok: boolean; status: number; json: unknown }>,
+  mailDomain: string,
+): Promise<{ length: number | null; created: boolean; regenerated: boolean; error?: string }> {
+  const readKey = async (): Promise<{ present: boolean; length: number | null }> => {
+    try {
+      const { json } = await mc(`get/dkim/${mailDomain}`);
+      const info = (json ?? {}) as McDkimInfo;
+      const present = !!(info.pubkey || info.dkim_txt);
+      const n = typeof info.length === "number" ? info.length : Number(info.length);
+      return { present, length: Number.isFinite(n) && n > 0 ? n : null };
+    } catch {
+      return { present: false, length: null };
+    }
+  };
+  const generate = async () => {
+    const r = await mc("add/dkim", {
+      domains: mailDomain,
+      dkim_selector: DKIM_SELECTOR,
+      key_size: DKIM_MIN_BITS,
+    });
+    return parseMailcowResult(r.ok, r.json);
+  };
+
+  const current = await readKey();
+  if (!current.present) {
+    const res = await generate();
+    return res.success
+      ? { length: DKIM_MIN_BITS, created: true, regenerated: false }
+      : { length: null, created: false, regenerated: false, error: res.error };
+  }
+  if (!dkimNeedsRegen(current.length)) {
+    return { length: current.length, created: false, regenerated: false };
+  }
+  // Weaker than the minimum — Mailcow won't overwrite an existing key, so delete then regenerate.
+  await mc("delete/dkim", [mailDomain]).catch(() => {});
+  const res = await generate();
+  return res.success
+    ? { length: DKIM_MIN_BITS, created: false, regenerated: true }
+    : { length: current.length, created: false, regenerated: false, error: res.error };
 }
 
 // Cloudflare requires TXT record content wrapped in quotation marks; sending it

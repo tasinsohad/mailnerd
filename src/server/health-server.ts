@@ -19,6 +19,8 @@ import {
   classifyPort25,
   fcrdnsVerdict,
   dkimKeyMatch,
+  dkimPublicKeyBits,
+  DKIM_MIN_BITS,
   parsePostfixQueue,
   queueVerdict,
   dominantDeferral,
@@ -431,14 +433,27 @@ export async function checkSendingDns(
     }
   }
   const { published, matches } = dkimKeyMatch(dnsTxt, pubkey);
-  if (published && (matches || !pubkey)) {
+  // Key strength: a published key weaker than 2048-bit is a real deliverability risk (receivers
+  // increasingly distrust 1024-bit RSA). Measured straight from the published record.
+  const bits = published ? dkimPublicKeyBits(dnsTxt) : null;
+  if (published && bits !== null && bits < DKIM_MIN_BITS) {
+    out.push({
+      id: "dkim",
+      label: "DKIM",
+      status: "fail",
+      detail: `DKIM key at ${recName} is only ${bits}-bit — weaker than the required ${DKIM_MIN_BITS}-bit, which some receivers distrust.`,
+      fix: `Regenerate the DKIM key at ${DKIM_MIN_BITS}-bit in Mailcow, then re-sync it to DNS.`,
+      action: "syncDkim",
+      guidance: dkimGuidance("weak", ctx),
+    });
+  } else if (published && (matches || !pubkey)) {
     out.push({
       id: "dkim",
       label: "DKIM",
       status: "ok",
       detail: pubkey
-        ? "DKIM published and matches Mailcow."
-        : `DKIM record published at ${recName}.`,
+        ? `DKIM published and matches Mailcow${bits ? ` (${bits}-bit)` : ""}.`
+        : `DKIM record published at ${recName}${bits ? ` (${bits}-bit)` : ""}.`,
       guidance: dkimGuidance("ok", ctx),
     });
   } else if (published && !matches) {

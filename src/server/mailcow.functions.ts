@@ -65,11 +65,32 @@ export async function verifyMcApiKey(hostname: string, apiKey: string): Promise<
   }
 }
 
+// DKIM: Mailcow autogenerates a key on add/domain, but its size depends on the instance default.
+// Pin it explicitly so every domain gets a 2048-bit key (1024-bit is increasingly distrusted).
+export const DKIM_KEY_SIZE = 2048;
+export const DKIM_SELECTOR = "dkim";
+
+// Generate a DKIM key of `keySize` bits for a domain via Mailcow's add/dkim endpoint.
+export async function generateMcDkim(
+  hostname: string,
+  apiKey: string,
+  domain: string,
+  keySize: number = DKIM_KEY_SIZE,
+): Promise<McApiResponse> {
+  return mcRequest<McApiResponse>(hostname, apiKey, "add/dkim", "POST", {
+    domains: domain,
+    dkim_selector: DKIM_SELECTOR,
+    key_size: keySize,
+  });
+}
+
 export interface AddMcDomainOptions {
   active?: number;
   maxMailboxes?: number;
   maxQuota?: number;
   quota?: number;
+  /** Ensure a 2048-bit DKIM key after the domain is added (default true). */
+  ensureDkim2048?: boolean;
 }
 
 export async function addMcDomain(
@@ -86,7 +107,13 @@ export async function addMcDomain(
     quota: options?.quota ?? 10240,
   };
 
-  return mcRequest<McDomainResponse>(hostname, apiKey, "add/domain", "POST", payload);
+  const result = await mcRequest<McDomainResponse>(hostname, apiKey, "add/domain", "POST", payload);
+  // Explicitly request a 2048-bit DKIM key rather than trusting the instance's autogen default.
+  // Best-effort: a domain that already has a key of the same selector will just no-op/error.
+  if (options?.ensureDkim2048 ?? true) {
+    await generateMcDkim(hostname, apiKey, domain).catch(() => {});
+  }
+  return result;
 }
 
 export async function deleteMcDomain(

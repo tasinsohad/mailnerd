@@ -338,6 +338,98 @@ export function dkimKeyMatch(
   return { published, matches };
 }
 
+/* ---------- DKIM key strength ---------- */
+
+// The minimum RSA DKIM key size we require. 1024-bit keys are increasingly distrusted (Google now
+// rotates its own to 2048), so anything weaker is a deliverability risk.
+export const DKIM_MIN_BITS = 2048;
+
+// Decode standard base64 to bytes without depending on Buffer (keeps this module portable/pure).
+function base64ToBytes(b64: string): Uint8Array | null {
+  const clean = String(b64 ?? "").replace(/[^A-Za-z0-9+/=]/g, "");
+  if (!clean) return null;
+  try {
+    const bin =
+      typeof atob === "function"
+        ? atob(clean)
+        : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (globalThis as any).Buffer?.from(clean, "base64").toString("binary");
+    if (typeof bin !== "string") return null;
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+// Minimal DER reader: the RSA modulus bit length of a public key encoded either as an X.509
+// SubjectPublicKeyInfo (what Mailcow publishes) or a bare PKCS#1 RSAPublicKey. null when it can't be
+// parsed — callers treat that as "size unknown", never as weak.
+function rsaModulusBits(der: Uint8Array): number | null {
+  let pos = 0;
+  const readLen = (): number | null => {
+    if (pos >= der.length) return null;
+    let len = der[pos++];
+    if (len & 0x80) {
+      const n = len & 0x7f;
+      if (n === 0 || n > 4 || pos + n > der.length) return null;
+      len = 0;
+      for (let i = 0; i < n; i++) len = (len << 8) | der[pos++];
+    }
+    return len;
+  };
+  const expect = (tag: number): number | null => {
+    if (pos >= der.length || der[pos] !== tag) return null;
+    pos++;
+    return readLen();
+  };
+  if (expect(0x30) === null) return null; // outer SEQUENCE
+  // SPKI => next element is a SEQUENCE (AlgorithmIdentifier); bare PKCS#1 => next is the INTEGER modulus.
+  if (der[pos] === 0x30) {
+    const algLen = expect(0x30);
+    if (algLen === null) return null;
+    pos += algLen; // skip AlgorithmIdentifier
+    const bitLen = expect(0x03); // BIT STRING wrapping the RSAPublicKey
+    if (bitLen === null || pos >= der.length) return null;
+    pos++; // unused-bits byte (expected 0)
+    if (expect(0x30) === null) return null; // RSAPublicKey SEQUENCE
+  }
+  const modLen = expect(0x02); // INTEGER modulus
+  if (modLen === null || modLen <= 0 || pos + modLen > der.length) return null;
+  let start = pos;
+  let len = modLen;
+  while (len > 0 && der[start] === 0x00) {
+    start++; // strip leading zero padding (keeps the integer positive)
+    len--;
+  }
+  if (len <= 0) return null;
+  let bits = (len - 1) * 8;
+  for (let top = der[start]; top > 0; top >>= 1) bits++;
+  return bits;
+}
+
+// The RSA key size (bits) of a published DKIM record, or null when it can't be determined. Reads the
+// p= base64 out of the TXT value(s) and measures the modulus.
+export function dkimPublicKeyBits(dnsTxtValues: string[]): number | null {
+  for (const txt of dnsTxtValues ?? []) {
+    const key = extractDkimKey(txt);
+    if (!key) continue;
+    const der = base64ToBytes(key);
+    if (!der) continue;
+    const bits = rsaModulusBits(der);
+    if (bits) return bits;
+  }
+  return null;
+}
+
+// Strength verdict for a published DKIM key. "unknown" (unparseable/no key) never fails the check —
+// a false "weak" is worse than a miss.
+export function dkimStrengthVerdict(bits: number | null): "ok" | "weak" | "unknown" {
+  if (bits === null) return "unknown";
+  return bits >= DKIM_MIN_BITS ? "ok" : "weak";
+}
+
 /* ---------- Postfix queue ---------- */
 
 export interface QueueStats {

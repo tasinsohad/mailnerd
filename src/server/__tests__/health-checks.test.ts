@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vitest";
+import { generateKeyPairSync } from "node:crypto";
 import {
   classifyPort25,
   fcrdnsVerdict,
   dkimKeyMatch,
+  dkimPublicKeyBits,
+  dkimStrengthVerdict,
+  DKIM_MIN_BITS,
   parsePostfixQueue,
   queueVerdict,
   dominantDeferral,
@@ -61,6 +65,44 @@ describe("dkimKeyMatch", () => {
   it("tolerates chunked/whitespaced TXT and quotes", () => {
     const r = dkimKeyMatch([`"v=DKIM1; k=rsa; p=MIGfMA0GCS" "qGSIb3DQEBAQUAA4GNADCBiQKBgQ"`], key);
     expect(r.matches).toBe(true);
+  });
+});
+
+describe("dkimPublicKeyBits / dkimStrengthVerdict", () => {
+  const spkiKey = (bits: number) => {
+    const { publicKey } = generateKeyPairSync("rsa", { modulusLength: bits });
+    return (publicKey.export({ type: "spki", format: "der" }) as Buffer).toString("base64");
+  };
+
+  it("measures a real 2048-bit key as 2048 and passes it", () => {
+    const txt = `v=DKIM1; k=rsa; p=${spkiKey(2048)}`;
+    expect(dkimPublicKeyBits([txt])).toBe(2048);
+    expect(dkimStrengthVerdict(dkimPublicKeyBits([txt]))).toBe("ok");
+  });
+
+  it("measures a real 1024-bit key as 1024 and flags it weak", () => {
+    const txt = `v=DKIM1; k=rsa; p=${spkiKey(1024)}`;
+    expect(dkimPublicKeyBits([txt])).toBe(1024);
+    expect(dkimStrengthVerdict(dkimPublicKeyBits([txt]))).toBe("weak");
+  });
+
+  it("handles chunked/quoted TXT the same way", () => {
+    const key = spkiKey(2048);
+    const half = Math.floor(key.length / 2);
+    const chunked = `"v=DKIM1; k=rsa; p=${key.slice(0, half)}" "${key.slice(half)}"`;
+    expect(dkimPublicKeyBits([chunked])).toBe(2048);
+  });
+
+  it("returns null (unknown, never weak) for a missing or unparseable key", () => {
+    expect(dkimPublicKeyBits([])).toBeNull();
+    expect(dkimPublicKeyBits(["v=DKIM1; k=rsa; p="])).toBeNull();
+    expect(dkimPublicKeyBits(["v=DKIM1; k=rsa; p=not-base64-@@@"])).toBeNull();
+    expect(dkimStrengthVerdict(null)).toBe("unknown");
+  });
+
+  it("uses 2048 as the minimum", () => {
+    expect(DKIM_MIN_BITS).toBe(2048);
+    expect(dkimStrengthVerdict(4096)).toBe("ok");
   });
 });
 

@@ -25,6 +25,8 @@ import {
   mailDomainLimitsFor,
   currentLimitsFromMailcow,
   mailboxesOnDomain,
+  ensureDkim2048Key,
+  dkimNeedsRegen,
   type CurrentMailDomainLimits,
   type MailcowSshTarget,
 } from "./mailcow-helpers";
@@ -337,10 +339,13 @@ export async function ensureMailDomains(
 
   const inboxes = await db.select().from(plannedInboxes).where(eq(plannedInboxes.domainId, domain.id));
   const mailHost = (domain.mailcowHostname || `mail.${domain.name}`).toLowerCase();
+  // Always ensure the ROOT domain is a Mailcow mail domain, even when every mailbox lives on a
+  // subdomain: our best-performing zones publish a root DKIM record (dkim._domainkey.<domain>), and
+  // Mailcow only has a key for a domain it actually serves. syncDkim then syncs that key to DNS.
   // Never try to add the mail server host itself as a mail domain (Mailcow rejects it).
-  const uniqueSubdomains = Array.from(new Set(inboxes.map((i: any) => String(i.subdomainFqdn)))).filter(
-    (s) => String(s).toLowerCase() !== mailHost,
-  );
+  const uniqueSubdomains = Array.from(
+    new Set<string>([String(domain.name), ...inboxes.map((i: any) => String(i.subdomainFqdn))]),
+  ).filter((s) => String(s).toLowerCase() !== mailHost);
   const { MAILBOX_QUOTA_MB } = QUOTA;
 
   // Mailboxes planned per mail domain, so each one's Mailcow limits fit its plan (a fixed 50 used to
@@ -418,6 +423,16 @@ export async function ensureMailDomains(
     );
   }
   for (const d of domList) if (d?.domain_name) existingDomains.add(String(d.domain_name).toLowerCase());
+
+  // Pin a 2048-bit DKIM key for every mail domain we just created. Mailcow autogenerates a key on
+  // add/domain, but its size depends on the instance's default, so request 2048 explicitly. Only for
+  // domains new this run (existing ones are re-checked and, if weak, regenerated in syncDkim). Best
+  // effort: a DKIM hiccup must not fail domain creation — syncDkim and the health engine catch it.
+  for (const sub of uniqueSubdomains) {
+    const key = String(sub).toLowerCase();
+    if (!existingDomains.has(key) || currentLimits.has(key)) continue;
+    await ensureDkim2048Key(mc, String(sub)).catch(() => {});
+  }
 
   const results: MailcowResultRow[] = uniqueSubdomains.map((sub) => {
     const ok = existingDomains.has(String(sub).toLowerCase());
@@ -675,6 +690,7 @@ export async function syncDkim(
   db: Db,
   domain: Domain,
   userId: string,
+  opts?: { log?: (line: string) => void },
 ): Promise<{ results: { name: string; success: boolean; error?: string }[] }> {
   const cfZoneId = await resolveAndSaveCfZoneId(db, domain, userId);
   if (!cfZoneId) throw new Error("Cloudflare zone id could not be resolved");
@@ -697,10 +713,24 @@ export async function syncDkim(
     if (!direct || !mailcowListResult(direct.status, direct.json)) ssh = sshTarget;
   }
 
+  // Writes (regenerating a weak key) go through the retrying client on the chosen transport.
+  const mc = (path: string, body?: unknown) =>
+    mailcowRequestRetry(domain.mailcowHostname, domain.mailcowApiKey, path, body, { ssh });
+
   for (const sub of uniqueSubdomains) {
     try {
-      const { json } = await mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, `get/dkim/${sub}`, undefined, { ssh });
+      let { json } = await mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, `get/dkim/${sub}`, undefined, { ssh });
       // Mailcow returns { pubkey, dkim_txt, dkim_selector, length } — NOT `dkim_public`.
+      // Task 4b: the `length` field is the key size in bits. If Mailcow's key is weaker than 2048,
+      // regenerate it at 2048 BEFORE writing the DNS record (so we never publish a weak key), and log it.
+      if (dkimNeedsRegen((json as any)?.length)) {
+        const wasBits = (json as any)?.length;
+        const res = await ensureDkim2048Key(mc, String(sub));
+        if (res.regenerated || res.created) {
+          opts?.log?.(`Regenerated DKIM for ${sub} at 2048-bit (was ${wasBits}-bit).`);
+          ({ json } = await mailcowRequest(domain.mailcowHostname, domain.mailcowApiKey, `get/dkim/${sub}`, undefined, { ssh }));
+        }
+      }
       // Prefer the ready-made dkim_txt; otherwise build the record from the raw pubkey.
       const dkimTxt = (json as any)?.dkim_txt;
       const pubkey = (json as any)?.pubkey;

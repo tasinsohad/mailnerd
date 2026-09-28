@@ -14,8 +14,12 @@ export interface SetupState {
   steps: Record<SetupStep, StepStatus>;
   attempt: number;
   error: string | null;
-  /** Set while the run waits for the user to decide what to do with a server that already runs Mailcow. */
-  waiting: null | { kind: "server-choice"; ip: string; hostname: string | null; otherDomains: string[] };
+  /** Set while the run waits for the user. Either a server-already-runs-Mailcow choice, or a reverse-DNS
+   *  (FCrDNS) gate before mailboxes go live: the user sets the PTR, then re-checks and continues. */
+  waiting:
+    | null
+    | { kind: "server-choice"; ip: string; hostname: string | null; otherDomains: string[] }
+    | { kind: "fcrdns"; ip: string; ptrHost: string | null; expected: string; message: string };
   serverChoice: ServerChoice | null;
   /** When the current step started running (set by runDomainSetup each time a step starts); null before that. */
   stepStartedAt: string | null;
