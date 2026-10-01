@@ -127,7 +127,7 @@ function JobPipelinePage() {
       <div className="flex flex-col items-center justify-center py-20">
         <FolderGit2 className="h-12 w-12 text-red-500 mb-4" />
         <h2 className="text-xl font-bold">Job not found</h2>
-        <Link to="/jobs" className="text-primary hover:underline mt-2">
+        <Link to="/jobs" className="text-brand hover:underline mt-2">
           Back to Jobs
         </Link>
       </div>

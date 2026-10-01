@@ -53,30 +53,7 @@ import { MailcowAdminReset } from "@/components/MailcowAdminReset";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
 
-// Shared status presentation: an LED dot whose color carries meaning.
-const STATUS_STYLE: Record<string, { color: string; label: string; pulse?: boolean }> = {
-  ready: { color: "text-success", label: "Ready" },
-  active: { color: "text-success", label: "Active" },
-  provisioning: { color: "text-warning", label: "Provisioning", pulse: true },
-  configuring: { color: "text-warning", label: "Configuring", pulse: true },
-  queued: { color: "text-muted-foreground", label: "Queued" },
-  pending: { color: "text-muted-foreground", label: "Pending" },
-  failed: { color: "text-destructive", label: "Failed" },
-  error: { color: "text-destructive", label: "Error" },
-};
-
-function StatusPill({ status }: { status?: string }) {
-  const s = STATUS_STYLE[String(status ?? "").toLowerCase()] ?? {
-    color: "text-muted-foreground",
-    label: status ? String(status) : "Unknown",
-  };
-  return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-foreground">
-      <span className={cn("status-dot", s.color, s.pulse && "status-dot--pulse")} />
-      {s.label}
-    </span>
-  );
-}
+import { StatusPill } from "@/components/StatusPill";
 
 export const Route = createFileRoute("/_app/domains/$id")({
   component: DomainDetailsPage,
@@ -531,7 +508,7 @@ function DomainDetailsPage() {
       <div className="flex flex-col items-center justify-center py-20">
         <AlertCircle className="h-12 w-12 text-red-500 mb-4" />
         <h2 className="text-xl font-bold">Domain not found</h2>
-        <Link to="/domains" className="text-primary hover:underline mt-2">
+        <Link to="/domains" className="text-brand hover:underline mt-2">
           Back to Domains
         </Link>
       </div>
@@ -712,7 +689,7 @@ function DomainDetailsPage() {
                 href={`https://${domain.mailcowHostname}/SOGo/`}
                 target="_blank"
                 rel="noreferrer"
-                className="text-sm text-primary hover:underline break-all"
+                className="text-sm text-brand hover:underline break-all"
               >
                 https://{domain.mailcowHostname}/SOGo/
               </a>

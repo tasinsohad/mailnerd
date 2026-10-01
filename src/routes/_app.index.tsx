@@ -1,36 +1,22 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getOverviewStats } from "@/server/stats";
 import { getHealthOverview, runAllHealth } from "@/server/health-actions";
-import { Globe, Server, Mail, Briefcase, TrendingUp, ShieldCheck, Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { StatusPill } from "@/components/StatusPill";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_app/")({
   component: IndexPage,
 });
 
-function StatCard({ label, value, icon: Icon }: { label: string; value: number; icon: any }) {
-  return (
-    <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/40 sm:p-5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="ident truncate text-[11px] uppercase tracking-[0.15em] text-muted-foreground">{label}</span>
-        <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-      </div>
-      <div className="font-display text-3xl font-semibold tabular-nums text-foreground sm:text-4xl">
-        {value.toLocaleString()}
-      </div>
-    </div>
-  );
-}
-
-const HEALTH_TONE: Record<string, string> = {
-  healthy: "text-success",
-  warning: "text-warning",
-  critical: "text-destructive",
-  unknown: "text-muted-foreground",
-};
+const HEALTH_BAR: { key: "healthy" | "warning" | "critical" | "unknown"; cls: string; status: string }[] = [
+  { key: "healthy", cls: "bg-success", status: "healthy" },
+  { key: "warning", cls: "bg-warning", status: "warning" },
+  { key: "critical", cls: "bg-destructive", status: "critical" },
+  { key: "unknown", cls: "bg-input", status: "unknown" },
+];
 
 function HealthPanel() {
   const qc = useQueryClient();
@@ -50,52 +36,64 @@ function HealthPanel() {
   });
 
   const counts = data?.counts ?? { healthy: 0, warning: 0, critical: 0, unknown: 0 };
-  const cells: { key: keyof typeof counts; label: string }[] = [
-    { key: "healthy", label: "Healthy" },
-    { key: "warning", label: "Needs attention" },
-    { key: "critical", label: "Critical" },
-    { key: "unknown", label: "Not checked" },
-  ];
+  const total = HEALTH_BAR.reduce((n, c) => n + (counts[c.key] ?? 0), 0);
+  const issues: any[] = data?.topIssues ?? [];
 
   return (
-    <div className="rounded-xl border border-border bg-card">
-      {/* Wraps on phones: the text block keeps at least 12rem, so the button drops to its own line. */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-4 sm:px-6">
-        <ShieldCheck className="h-5 w-5 shrink-0 text-muted-foreground" />
+    <div className="elev-card rounded-xl border border-border bg-card">
+      <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3.5 sm:px-5">
         <div className="min-w-48 flex-1">
-          <h2 className="font-display text-base font-semibold text-foreground">Deliverability health</h2>
+          <h2 className="font-display text-[15px] font-semibold text-foreground">Deliverability</h2>
           <div className="break-words text-xs text-muted-foreground">
             {data?.lastCheckedAt ? `Last checked ${new Date(data.lastCheckedAt).toLocaleString()}` : "Not checked yet"}
           </div>
         </div>
-        <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => recheck.mutate()} disabled={recheck.isPending}>
+        <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => recheck.mutate()} disabled={recheck.isPending}>
           {recheck.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           Re-check all
         </Button>
       </div>
-      <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-4 sm:p-6">
-        {cells.map((c) => (
-          <div key={c.key} className="rounded-lg border border-border bg-muted/30 p-4">
-            <div className="flex items-center gap-2">
-              <span className={cn("status-dot", HEALTH_TONE[c.key])} />
-              <span className="text-xs text-muted-foreground">{c.label}</span>
-            </div>
-            <div className="mt-2 font-display text-2xl font-semibold tabular-nums text-foreground">
-              {counts[c.key] ?? 0}
-            </div>
-          </div>
-        ))}
-      </div>
-      {data?.topIssues && data.topIssues.length > 0 && (
-        <div className="border-t border-border px-4 py-4 sm:px-6">
-          <div className="ident mb-2 text-[11px] uppercase tracking-[0.15em] text-muted-foreground">Top issues</div>
-          <div className="flex flex-wrap gap-2">
-            {data.topIssues.map((iss: any) => (
-              <span key={iss.label} className="rounded-full border border-border bg-muted/40 px-3 py-1 text-xs text-foreground">
-                {iss.label} <span className="text-muted-foreground">×{iss.count}</span>
-              </span>
+      <div className="flex flex-col gap-4 p-4 sm:p-5">
+        {total > 0 && (
+          <div
+            className="flex h-2 gap-0.5 overflow-hidden rounded-full"
+            role="img"
+            aria-label={`${counts.healthy} healthy, ${counts.warning} need attention, ${counts.critical} critical, ${counts.unknown} not checked`}
+          >
+            {HEALTH_BAR.filter((c) => (counts[c.key] ?? 0) > 0).map((c) => (
+              <span key={c.key} className={`${c.cls} min-w-[3px] rounded-[2px]`} style={{ flex: counts[c.key] }} />
             ))}
           </div>
+        )}
+        <div className="flex flex-col">
+          {HEALTH_BAR.map((c, i) => (
+            <div
+              key={c.key}
+              className={`flex items-center justify-between gap-2 py-2 ${i > 0 ? "border-t border-border" : ""}`}
+            >
+              <StatusPill status={c.status} />
+              <span className="font-display text-sm font-semibold tabular-nums text-foreground">{counts[c.key] ?? 0}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      {issues.length > 0 && (
+        <div className="border-t border-border px-4 py-4 sm:px-5">
+          <h3 className="mb-2 text-[13px] font-medium text-foreground">Top issues</h3>
+          <ul className="flex flex-col">
+            {issues.map((iss: any, i: number) => (
+              <li
+                key={iss.label}
+                className={`flex items-baseline justify-between gap-3 py-2 text-sm ${i > 0 ? "border-t border-border" : ""}`}
+              >
+                <span className="min-w-0 text-foreground">{iss.label}</span>
+                <span className="ident shrink-0 text-xs text-muted-foreground">×{iss.count}</span>
+              </li>
+            ))}
+          </ul>
+          <Link to="/troubleshoot" className="mt-2 inline-block text-sm font-medium text-brand hover:underline">
+            Open troubleshooter
+          </Link>
         </div>
       )}
     </div>
@@ -109,42 +107,47 @@ function IndexPage() {
   });
 
   const hasDomains = (stats?.totalDomains ?? 0) > 0;
+  const summary = stats
+    ? `${stats.totalDomains ?? 0} domain${stats.totalDomains === 1 ? "" : "s"}, ${(stats.totalInboxes ?? 0).toLocaleString()} mailbox${stats.totalInboxes === 1 ? "" : "es"}, ${stats.totalServers ?? 0} server${stats.totalServers === 1 ? "" : "s"}${stats.activeJobs ? `. ${stats.activeJobs} job${stats.activeJobs === 1 ? "" : "s"} running.` : "."}`
+    : "";
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <div>
-        <div className="ident text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Control console</div>
-        <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground">Overview</h1>
+        <h1 className="font-display text-[22px] font-semibold tracking-tight text-foreground">Overview</h1>
+        {isLoading ? (
+          <div className="mt-1.5 h-4 w-72 animate-pulse rounded bg-muted" />
+        ) : (
+          <p className="mt-0.5 text-sm text-muted-foreground">{summary}</p>
+        )}
       </div>
-
-      {isLoading ? (
-        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="h-32 animate-pulse rounded-xl border border-border bg-card" />
-          ))}
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-          <StatCard label="Domains" value={stats?.totalDomains ?? 0} icon={Globe} />
-          <StatCard label="Mailboxes" value={stats?.totalInboxes ?? 0} icon={Mail} />
-          <StatCard label="Servers" value={stats?.totalServers ?? 0} icon={Server} />
-          <StatCard label="Active jobs" value={stats?.activeJobs ?? 0} icon={Briefcase} />
-        </div>
-      )}
 
       {hasDomains ? (
         <HealthPanel />
+      ) : isLoading ? (
+        <div className="elev-card h-56 animate-pulse rounded-xl border border-border bg-card" />
       ) : (
-        <div className="flex min-h-[220px] flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border bg-card/40 p-8 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20">
-            <TrendingUp className="h-7 w-7 text-primary" />
-          </div>
-          <div>
-            <h2 className="font-display text-lg font-semibold text-foreground">Provision at scale</h2>
-            <p className="mx-auto mt-1.5 max-w-sm text-sm text-muted-foreground">
-              Add a server and domains, then run a job to spin up mail servers and create mailboxes —
-              three domains at a time, the rest queued.
+        <div className="elev-card rounded-xl border border-border bg-card">
+          <div className="max-w-md px-6 py-10 sm:px-8">
+            <h2 className="font-display text-[15px] font-semibold text-foreground">No domains yet</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              A domain needs a server and DNS before it can send. Set up in this order:
             </p>
+            <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
+              <li>Add a server (Contabo or any SSH host)</li>
+              <li>Connect Cloudflare in Settings</li>
+              <li>Add domains and start a job</li>
+            </ol>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <Button asChild className="gap-2">
+                <Link to="/servers">
+                  <TrendingUp className="h-4 w-4" /> Add a server
+                </Link>
+              </Button>
+              <Button asChild variant="ghost">
+                <Link to="/settings">Open settings</Link>
+              </Button>
+            </div>
           </div>
         </div>
       )}

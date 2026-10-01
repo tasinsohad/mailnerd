@@ -23,10 +23,7 @@ function JobsPage() {
     <div className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <div className="ident text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-            Control console
-          </div>
-          <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground">Jobs</h1>
+          <h1 className="font-display text-[22px] font-semibold tracking-tight text-foreground">Jobs</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {batches.length} job{batches.length !== 1 ? "s" : ""}
           </p>

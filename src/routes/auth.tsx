@@ -51,7 +51,8 @@ function SignInPage() {
 
   return (
     <AuthShell>
-      <h1 className="font-display text-lg font-semibold tracking-tight">Sign in</h1>
+      <h1 className="font-display text-[26px] font-semibold tracking-tight">Sign in</h1>
+      <p className="mt-0.5 text-sm text-muted-foreground">Provision and monitor your mail servers.</p>
 
       {notSetUp && (
         <div role="alert" className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
@@ -87,7 +88,7 @@ function SignInPage() {
 
       <p className="mt-5 text-center text-sm text-muted-foreground">
         New here?{" "}
-        <Link to="/signup" className="font-medium text-primary hover:underline">
+        <Link to="/signup" className="font-medium text-brand hover:underline">
           Create an account
         </Link>
       </p>

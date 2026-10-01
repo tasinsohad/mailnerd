@@ -6,8 +6,12 @@
 # Build output
 dist
 .output
+.output-*
 .tanstack
 .vercel
+
+# Local backups of files being reworked
+*.bak
 
 node_modules
 

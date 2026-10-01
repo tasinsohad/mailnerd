@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Globe, Loader2, ChevronRight, FolderGit2, X, Download } from "lucide-react";
+import { Plus, Loader2, ChevronRight, FolderGit2, X } from "lucide-react";
 import { toast } from "sonner";
 import { StatusPill } from "@/components/StatusPill";
 import { DomainActionsMenu } from "@/components/DomainActionsMenu";
@@ -78,10 +78,7 @@ function DomainsPage() {
     <div className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <div className="ident text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-            Control console
-          </div>
-          <h1 className="font-display text-2xl font-semibold tracking-tight text-foreground">Domains</h1>
+          <h1 className="font-display text-[22px] font-semibold tracking-tight text-foreground">Domains</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {domains.length} domain{domains.length !== 1 ? "s" : ""}
             {activeJobName ? (
@@ -140,29 +137,32 @@ function DomainsPage() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : domains.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/40 p-16 text-center">
-          <Globe className="h-10 w-10 text-muted-foreground" />
-          <p className="font-display text-lg font-medium text-foreground">No domains here</p>
-          <p className="text-sm text-muted-foreground">
-            {activeJobName ? "This job has no domains." : 'Use "Add domains" to get started.'}
-          </p>
+        <div className="elev-card rounded-xl border border-border bg-card">
+          <div className="max-w-md px-6 py-10 sm:px-8">
+            <p className="font-display text-[15px] font-semibold text-foreground">No domains here</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {activeJobName ? "This job has no domains." : 'Use "Add domains" to get started.'}
+            </p>
+          </div>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="elev-card overflow-hidden rounded-xl border border-border bg-card">
+          <div className="hidden items-center gap-3 border-b border-border px-4 py-2.5 text-xs font-medium text-muted-foreground sm:flex">
+            <span className="flex-1">Domain</span>
+            <span className="w-32">Status</span>
+            <span className="w-4" />
+            <span className="w-9" />
+          </div>
           {domains.map((d: any, i: number) => (
             <div
               key={d.id}
-              className={`flex items-center gap-2 px-4 py-3 transition-colors hover:bg-muted/40 sm:gap-3 ${i > 0 ? "border-t border-border" : ""}`}
+              className={`flex items-center gap-2 px-4 py-2.5 transition-colors hover:bg-muted/40 sm:gap-3 ${i > 0 ? "border-t border-border" : ""}`}
             >
               <Link
                 to="/domains/$id"
                 params={{ id: d.id }}
                 className="flex min-w-0 flex-1 items-center gap-3"
               >
-                {/* Decorative icon + chevron are dropped on phones so the domain name has room. */}
-                <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 sm:flex">
-                  <Globe className="h-4 w-4 text-primary" />
-                </div>
                 <div className="min-w-0">
                   <div className="ident truncate text-sm font-medium text-foreground">{d.name}</div>
                   <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
@@ -178,7 +178,7 @@ function DomainsPage() {
                   </div>
                 </div>
               </Link>
-              <StatusPill status={d.status} className="shrink-0" />
+              <span className="shrink-0 sm:w-32"><StatusPill status={d.status} /></span>
               <Link to="/domains/$id" params={{ id: d.id }} className="hidden text-muted-foreground hover:text-foreground sm:inline">
                 <ChevronRight className="h-4 w-4" />
               </Link>

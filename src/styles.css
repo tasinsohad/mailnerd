@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss" source(none);
 @source "../src";
 @import "tw-animate-css";
@@ -6,8 +6,8 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 7px);
+  --radius-md: calc(var(--radius) - 4px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
   --color-background: var(--background);
@@ -30,82 +30,105 @@
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
+  --color-success-soft: var(--success-soft);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger-soft: var(--danger-soft);
+  --color-neutral-soft: var(--neutral-soft);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-terminal: var(--terminal);
   --color-terminal-foreground: var(--terminal-foreground);
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-sans: "Hanken Grotesk", system-ui, sans-serif;
+  --font-display: "Hanken Grotesk", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --shadow-card: var(--elev-card);
+  --shadow-pop: var(--elev-pop);
 }
 
-/* "Relay" — a mail-infrastructure control console.
-   Light is the default: this is a daylight desk tool, read alongside a terminal, a DNS panel and
-   a provider dashboard, so the canvas is a cool near-white tinted toward the brand's own indigo
-   (never warm/cream). Electric indigo carries actions and identity; status colors (green/amber/red)
-   are reserved to carry meaning and are darkened here so they stay legible on white.
-   The console keeps its dark canvas in both themes — it is an instrument, not a surface. */
+/* Mail Nerd design system (see the Design System artifact: tokens.json is the source of truth).
+   Quiet warm-neutral console: ink carries the primary action, cobalt (brand) is reserved for
+   links, focus, the active marker and selection. Status colors carry state only, always beside
+   a glyph and a word. The terminal stays dark in both themes. */
 :root {
-  --radius: 0.75rem;
-  --background: oklch(0.977 0.004 265); /* cool near-white, tinted toward the brand indigo */
-  --foreground: oklch(0.21 0.02 265); /* indigo-tinted ink */
-  --card: oklch(1 0 0); /* raised surfaces read lighter than the canvas */
-  --card-foreground: oklch(0.21 0.02 265);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.02 265);
-  --primary: oklch(
-    0.55 0.21 277
-  ); /* electric indigo / iris — darkened so white label text passes */
-  --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.955 0.006 265);
-  --secondary-foreground: oklch(0.25 0.02 265);
-  --muted: oklch(0.962 0.005 265);
-  --muted-foreground: oklch(
-    0.5 0.02 265
-  ); /* 6.0:1 on card — body-text legal, not decorative gray */
-  --accent: oklch(0.95 0.025 277); /* indigo-tinted surface */
-  --accent-foreground: oklch(0.3 0.08 277);
-  --destructive: oklch(0.55 0.22 25); /* failed */
-  --destructive-foreground: oklch(0.99 0 0);
-  --success: oklch(0.52 0.12 155); /* ready / healthy — in sRGB gamut at this chroma */
-  --success-foreground: oklch(0.99 0 0);
-  --warning: oklch(0.55 0.12 70); /* in-progress — amber must go dark to survive a white bg */
-  --warning-foreground: oklch(0.99 0 0);
-  --border: oklch(0.21 0.02 265 / 12%);
-  --input: oklch(0.21 0.02 265 / 18%);
-  --ring: oklch(0.55 0.21 277);
-  --terminal: oklch(0.16 0.012 265); /* the live log instrument — dark in both themes */
-  --terminal-foreground: oklch(0.86 0.15 160);
+  --radius: 12px;
+  --background: #f5f5f2; /* canvas */
+  --foreground: #1a1a17; /* ink */
+  --card: #ffffff; /* surface */
+  --card-foreground: #1a1a17;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a17;
+  --primary: #1a1a17; /* the primary button is ink, never the accent */
+  --primary-foreground: #fafaf8;
+  --secondary: #ecebe6; /* sunken */
+  --secondary-foreground: #1a1a17;
+  --muted: #ecebe6;
+  --muted-foreground: #5a5a53; /* ink-muted, 6.9:1 on surface */
+  --accent: #ecebe6; /* neutral hover ground */
+  --accent-foreground: #1a1a17;
+  --destructive: #b42318;
+  --destructive-foreground: #fafaf8;
+  --success: #0f6b4f;
+  --success-foreground: #fafaf8;
+  --warning: #8a5600;
+  --warning-foreground: #fafaf8;
+  --brand: #2447d0; /* cobalt: links, focus, active marker, selection */
+  --brand-soft: #e6ebfb;
+  --success-soft: #e0f0e8;
+  --warning-soft: #f7ecd2;
+  --danger-soft: #fbe5e2;
+  --neutral-soft: #ebeae5;
+  --border: #e2e1db; /* line */
+  --border-strong: #cfcec6;
+  --input: #8c8b83; /* border-control, 3.4:1 on surface */
+  --ring: #2447d0;
+  --terminal: #0e0f0c;
+  --terminal-foreground: #d7d9d0;
+  --terminal-dim: #8d9084;
+  --terminal-ok: #6fd3a4;
+  --terminal-warn: #e9b752;
+  --terminal-err: #f59582;
+  --elev-card: 0 1px 2px rgba(18, 18, 16, 0.05), 0 2px 8px rgba(18, 18, 16, 0.04);
+  --elev-pop: 0 8px 24px rgba(18, 18, 16, 0.12), 0 2px 6px rgba(18, 18, 16, 0.08), 0 0 0 1px rgba(18, 18, 16, 0.06);
 }
 
-/* Dark theme — the original console canvas. Add `dark` to <html> (or a theme toggle) to use it. */
 .dark {
-  --background: oklch(0.17 0.012 265);
-  --foreground: oklch(0.97 0.004 250);
-  --card: oklch(0.205 0.015 265);
-  --card-foreground: oklch(0.97 0.004 250);
-  --popover: oklch(0.23 0.016 265);
-  --popover-foreground: oklch(0.97 0.004 250);
-  --primary: oklch(0.62 0.2 277);
-  --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.26 0.016 265);
-  --secondary-foreground: oklch(0.97 0.004 250);
-  --muted: oklch(0.255 0.015 265);
-  --muted-foreground: oklch(0.67 0.02 262);
-  --accent: oklch(0.3 0.05 277);
-  --accent-foreground: oklch(0.97 0.004 250);
-  --destructive: oklch(0.62 0.22 25);
-  --destructive-foreground: oklch(0.99 0 0);
-  --success: oklch(0.72 0.17 155);
-  --success-foreground: oklch(0.15 0.02 265);
-  --warning: oklch(0.8 0.15 80);
-  --warning-foreground: oklch(0.18 0.03 80);
-  --border: oklch(1 0 0 / 9%);
-  --input: oklch(1 0 0 / 12%);
-  --ring: oklch(0.62 0.2 277);
-  --terminal: oklch(0.13 0.01 265);
-  --terminal-foreground: oklch(0.86 0.15 160);
+  --background: #121210;
+  --foreground: #ecece6;
+  --card: #1a1a17;
+  --card-foreground: #ecece6;
+  --popover: #1f1f1c;
+  --popover-foreground: #ecece6;
+  --primary: #ecece6;
+  --primary-foreground: #121210;
+  --secondary: #262623;
+  --secondary-foreground: #ecece6;
+  --muted: #262623;
+  --muted-foreground: #a6a69d;
+  --accent: #262623;
+  --accent-foreground: #ecece6;
+  --destructive: #f28b77;
+  --destructive-foreground: #121210;
+  --success: #5cc79a;
+  --success-foreground: #121210;
+  --warning: #e3ad45;
+  --warning-foreground: #121210;
+  --brand: #8ea6ff;
+  --brand-soft: #1f2744;
+  --success-soft: #16291f;
+  --warning-soft: #2e2412;
+  --danger-soft: #331a16;
+  --neutral-soft: #262623;
+  --border: #2a2a26;
+  --border-strong: #3a3a35;
+  --input: #6a6a62;
+  --ring: #8ea6ff;
+  --terminal: #0e0f0c;
+  --terminal-foreground: #d7d9d0;
+  --elev-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --elev-pop: 0 8px 24px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 @layer base {
@@ -120,31 +143,40 @@
       "calt" 1;
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
   h1,
   h2,
   h3,
   .font-display {
-    font-family: var(--font-display);
-    letter-spacing: -0.01em;
+    font-family: var(--font-sans);
+    letter-spacing: -0.015em;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  a {
+    text-underline-offset: 3px;
   }
 }
 
 @layer components {
-  /* Identifiers (domains, IPs, emails) are technical data — always monospace. */
+  /* Identifiers (domains, IPs, emails) are technical data — always the terminal's mono. */
   .ident {
     font-family: var(--font-mono);
-    font-feature-settings: "ss01" 1;
+    font-size: 0.8125em;
+    letter-spacing: -0.01em;
   }
 
-  /* Status indicator: an LED dot that carries meaning by color. */
+  /* Legacy status indicator kept for older panels; new code uses StatusPill. No pulse glow. */
   .status-dot {
     display: inline-block;
     width: 0.5rem;
     height: 0.5rem;
     border-radius: 9999px;
     background: currentColor;
-    box-shadow: 0 0 0 3px color-mix(in oklch, currentColor 18%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in oklch, currentColor 16%, transparent);
   }
   .status-dot--pulse {
     animation: relay-pulse 1.6s ease-in-out infinite;
@@ -152,12 +184,10 @@
   @keyframes relay-pulse {
     0%,
     100% {
-      box-shadow: 0 0 0 2px color-mix(in oklch, currentColor 22%, transparent);
       opacity: 1;
     }
     50% {
-      box-shadow: 0 0 0 5px color-mix(in oklch, currentColor 8%, transparent);
-      opacity: 0.7;
+      opacity: 0.6;
     }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -166,8 +196,7 @@
     }
   }
 
-  /* Progress with no known end (a Mailcow install): a segment sliding along its track. Its color is
-     currentColor, so the bar's text color sets it. */
+  /* Progress with no known end: a segment sliding along its track, colored by currentColor. */
   .progress-indeterminate {
     position: absolute;
     inset-block: 0;
@@ -193,21 +222,25 @@
     }
   }
 
-  /* The live provisioning log — the dark "instrument" centerpiece. Also used for any literal
-     machine text (commands, DNS records, log excerpts) so one material means "the machine". */
+  /* The terminal: live logs, DNS records, commands. Dark in both themes, JetBrains Mono,
+     the one place machine text lives so it always looks like the operator's own terminal. */
   .console {
-    background: var(--color-terminal);
-    color: var(--color-terminal-foreground);
+    background: var(--terminal);
+    color: var(--terminal-foreground);
     font-family: var(--font-mono);
     font-size: 0.8125rem;
     line-height: 1.55;
-    /* Its own hairline: --border is an ink-alpha that vanishes on the dark canvas in light mode. */
-    border: 1px solid oklch(1 0 0 / 12%);
+    border: 1px solid #2a2c26;
     border-radius: var(--radius);
+    box-shadow: var(--elev-card), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   }
 
-  /* Detail revealed in place (an expanded check). Enhances an already-visible default: the content
-     is painted regardless, this only softens its arrival, so a headless render is never blank. */
+  /* Resting elevation for panels that float on the canvas. */
+  .elev-card {
+    box-shadow: var(--elev-card);
+  }
+
+  /* Detail revealed in place (an expanded check). */
   .reveal {
     animation: relay-reveal 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
@@ -228,10 +261,7 @@
   }
 }
 
-/* iOS Safari zooms the whole page when you focus a form control whose font-size is under 16px, and
-   the app's inputs use text-xs/text-sm. On phone widths (below Tailwind's `sm`), pin them to 16px.
-   Deliberately NOT inside any @layer: Tailwind v4 emits utilities into @layer utilities, and
-   unlayered declarations beat every layer regardless of specificity, so this wins over text-sm etc. */
+/* iOS Safari zooms the page when a focused control's font-size is under 16px. */
 @media (width < 40rem) {
   input:not(
       [type="checkbox"],
