@@ -56,12 +56,18 @@ import { useState, useEffect, useRef } from "react";
 import { StatusPill } from "@/components/StatusPill";
 
 export const Route = createFileRoute("/_app/domains/$id")({
+  // ?health=<indicator id> comes from the Overview's "Needs you now": open this domain's health
+  // check scrolled to that line, so "Fix" lands on the problem instead of a page about problems.
+  validateSearch: (search: Record<string, unknown>): { health?: string } => ({
+    health: typeof search.health === "string" ? search.health : undefined,
+  }),
   component: DomainDetailsPage,
 });
 
 function DomainDetailsPage() {
   const qc = useQueryClient();
   const { id } = Route.useParams();
+  const { health: focusIndicator } = Route.useSearch();
 
   const { data, isLoading } = useQuery({
     queryKey: ["domain", id],
@@ -639,6 +645,7 @@ function DomainDetailsPage() {
 
       <HealthCard
         domainId={id}
+        focusIndicator={focusIndicator ?? null}
         serverIp={domain.ipAddress ?? null}
         initialHealth={(domain.health as any) ?? null}
         initialServerHealth={((data as any)?.serverHealth?.health as any) ?? null}

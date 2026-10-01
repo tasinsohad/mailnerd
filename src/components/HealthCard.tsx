@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Loader2, RefreshCw, ShieldCheck, ChevronDown, Server, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -61,14 +61,17 @@ function IndicatorRows({
   fixStepFor,
   onFix,
   onForceFlush,
+  openId,
 }: {
   indicators: Indicator[];
   busy: boolean;
   fixStepFor: (indicatorId: string) => RemediationStep | null;
   onFix: (indicatorId: string) => void;
   onForceFlush: () => void;
+  /** Indicator to start expanded (arrived here from the Overview's "Fix"). */
+  openId?: string | null;
 }) {
-  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [open, setOpen] = useState<Record<string, boolean>>(() => (openId ? { [openId]: true } : {}));
   return (
     <ul className="divide-y divide-border">
       {sortByPriority(indicators).map((ind) => {
@@ -160,6 +163,7 @@ export function HealthCard({
   initialServerHealth,
   initialCheckedAt,
   hasCloudflareToken = true,
+  focusIndicator = null,
 }: {
   domainId: string;
   serverIp?: string | null;
@@ -169,6 +173,8 @@ export function HealthCard({
   // Only affects the CLIENT preview plan (un-proxy DNS shows as auto vs manual). The server
   // re-plans authoritatively from its own secrets, so a wrong default here is corrected on run.
   hasCloudflareToken?: boolean;
+  /** An indicator id to scroll to and expand on arrival, e.g. from the Overview's "Fix" button. */
+  focusIndicator?: string | null;
 }) {
   const [health, setHealth] = useState<DomainHealth | null>(initialHealth ?? null);
   const [serverHealth, setServerHealth] = useState<DomainHealth | null>(
@@ -310,8 +316,15 @@ export function HealthCard({
   const overall = OVERALL[health?.status ?? "unknown"];
   const rowsBusy = busy || running;
 
+  // Arriving from the Overview's "Fix": bring the card to the top of the view, once.
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!focusIndicator) return;
+    cardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [focusIndicator]);
+
   return (
-    <div className="rounded-xl border border-border bg-card">
+    <div ref={cardRef} className="scroll-mt-4 rounded-xl border border-border bg-card">
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-4 sm:px-6">
         <ShieldCheck className="h-5 w-5 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
@@ -375,6 +388,7 @@ export function HealthCard({
             fixStepFor={fixStepFor}
             onFix={openPlan}
             onForceFlush={flushNow}
+            openId={focusIndicator}
           />
 
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border px-4 pt-4 pb-1 sm:px-6">
@@ -391,6 +405,7 @@ export function HealthCard({
               fixStepFor={fixStepFor}
               onFix={openPlan}
               onForceFlush={flushNow}
+              openId={focusIndicator}
             />
           ) : (
             <div className="px-4 py-3 text-sm text-muted-foreground sm:px-6">

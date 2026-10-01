@@ -7,6 +7,7 @@ import { checkDomainHealth, type DomainHealth } from "./health";
 import { checkServerHealth } from "./health-server";
 import { diffSnapshots, toSnapshot, type IndicatorSnap } from "./health-history";
 import { mapLimit, DOMAIN_CONCURRENCY, SERVER_CONCURRENCY } from "./map-limit";
+import { summarizeHealth, type SummarizableDomain } from "@/lib/health-summary";
 
 // Append a compact history row for a check run, then prune to the newest ~100 for that target.
 // Tolerant of an unmigrated table (logs and moves on).
@@ -133,24 +134,7 @@ function representativesByIp(rows: any[]): any[] {
   return [...byIp.values()];
 }
 
-function summarize(rows: any[]) {
-  const counts = { healthy: 0, warning: 0, critical: 0, unknown: 0 };
-  const issueTally: Record<string, { label: string; count: number }> = {};
-  for (const r of rows) {
-    const h = r.health as DomainHealth | null;
-    const status = (h?.status ?? "unknown") as keyof typeof counts;
-    counts[status] = (counts[status] ?? 0) + 1;
-    for (const ind of h?.indicators ?? []) {
-      if (ind.status === "fail" || ind.status === "warn") {
-        issueTally[ind.id] = { label: ind.label, count: (issueTally[ind.id]?.count ?? 0) + 1 };
-      }
-    }
-  }
-  const topIssues = Object.values(issueTally)
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 5);
-  return { total: rows.length, counts, topIssues };
-}
+const summarize = (rows: any[]) => summarizeHealth(rows as SummarizableDomain[]);
 
 export const runDomainHealth = createServerFn({ method: "POST" })
   .middleware([requireAuth])

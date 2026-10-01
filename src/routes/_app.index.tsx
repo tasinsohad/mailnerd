@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getOverviewStats } from "@/server/stats";
 import { getHealthOverview, runAllHealth } from "@/server/health-actions";
 import { listDomains } from "@/server/domains";
+import type { TopIssue } from "@/lib/health-summary";
 import { ArrowUpRight, Check, Loader2, RefreshCw, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/StatusPill";
@@ -67,7 +68,14 @@ function IndexPage() {
 
   const loading = statsLoading || domainsLoading;
   const counts = health?.counts ?? { healthy: 0, warning: 0, critical: 0, unknown: 0 };
-  const issues: any[] = health?.topIssues ?? [];
+  const issues: TopIssue[] = health?.topIssues ?? [];
+  // One row per (issue, domain): the thing to act on is a problem on a specific domain, and the row
+  // links to that domain's health panel with the indicator open — not to a page that asks the person
+  // to work out which domain was meant.
+  const issueRows = issues.flatMap((iss) =>
+    iss.domains.map((d) => ({ key: `${iss.id}:${d.id}`, issue: iss, domain: d })),
+  );
+  const issueRowsShown = issueRows.slice(0, 4);
   const healthTotal = HEALTH_BAR.reduce((n, c) => n + (counts[c.key] ?? 0), 0);
 
   const failedDomains = (domains as any[]).filter((d) => FAILED.has(String(d.status ?? "").toLowerCase()));
@@ -177,10 +185,12 @@ function IndexPage() {
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3.5 sm:px-5">
             <h2 className="font-display text-[15px] font-semibold text-foreground">Needs you now</h2>
             <span className="text-xs text-muted-foreground">
-              {failedDomains.length + issues.length === 0 ? "clear" : `${failedDomains.length + issues.length} item${failedDomains.length + issues.length === 1 ? "" : "s"}`}
+              {failedDomains.length + issueRows.length === 0
+                ? "clear"
+                : `${failedDomains.length + issueRows.length} item${failedDomains.length + issueRows.length === 1 ? "" : "s"}`}
             </span>
           </div>
-          {failedDomains.length === 0 && issues.length === 0 ? (
+          {failedDomains.length === 0 && issueRows.length === 0 ? (
             <div className="flex items-center gap-2.5 px-4 py-6 text-sm text-muted-foreground sm:px-5">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-success-soft text-success">
                 <Check className="h-3.5 w-3.5" />
@@ -205,20 +215,35 @@ function IndexPage() {
                   </Button>
                 </li>
               ))}
-              {issues.slice(0, 4).map((iss: any) => (
-                <li key={iss.label} className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0 sm:px-5">
-                  <StatusPill status="warning" className="shrink-0" />
+              {issueRowsShown.map(({ key, issue, domain }) => (
+                <li key={key} className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0 sm:px-5">
+                  <StatusPill status={domain.status === "fail" ? "critical" : "warning"} className="shrink-0" />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-foreground">{iss.label}</div>
-                    <div className="text-[13px] text-muted-foreground">
-                      Affects {iss.count} domain{iss.count === 1 ? "" : "s"}
+                    <div className="truncate text-sm font-medium text-foreground">
+                      {issue.label} on <span className="ident">{domain.name}</span>
+                    </div>
+                    <div className="truncate text-[13px] text-muted-foreground">
+                      {issue.count > 1
+                        ? `Also on ${issue.count - 1} other domain${issue.count === 2 ? "" : "s"}. `
+                        : ""}
+                      Opens this domain's health check, on that line.
                     </div>
                   </div>
                   <Button asChild variant="outline" size="sm" className="h-7 shrink-0 px-2.5 text-xs">
-                    <Link to="/troubleshoot">Fix</Link>
+                    <Link to="/domains/$id" params={{ id: domain.id }} search={{ health: issue.id }}>
+                      Fix
+                    </Link>
                   </Button>
                 </li>
               ))}
+              {issueRows.length > issueRowsShown.length && (
+                <li className="px-4 py-2.5 sm:px-5">
+                  <Link to="/domains" className="text-[13px] font-medium text-brand hover:underline">
+                    {issueRows.length - issueRowsShown.length} more domain
+                    {issueRows.length - issueRowsShown.length === 1 ? "" : "s"} with problems
+                  </Link>
+                </li>
+              )}
             </ul>
           )}
         </div>
