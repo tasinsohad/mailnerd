@@ -9,6 +9,7 @@ import { setWorkspace } from "@/server/admin-users";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { PlanBadge } from "@/components/PlanBadge";
 import { BrandMark } from "@/components/BrandMark";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import type { PublicAccount } from "@/server/accounts-db";
 
@@ -120,6 +121,7 @@ function UserBlock({ account, onSignOut }: { account: PublicAccount; onSignOut: 
             )}
           </div>
         </div>
+        <ThemeToggle className="shrink-0" />
         <button
           type="button"
           onClick={onSignOut}

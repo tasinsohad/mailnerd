@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { BrandMark } from "@/components/BrandMark";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 const DEMO_LOG: { t: string; kind?: "ok" | "warn" | "err"; m: string }[] = [
   { t: "14:02:11", m: "Connecting to 203.0.113.24:22" },
@@ -24,6 +25,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
           <div className="mb-8 flex items-center gap-2.5">
             <BrandMark />
             <span className="font-display text-[15px] font-semibold tracking-tight">Mail Nerd</span>
+            <ThemeToggle className="ml-auto" />
           </div>
           {children}
         </div>

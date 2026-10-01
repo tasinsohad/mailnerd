@@ -38,6 +38,13 @@ export const Route = createRootRoute({
       },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
+    scripts: [
+      {
+        // Applied before paint so a dark-mode reload never flashes light.
+        children:
+          "(function(){try{var t=localStorage.getItem('theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches)){document.documentElement.classList.add('dark')}}catch(e){}})();",
+      },
+    ],
   }),
   shellComponent: RootShell,
   component: RootComponent,
